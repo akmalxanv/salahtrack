@@ -3,11 +3,11 @@ node_modules/
 .pnpm-store/
 
 # Next.js Build Output
-apps/web/.next/
-apps/web/out/
-
-# NestJS Build Output
-apps/api/dist/
+.next/
+out/
+build/
+*.tsbuildinfo
+next-env.d.ts
 
 # Environment variables & secrets
 .env
