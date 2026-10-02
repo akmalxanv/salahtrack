@@ -17,9 +17,6 @@ import { POST as signupHandler } from '../../src/app/api/auth/signup/route.ts';
 import { POST as loginHandler } from '../../src/app/api/auth/login/route.ts';
 import { POST as logoutHandler } from '../../src/app/api/auth/logout/route.ts';
 import { GET as meHandler } from '../../src/app/api/auth/me/route.ts';
-
-process.env.MONGODB_URI = 'mongodb://127.0.0.1:27017/salahtrack_test';
-
 // In-memory document storage for deterministic route testing
 interface MockUserDoc {
   _id: mongoose.Types.ObjectId;

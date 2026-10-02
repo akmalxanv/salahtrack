@@ -9,9 +9,6 @@ import * as authGuard from '../../src/lib/auth/guard.ts';
 import { GET as listGroupsHandler, POST as createGroupHandler } from '../../src/app/api/groups/route.ts';
 import { POST as joinGroupHandler } from '../../src/app/api/groups/join/route.ts';
 import { GET as getGroupHandler, DELETE as leaveGroupHandler } from '../../src/app/api/groups/[id]/route.ts';
-
-process.env.MONGODB_URI = 'mongodb://127.0.0.1:27017/salahtrack_test';
-
 // In-memory mock stores
 interface MockGroupDoc {
   _id: mongoose.Types.ObjectId;
