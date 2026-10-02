@@ -367,7 +367,12 @@ function ProgressContent() {
 
       {/* ==================== TAB 1: OVERVIEW ==================== */}
       {activeTab === 'overview' && (
-        <div className="space-y-6">
+        loadingStats && !stats ? (
+          <div className="py-12 flex justify-center text-slate-400">
+            <Loader2 className="w-8 h-8 animate-spin" />
+          </div>
+        ) : (
+          <div className="space-y-6">
           {/* Executive KPI Stats Cards */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
             {/* Completion */}
@@ -534,7 +539,8 @@ function ProgressContent() {
               </div>
             )}
           </div>
-        </div>
+          </div>
+        )
       )}
 
       {/* ==================== TAB 2: HISTORY & CALENDAR ==================== */}

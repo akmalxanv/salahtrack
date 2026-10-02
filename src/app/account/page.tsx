@@ -17,8 +17,6 @@ import {
   AlertCircle,
   Eye,
   EyeOff,
-  Scale,
-  Clock,
   Users,
 } from 'lucide-react';
 import { useLanguage } from '@/context/LanguageContext';
