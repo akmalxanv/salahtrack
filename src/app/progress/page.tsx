@@ -19,12 +19,11 @@ import {
   Loader2,
   LogIn,
   ChevronRight,
-  ShieldCheck,
   Award,
 } from 'lucide-react';
 import { useLanguage } from '@/context/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
-import { useLocalStorage, getTodayString } from '@/hooks/useLocalStorage';
+import { useLocalStorage } from '@/hooks/useLocalStorage';
 import type { PrayerId, PrayerStatus } from '@/types/prayer';
 
 const PRAYER_IDS: PrayerId[] = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
@@ -281,7 +280,7 @@ function ProgressContent() {
         <div className="p-4 rounded-2xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200/70 dark:border-amber-900/40 text-amber-800 dark:text-amber-300 text-xs flex items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">
             <AlertCircle className="w-4 h-4 shrink-0 text-amber-600 dark:text-amber-400" />
-            <span>Sign in to unlock multi-device cloud history, long-term analytics, and automated streaks.</span>
+            <span>{t.progress.signInPrompt}</span>
           </div>
           <Link
             href="/signup"
@@ -507,7 +506,7 @@ function ProgressContent() {
                       <p className="text-[11px] text-slate-400">
                         {Object.values(record.prayers || {}).filter(
                           (p) => p.status === 'PRAYED' || p.status === 'PRAYED_ON_TIME'
-                        ).length} / 5 namoz ado etildi
+                        ).length} / 5 {t.progress.prayersCompletedRecord}
                       </p>
                     </div>
                     <div className="flex items-center gap-1.5">
@@ -642,10 +641,10 @@ function ProgressContent() {
               <BarChart3 className="w-5 h-5 text-emerald-600" />
               <div>
                 <h2 className="text-base font-bold text-slate-900 dark:text-slate-100">
-                  Namozlar kesimida muntazamlik
+                  {t.progress.consistencyTitle}
                 </h2>
                 <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Har bir namozning o‘z vaqtida ado etilish ulushi
+                  {t.progress.consistencySubtitle}
                 </p>
               </div>
             </div>
@@ -781,23 +780,23 @@ function ProgressContent() {
           {/* Payoff Projection Calculator */}
           <div className="rounded-2xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900 shadow-xs space-y-4">
             <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
-              Qazolarni to‘lash hisoblagichi
+              {t.progress.calculatorTitle}
             </h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="p-4 rounded-xl border border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40">
                 <span className="text-xs text-slate-400 block mb-1">
-                  Har kuni 1 ta qo‘shimcha namoz o‘qilsa
+                  {t.progress.dailyOneExtra}
                 </span>
                 <p className="text-lg font-bold text-emerald-600 dark:text-emerald-400">
-                  {Math.ceil(totalQazaCount / 1)} kunda to‘liq yopiladi
+                  {Math.ceil(totalQazaCount / 1)} {t.progress.daysToComplete}
                 </p>
               </div>
               <div className="p-4 rounded-xl border border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40">
                 <span className="text-xs text-slate-400 block mb-1">
-                  Har kuni 1 kunlik (5 ta) qazo o‘qilsa
+                  {t.progress.dailyFiveExtra}
                 </span>
                 <p className="text-lg font-bold text-emerald-600 dark:text-emerald-400">
-                  {Math.ceil(totalQazaCount / 5)} kunda to‘liq yopiladi
+                  {Math.ceil(totalQazaCount / 5)} {t.progress.daysToComplete}
                 </p>
               </div>
             </div>

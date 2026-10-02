@@ -211,10 +211,10 @@ function AccountContent() {
           </div>
           <div className="space-y-1">
             <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">
-              Sign In to Access Your Cloud Account
+              {t.account.signInTitle}
             </h2>
             <p className="text-sm text-slate-500 dark:text-slate-400 max-w-md mx-auto">
-              Create an account or sign in to configure personalized calculation methods, join accountability circles, and secure your prayer journal.
+              {t.account.signInSubtitle}
             </p>
           </div>
           <div className="pt-2 flex items-center justify-center gap-3">
@@ -444,7 +444,7 @@ function AccountContent() {
                     <span>{t.common.loading}</span>
                   </>
                 ) : (
-                  <span>{t.profile.saveChanges}</span>
+                  <span>{t.profile.saveProfile}</span>
                 )}
               </button>
             </div>
@@ -463,10 +463,10 @@ function AccountContent() {
               </div>
               <div>
                 <h2 className="text-base font-bold text-slate-900 dark:text-slate-100">
-                  {t.profile.language}
+                  {t.profile.languagePref}
                 </h2>
                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                  Ilova interfeysi tili
+                  {t.account.languageSubtitle}
                 </p>
               </div>
             </div>
@@ -501,10 +501,10 @@ function AccountContent() {
               </div>
               <div>
                 <h2 className="text-base font-bold text-slate-900 dark:text-slate-100">
-                  {t.profile.calculationMethod}
+                  {t.profile.calcMethod}
                 </h2>
                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                  {t.profile.calculationMethodDesc}
+                  {t.account.sections.preferencesDesc}
                 </p>
               </div>
             </div>
@@ -547,7 +547,7 @@ function AccountContent() {
                     <span>{t.common.loading}</span>
                   </>
                 ) : (
-                  <span>{t.profile.saveChanges}</span>
+                  <span>{t.profile.saveProfile}</span>
                 )}
               </button>
             </div>
@@ -640,7 +640,7 @@ function AccountContent() {
                   {t.profile.changePassword}
                 </h2>
                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                  Argon2id bilan xavfsiz himoyalangan parol
+                  {t.account.argonSecurityNote}
                 </p>
               </div>
             </div>
@@ -725,7 +725,7 @@ function AccountContent() {
                   className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1.5 hover:text-slate-700 dark:hover:text-slate-200 cursor-pointer"
                 >
                   {showPasswords ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                  <span>{showPasswords ? 'Hide passwords' : 'Show passwords'}</span>
+                  <span>{showPasswords ? t.account.hidePassword : t.account.showPassword}</span>
                 </button>
 
                 <button
@@ -751,11 +751,11 @@ function AccountContent() {
             <div className="flex items-center gap-2.5">
               <ShieldCheck className="w-5 h-5 text-emerald-600" />
               <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                Himoyalangan server seansi
+                {t.account.secureSessionTitle}
               </h3>
             </div>
             <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-              Sizning sessiyangiz xavfsiz server bazasida (MongoDB) saqlanadi va HttpOnly, SameSite=Lax cookie orqali himoyalangan. Brauzer yopilganda yoki tizimdan chiqqaningizda sessiya server tomonidan darhol bekor qilinadi.
+              {t.account.secureSessionDesc}
             </p>
           </div>
         </div>

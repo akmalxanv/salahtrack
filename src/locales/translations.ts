@@ -274,6 +274,7 @@ export interface TranslationContent {
   progress: {
     title: string;
     subtitle: string;
+    signInPrompt: string;
     tabs: {
       overview: string;
       history: string;
@@ -302,10 +303,25 @@ export interface TranslationContent {
       streakEncouragement: string;
       qazaGoal: string;
     };
+    prayersCompletedRecord: string;
+    consistencyTitle: string;
+    consistencySubtitle: string;
+    calculatorTitle: string;
+    dailyOneExtra: string;
+    dailyFiveExtra: string;
+    daysToComplete: string;
   };
   account: {
     title: string;
     subtitle: string;
+    signInTitle: string;
+    signInSubtitle: string;
+    languageSubtitle: string;
+    argonSecurityNote: string;
+    showPassword: string;
+    hidePassword: string;
+    secureSessionTitle: string;
+    secureSessionDesc: string;
     tabs: {
       profile: string;
       preferences: string;
@@ -613,6 +629,7 @@ export const translations: Record<Language, TranslationContent> = {
     progress: {
       title: 'Личный прогресс',
       subtitle: 'История намазов, показатели постоянства и каза',
+      signInPrompt: 'Войдите, чтобы открыть облачную историю, долгосрочную аналитику и автоматический учет серий молитв.',
       tabs: {
         overview: 'Обзор',
         history: 'История и календарь',
@@ -641,10 +658,25 @@ export const translations: Record<Language, TranslationContent> = {
         streakEncouragement: 'Отличный темп! Продолжайте совершать намазы вовремя.',
         qazaGoal: 'Цель по закрытию каза',
       },
+      prayersCompletedRecord: 'намазов совершено',
+      consistencyTitle: 'Регулярность по намазам',
+      consistencySubtitle: 'Доля своевременного совершения каждого намаза',
+      calculatorTitle: 'Калькулятор восполнения каза-намазов',
+      dailyOneExtra: 'Если восполнять по 1 намазу в день',
+      dailyFiveExtra: 'Если восполнять по 1 дню (5 намазов) в день',
+      daysToComplete: 'дней до полного восполнения',
     },
     account: {
       title: 'Аккаунт и настройки',
       subtitle: 'Управление профилем, параметрами расчета и безопасностью',
+      signInTitle: 'Войдите в свой облачный аккаунт',
+      signInSubtitle: 'Войдите или зарегистрируйтесь, чтобы настроить индивидуальные методы расчета, вступить в круги подотчетности и защитить дневник молитв.',
+      languageSubtitle: 'Язык интерфейса приложения',
+      argonSecurityNote: 'Пароль надежно защищен алгоритмом Argon2id',
+      showPassword: 'Показать пароли',
+      hidePassword: 'Скрыть пароли',
+      secureSessionTitle: 'Защищенная серверная сессия',
+      secureSessionDesc: 'Ваша сессия хранится в защищенной базе данных на сервере (MongoDB) и защищена файлом cookie HttpOnly, SameSite=Lax. При закрытии браузера или выходе из системы сессия немедленно аннулируется сервером.',
       tabs: {
         profile: 'Профиль',
         preferences: 'Настройки',
@@ -951,6 +983,7 @@ export const translations: Record<Language, TranslationContent> = {
     progress: {
       title: 'Personal Progress',
       subtitle: 'Prayer history, consistency analytics, and qaza tracking',
+      signInPrompt: 'Sign in to unlock multi-device cloud history, long-term analytics, and automated streaks.',
       tabs: {
         overview: 'Overview',
         history: 'History & Calendar',
@@ -979,10 +1012,25 @@ export const translations: Record<Language, TranslationContent> = {
         streakEncouragement: 'Excellent momentum! Keep performing prayers in their preferred windows.',
         qazaGoal: 'Qaza Payoff Target',
       },
+      prayersCompletedRecord: 'prayers completed',
+      consistencyTitle: 'Consistency by Prayer',
+      consistencySubtitle: 'On-time completion share for each prayer',
+      calculatorTitle: 'Qaza Payoff Projection Calculator',
+      dailyOneExtra: 'With 1 extra prayer made up daily',
+      dailyFiveExtra: 'With 1 full day (5 prayers) made up daily',
+      daysToComplete: 'days to completely fulfill',
     },
     account: {
       title: 'Account & Settings',
       subtitle: 'Manage your profile, prayer calculation, and security',
+      signInTitle: 'Sign In to Access Your Cloud Account',
+      signInSubtitle: 'Create an account or sign in to configure personalized calculation methods, join accountability circles, and secure your prayer journal.',
+      languageSubtitle: 'Application interface language',
+      argonSecurityNote: 'Password securely hashed with Argon2id',
+      showPassword: 'Show passwords',
+      hidePassword: 'Hide passwords',
+      secureSessionTitle: 'Secure Server-Side Session',
+      secureSessionDesc: 'Your session is stored securely in the server database (MongoDB) and protected with an HttpOnly, SameSite=Lax cookie. It is immediately invalidated by the server when you log out or your session expires.',
       tabs: {
         profile: 'Profile',
         preferences: 'Preferences',
@@ -1289,6 +1337,7 @@ export const translations: Record<Language, TranslationContent> = {
     progress: {
       title: 'Shaxsiy rivojlanish',
       subtitle: 'Namozlar tarixi, muntazamlik ko‘rsatkichlari va qazo hisobi',
+      signInPrompt: 'Bulutli tarix, uzoq muddatli tahlillar va avtomatik davomiylik zanjirini ochish uchun tizimga kiring.',
       tabs: {
         overview: 'Umumiy ko‘rinish',
         history: 'Tarix va taqvim',
@@ -1317,10 +1366,25 @@ export const translations: Record<Language, TranslationContent> = {
         streakEncouragement: 'Ajoyib natija! Namozlarni o‘z vaqtida ado etishda davom eting.',
         qazaGoal: 'Qazolarni to‘lash maqsadi',
       },
+      prayersCompletedRecord: 'namoz ado etildi',
+      consistencyTitle: 'Namozlar kesimida muntazamlik',
+      consistencySubtitle: 'Har bir namozning o‘z vaqtida ado etilish ulushi',
+      calculatorTitle: 'Qazolarni to‘lash hisoblagichi',
+      dailyOneExtra: 'Har kuni 1 ta qo‘shimcha namoz o‘qilsa',
+      dailyFiveExtra: 'Har kuni 1 kunlik (5 ta) qazo o‘qilsa',
+      daysToComplete: 'kunda to‘liq yopiladi',
     },
     account: {
       title: 'Hisob va sozlamalar',
       subtitle: 'Profil ma’lumotlari, namoz hisoblash usuli va xavfsizlik',
+      signInTitle: 'Bulutli hisobingizga kiring',
+      signInSubtitle: 'Shaxsiy hisob-kitob usullarini sozlash, mas’uliyat doiralariga qo‘shilish va namoz daftaringizni himoyalash uchun hisobingizga kiring.',
+      languageSubtitle: 'Ilova interfeysi tili',
+      argonSecurityNote: 'Argon2id bilan xavfsiz himoyalangan parol',
+      showPassword: 'Parollarni ko‘rsatish',
+      hidePassword: 'Parollarni yashirish',
+      secureSessionTitle: 'Himoyalangan server seansi',
+      secureSessionDesc: 'Sizning sessiyangiz xavfsiz server bazasida (MongoDB) saqlanadi va HttpOnly, SameSite=Lax cookie orqali himoyalangan. Brauzer yopilganda yoki tizimdan chiqqaningizda sessiya server tomonidan darhol bekor qilinadi.',
       tabs: {
         profile: 'Profil',
         preferences: 'Sozlamalar',
