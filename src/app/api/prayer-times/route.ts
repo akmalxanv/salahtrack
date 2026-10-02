@@ -1,7 +1,7 @@
-import { NextRequest, NextResponse } from 'next/server.js';
+import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequest } from '@/lib/auth/guard';
 
-export const revalidate = 3600; // Cache for 1 hour
+export const dynamic = 'force-dynamic';
 
 // Default fallback Tashkent timings (Hanafi, MWL / Muslim Board of Uzbekistan coordinates: 41.2995, 69.2401)
 const TASHKENT_COORDS = {

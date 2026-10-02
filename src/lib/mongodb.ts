@@ -1,5 +1,9 @@
 import mongoose from 'mongoose';
 
+if (typeof window !== 'undefined') {
+  throw new Error('connectDB can only be executed on the server.');
+}
+
 /**
  * Global cache interface for Mongoose to prevent connection exhaustion
  * in serverless environments and during Next.js hot module reloads.
