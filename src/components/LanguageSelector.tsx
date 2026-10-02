@@ -8,16 +8,7 @@ export default function LanguageSelector() {
   return (
     <div className="inline-flex items-center bg-slate-100 dark:bg-slate-800 p-1 rounded-xl border border-slate-200 dark:border-slate-700">
       <button
-        onClick={() => setLang('ru')}
-        className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
-          lang === 'ru'
-            ? 'bg-emerald-600 text-white shadow-xs'
-            : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'
-        }`}
-      >
-        РУС
-      </button>
-      <button
+        type="button"
         onClick={() => setLang('en')}
         className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
           lang === 'en'
@@ -28,6 +19,18 @@ export default function LanguageSelector() {
         ENG
       </button>
       <button
+        type="button"
+        onClick={() => setLang('ru')}
+        className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
+          lang === 'ru'
+            ? 'bg-emerald-600 text-white shadow-xs'
+            : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'
+        }`}
+      >
+        РУС
+      </button>
+      <button
+        type="button"
         onClick={() => setLang('uz')}
         className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
           lang === 'uz'

@@ -1,39 +1,96 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useSyncExternalStore, useCallback, useMemo, useEffect } from 'react';
+
+const emptySubscribe = () => () => {};
+
+export function useIsMounted(): boolean {
+  return useSyncExternalStore(
+    emptySubscribe,
+    () => true,
+    () => false
+  );
+}
+
+function subscribe(callback: () => void) {
+  if (typeof window === 'undefined') return () => {};
+  window.addEventListener('storage', callback);
+  window.addEventListener('local-storage-update', callback);
+  return () => {
+    window.removeEventListener('storage', callback);
+    window.removeEventListener('local-storage-update', callback);
+  };
+}
 
 export function useLocalStorage<T>(key: string, initialValue: T) {
-  const [storedValue, setStoredValue] = useState<T>(initialValue);
-  const [isMounted, setIsMounted] = useState(false);
+  const isMounted = useIsMounted();
 
-  useEffect(() => {
-    setIsMounted(true);
+  const getSnapshot = useCallback(() => {
     try {
-      const item = window.localStorage.getItem(key);
-      if (item) {
-        setStoredValue(JSON.parse(item));
-      }
-    } catch (error) {
-      console.error(`Ошибка чтения localStorage по ключу "${key}":`, error);
+      return window.localStorage.getItem(key);
+    } catch {
+      return null;
     }
   }, [key]);
 
-  const setValue = (value: T | ((val: T) => T)) => {
-    try {
-      const valueToStore = value instanceof Function ? value(storedValue) : value;
-      setStoredValue(valueToStore);
-      if (typeof window !== 'undefined') {
-        window.localStorage.setItem(key, JSON.stringify(valueToStore));
+  const getServerSnapshot = useCallback(() => {
+    if (initialValue !== undefined && initialValue !== null) {
+      try {
+        return JSON.stringify(initialValue);
+      } catch {
+        return null;
       }
-    } catch (error) {
-      console.error(`Ошибка записи в localStorage по ключу "${key}":`, error);
     }
-  };
+    return null;
+  }, [initialValue]);
+
+  const rawValue = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+
+  const storedValue = useMemo<T>(() => {
+    if (rawValue === null) return initialValue;
+    try {
+      return JSON.parse(rawValue) as T;
+    } catch {
+      return initialValue;
+    }
+  }, [rawValue, initialValue]);
+
+  // Sync cookie so server-side rendering on reload can pre-render matching state
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const item = window.localStorage.getItem(key);
+      if (item !== null) {
+        document.cookie = `${key}=${encodeURIComponent(item)}; path=/; max-age=31536000; SameSite=Lax`;
+      } else if (initialValue !== undefined && initialValue !== null) {
+        document.cookie = `${key}=${encodeURIComponent(JSON.stringify(initialValue))}; path=/; max-age=31536000; SameSite=Lax`;
+      }
+    } catch {
+      // ignore
+    }
+  }, [key, initialValue]);
+
+  const setValue = useCallback(
+    (valueOrFn: T | ((prev: T) => T)) => {
+      try {
+        const currentItem = window.localStorage.getItem(key);
+        const currentParsed: T = currentItem !== null ? JSON.parse(currentItem) : initialValue;
+        const nextValue = valueOrFn instanceof Function ? valueOrFn(currentParsed) : valueOrFn;
+        const serialized = JSON.stringify(nextValue);
+        window.localStorage.setItem(key, serialized);
+        document.cookie = `${key}=${encodeURIComponent(serialized)}; path=/; max-age=31536000; SameSite=Lax`;
+        window.dispatchEvent(new Event('local-storage-update'));
+      } catch (error) {
+        console.error(`Error saving to localStorage key "${key}":`, error);
+      }
+    },
+    [key, initialValue]
+  );
 
   return [storedValue, setValue, isMounted] as const;
 }
 
-// Утилита для получения текущей даты в формате YYYY-MM-DD
+// Utility to get current date formatted as YYYY-MM-DD
 export function getTodayString(): string {
   const today = new Date();
   const year = today.getFullYear();
