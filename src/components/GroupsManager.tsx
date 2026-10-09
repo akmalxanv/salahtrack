@@ -99,7 +99,16 @@ export default function GroupsManager() {
   }, [user]);
 
   useEffect(() => {
-    fetchGroups();
+    let ignore = false;
+    async function load() {
+      if (!ignore) {
+        await fetchGroups();
+      }
+    }
+    load();
+    return () => {
+      ignore = true;
+    };
   }, [fetchGroups]);
 
   // Fetch selected group details
@@ -119,9 +128,16 @@ export default function GroupsManager() {
   }, []);
 
   useEffect(() => {
-    if (selectedGroupId) {
-      fetchGroupDetails(selectedGroupId, period);
+    let ignore = false;
+    async function load() {
+      if (selectedGroupId && !ignore) {
+        await fetchGroupDetails(selectedGroupId, period);
+      }
     }
+    load();
+    return () => {
+      ignore = true;
+    };
   }, [selectedGroupId, period, fetchGroupDetails]);
 
   // Handle Create Circle

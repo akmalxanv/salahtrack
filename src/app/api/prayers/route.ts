@@ -15,12 +15,21 @@ const VALID_STATUSES: PrayerStatus[] = [
 ];
 
 /**
+ * Calculates maximum allowed calendar date string (YYYY-MM-DD)
+ * Supports all world timezones (up to UTC+14) while strictly rejecting actual future dates.
+ */
+export function getMaxAllowedDate(): string {
+  const futureThreshold = new Date(Date.now() + 14 * 60 * 60 * 1000);
+  return futureThreshold.toISOString().split('T')[0];
+}
+
+/**
  * Calculates accountability fine for a daily prayer record based on Phase 8 rules:
  * - Base fine: 15,000 UZS per missed prayer
  * - Overdue penalty: +15,000 UZS (total 30,000 UZS) if unperformed after 7 days
  * - Made up: fine cleared upon fulfillment
  */
-function calculateFines(recordDateStr: string, prayers: Record<PrayerId, { status: PrayerStatus; missedAt?: Date }>): number {
+export function calculateFines(recordDateStr: string, prayers: Record<PrayerId, { status: PrayerStatus; missedAt?: Date }>): number {
   let totalFine = 0;
   const now = Date.now();
   const recordDate = new Date(`${recordDateStr}T00:00:00Z`).getTime();
@@ -127,7 +136,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { date, prayerId, status, notes } = body;
+    const { date, prayerId, status, prayers: batchPrayers, notes } = body;
 
     // Validation
     if (!date || typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
@@ -137,22 +146,36 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (!prayerId || !VALID_PRAYER_IDS.includes(prayerId as PrayerId)) {
+    // Future dates are strictly prohibited
+    const maxDate = getMaxAllowedDate();
+    if (date > maxDate) {
+      return NextResponse.json(
+        { success: false, error: 'Cannot log or modify prayer records for future dates' },
+        { status: 400 }
+      );
+    }
+
+    // Check payload type: either single prayer or batch prayers object
+    if (!batchPrayers && (!prayerId || !status)) {
+      return NextResponse.json(
+        { success: false, error: 'Either (prayerId and status) or prayers map is required' },
+        { status: 400 }
+      );
+    }
+
+    if (prayerId && !VALID_PRAYER_IDS.includes(prayerId as PrayerId)) {
       return NextResponse.json(
         { success: false, error: `Invalid prayerId. Must be one of: ${VALID_PRAYER_IDS.join(', ')}` },
         { status: 400 }
       );
     }
 
-    if (!status || !VALID_STATUSES.includes(status as PrayerStatus)) {
+    if (status && !VALID_STATUSES.includes(status as PrayerStatus)) {
       return NextResponse.json(
         { success: false, error: `Invalid status. Must be one of: ${VALID_STATUSES.join(', ')}` },
         { status: 400 }
       );
     }
-
-    // Normalize PRAYED to PRAYED_ON_TIME
-    const normalizedStatus: PrayerStatus = status === 'PRAYED' ? 'PRAYED_ON_TIME' : status;
 
     await connectDB();
 
@@ -178,16 +201,33 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Apply status and timestamps
-    record.prayers[prayerId as PrayerId] = {
-      status: normalizedStatus,
-      prayedAt: normalizedStatus === 'PRAYED_ON_TIME' || normalizedStatus === 'PRAYED_LATE' ? now : undefined,
-      missedAt: normalizedStatus === 'MISSED' ? now : undefined,
-      madeUpAt: normalizedStatus === 'MADE_UP' ? now : undefined,
-      notes: typeof notes === 'string' ? notes.slice(0, 200) : undefined,
-    };
+    // Handle batch prayer update
+    if (batchPrayers && typeof batchPrayers === 'object') {
+      for (const pId of VALID_PRAYER_IDS) {
+        const pStatus = batchPrayers[pId];
+        if (pStatus && VALID_STATUSES.includes(pStatus as PrayerStatus)) {
+          const norm: PrayerStatus = pStatus === 'PRAYED' ? 'PRAYED_ON_TIME' : pStatus;
+          record.prayers[pId] = {
+            status: norm,
+            prayedAt: norm === 'PRAYED_ON_TIME' || norm === 'PRAYED_LATE' ? now : undefined,
+            missedAt: norm === 'MISSED' ? now : undefined,
+            madeUpAt: norm === 'MADE_UP' ? now : undefined,
+          };
+        }
+      }
+    } else if (prayerId && status) {
+      // Handle single prayer update
+      const normalizedStatus: PrayerStatus = status === 'PRAYED' ? 'PRAYED_ON_TIME' : status;
+      record.prayers[prayerId as PrayerId] = {
+        status: normalizedStatus,
+        prayedAt: normalizedStatus === 'PRAYED_ON_TIME' || normalizedStatus === 'PRAYED_LATE' ? now : undefined,
+        missedAt: normalizedStatus === 'MISSED' ? now : undefined,
+        madeUpAt: normalizedStatus === 'MADE_UP' ? now : undefined,
+        notes: typeof notes === 'string' ? notes.slice(0, 200) : undefined,
+      };
+    }
 
-    // Calculate accrued accountability fine
+    // Recalculate accrued accountability fine deterministically
     record.finesAccrued = calculateFines(date, record.prayers);
 
     await record.save();

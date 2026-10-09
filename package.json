@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --experimental-strip-types --test 'tests/auth/*.test.ts'"
+    "test": "node --experimental-strip-types --test 'tests/**/*.test.ts'"
   },
   "dependencies": {
     "argon2": "^0.45.1",

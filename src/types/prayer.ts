@@ -30,3 +30,40 @@ export interface DailyPrayerRecord {
   prayers: Record<PrayerId, PrayerStatus>;
   notes?: string;
 }
+
+export interface SinglePrayerEntry {
+  status: PrayerStatus;
+  prayedAt?: string;
+  missedAt?: string;
+  madeUpAt?: string;
+  notes?: string;
+}
+
+export interface PrayerHistoryRecord {
+  _id?: string;
+  date: string; // YYYY-MM-DD
+  prayers: Record<PrayerId, SinglePrayerEntry>;
+  finesAccrued: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface AccountabilityBreakdownItem {
+  date: string;
+  prayerId: PrayerId;
+  baseAmount: number;
+  overdueAmount: number;
+  totalAmount: number;
+  isOverdue: boolean;
+  daysPassed: number;
+}
+
+export interface AccountabilitySummary {
+  totalOutstanding: number;
+  totalMissedPrayers: number;
+  totalOverduePrayers: number;
+  totalPaidAmount: number;
+  currency: string;
+  items: AccountabilityBreakdownItem[];
+}
+

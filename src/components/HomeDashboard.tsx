@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect, useCallback } from 'react';
 import {
   CheckCircle2,
   Flame,
@@ -13,6 +13,10 @@ import {
   Check,
   X,
   MapPin,
+  Bell,
+  BellOff,
+  AlertTriangle,
+  Loader2,
 } from 'lucide-react';
 import { useLocalStorage, getTodayString, useIsMounted } from '@/hooks/useLocalStorage';
 import { useLanguage } from '@/context/LanguageContext';
@@ -75,34 +79,78 @@ const STATUS_CONFIG: Record<
   },
 };
 
-function getMinutesFromTimeString(timeStr: string): number {
-  const [h, m] = timeStr.split(':').map(Number);
-  return h * 60 + m;
+interface NextPrayerInfo {
+  prayerId: PrayerId;
+  prayerName: string;
+  prayerTime: string;
+  hours: number;
+  mins: number;
+  secs: number;
+  isTomorrow: boolean;
+  totalSecondsRemaining: number;
 }
 
-function calculateNextPrayer(prayers: PrayerItem[]): { prayerId: PrayerId; hours: number; mins: number } {
-  const now = new Date();
-  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+function parseTimeToDate(timeStr: string, baseDate: Date, addDays = 0): Date {
+  const [h, m] = timeStr.split(':').map(Number);
+  const d = new Date(baseDate);
+  d.setDate(d.getDate() + addDays);
+  d.setHours(h, m, 0, 0);
+  return d;
+}
 
-  for (const prayer of prayers) {
-    const pMinutes = getMinutesFromTimeString(prayer.time);
-    if (pMinutes > currentMinutes) {
-      const diff = pMinutes - currentMinutes;
+function calculateNextPrayerCountdown(prayers: PrayerItem[], now: Date): NextPrayerInfo {
+  if (!prayers || prayers.length === 0) {
+    return {
+      prayerId: 'fajr',
+      prayerName: 'Fajr',
+      prayerTime: '04:47',
+      hours: 0,
+      mins: 0,
+      secs: 0,
+      isTomorrow: false,
+      totalSecondsRemaining: 0,
+    };
+  }
+
+  // Check each prayer today
+  for (const p of prayers) {
+    const pDate = parseTimeToDate(p.time, now, 0);
+    const diffMs = pDate.getTime() - now.getTime();
+    if (diffMs > 0) {
+      const totalSecs = Math.floor(diffMs / 1000);
+      const hours = Math.floor(totalSecs / 3600);
+      const mins = Math.floor((totalSecs % 3600) / 60);
+      const secs = totalSecs % 60;
       return {
-        prayerId: prayer.id,
-        hours: Math.floor(diff / 60),
-        mins: diff % 60,
+        prayerId: p.id,
+        prayerName: p.name,
+        prayerTime: p.time,
+        hours,
+        mins,
+        secs,
+        isTomorrow: false,
+        totalSecondsRemaining: totalSecs,
       };
     }
   }
 
-  // Next is tomorrow's Fajr
-  const fajrMinutes = getMinutesFromTimeString(prayers[0].time);
-  const diff = 24 * 60 - currentMinutes + fajrMinutes;
+  // All 5 passed for today -> Next is tomorrow's Fajr
+  const tomorrowFajrDate = parseTimeToDate(prayers[0].time, now, 1);
+  const diffMs = tomorrowFajrDate.getTime() - now.getTime();
+  const totalSecs = Math.max(0, Math.floor(diffMs / 1000));
+  const hours = Math.floor(totalSecs / 3600);
+  const mins = Math.floor((totalSecs % 3600) / 60);
+  const secs = totalSecs % 60;
+
   return {
     prayerId: prayers[0].id,
-    hours: Math.floor(diff / 60),
-    mins: diff % 60,
+    prayerName: prayers[0].name,
+    prayerTime: prayers[0].time,
+    hours,
+    mins,
+    secs,
+    isTomorrow: true,
+    totalSecondsRemaining: totalSecs,
   };
 }
 
@@ -134,7 +182,62 @@ export default function HomeDashboard({ initialQazaCount, initialPrayers }: Home
   const [activeMenuPrayerId, setActiveMenuPrayerId] = useState<string | null>(null);
   const [isEditingQaza, setIsEditingQaza] = useState(false);
   const [customQazaInput, setCustomQazaInput] = useState<string>('');
+  
+  // Real-time ticking clock for live countdown and auto-advance
+  const [now, setNow] = useState<Date>(() => new Date());
+
+  // Location and Prayer API states
   const [locationName, setLocationName] = useState<string>('Tashkent');
+  const [apiStatus, setApiStatus] = useState<'loading' | 'live' | 'fallback' | 'error'>('loading');
+  const [calcMethodName, setCalcMethodName] = useState<string>('MWL');
+
+  // Saving states per prayer item
+  const [savingStatus, setSavingStatus] = useState<Record<PrayerId, 'idle' | 'saving' | 'saved' | 'error'>>({
+    fajr: 'idle',
+    dhuhr: 'idle',
+    asr: 'idle',
+    maghrib: 'idle',
+    isha: 'idle',
+  });
+
+  // Browser Notification state
+  const [notificationPermission, setNotificationPermission] = useState<'default' | 'granted' | 'denied' | 'unsupported'>('default');
+
+  // 1-second live ticker
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setNow(new Date());
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Check Notification API support
+  useEffect(() => {
+    queueMicrotask(() => {
+      if (typeof window !== 'undefined' && 'Notification' in window) {
+        setNotificationPermission(Notification.permission as 'default' | 'granted' | 'denied');
+      } else {
+        setNotificationPermission('unsupported');
+      }
+    });
+  }, []);
+
+  const handleRequestNotification = async () => {
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      try {
+        const permission = await Notification.requestPermission();
+        setNotificationPermission(permission as 'default' | 'granted' | 'denied');
+        if (permission === 'granted') {
+          new Notification('SalahTrack', {
+            body: t.dashboard.notificationsEnabled,
+            icon: '/favicon.ico',
+          });
+        }
+      } catch (err) {
+        console.warn('Notification permission error:', err);
+      }
+    }
+  };
 
   // Initial cloud synchronization from MongoDB Atlas if authenticated
   useEffect(() => {
@@ -182,9 +285,8 @@ export default function HomeDashboard({ initialQazaCount, initialPrayers }: Home
     }
   }, [isMounted, lastSavedDate, prayers, setPrayers, setLastSavedDate, setQazaCount]);
 
-  // Gregorian date
+  // Gregorian date display
   const gregorianDate = useMemo(() => {
-    const now = new Date();
     if (lang === 'uz') {
       const uzMonths = [
         'yanvar', 'fevral', 'mart', 'aprel', 'may', 'iyun',
@@ -201,7 +303,7 @@ export default function HomeDashboard({ initialQazaCount, initialPrayers }: Home
       month: 'long',
       year: 'numeric',
     }).format(now);
-  }, [lang]);
+  }, [lang, now]);
 
   // Sync authentic prayer times (location-aware & user calculation method)
   useEffect(() => {
@@ -211,6 +313,7 @@ export default function HomeDashboard({ initialQazaCount, initialPrayers }: Home
 
     async function syncPrayerTimes() {
       try {
+        setApiStatus('loading');
         let lat: number | null = null;
         let lng: number | null = null;
 
@@ -225,7 +328,7 @@ export default function HomeDashboard({ initialQazaCount, initialPrayers }: Home
             }
           }
         } catch {
-          // ignore localStorage parsing errors
+          // ignore
         }
 
         const queryParams = new URLSearchParams();
@@ -233,19 +336,27 @@ export default function HomeDashboard({ initialQazaCount, initialPrayers }: Home
           queryParams.set('latitude', lat.toString());
           queryParams.set('longitude', lng.toString());
         }
-        if (user?.preferences?.calculationMethod) {
-          queryParams.set('method', user.preferences.calculationMethod);
+        const method = user?.preferences?.calculationMethod || 'MWL';
+        queryParams.set('method', method);
+        setCalcMethodName(method);
+
+        const url = `/api/prayer-times?${queryParams.toString()}`;
+        const res = await fetch(url);
+        if (!res.ok) {
+          if (!isCancelled) setApiStatus('fallback');
+          return;
         }
 
-        const url = queryParams.toString() ? `/api/prayer-times?${queryParams.toString()}` : '/api/prayer-times';
-        const res = await fetch(url);
-        if (!res.ok) return;
         const data = await res.json();
-        if (isCancelled || !data?.timings) return;
+        if (isCancelled || !data?.timings) {
+          if (!isCancelled) setApiStatus('fallback');
+          return;
+        }
 
         if (data.city) {
           setLocationName(data.city);
         }
+        setApiStatus(data.source === 'live' ? 'live' : 'fallback');
 
         setPrayers((prev) => {
           let hasChanges = false;
@@ -261,6 +372,7 @@ export default function HomeDashboard({ initialQazaCount, initialPrayers }: Home
         });
       } catch (err) {
         console.warn('Could not sync live prayer times:', err);
+        if (!isCancelled) setApiStatus('error');
       }
     }
 
@@ -283,7 +395,7 @@ export default function HomeDashboard({ initialQazaCount, initialPrayers }: Home
         day: 'numeric',
         month: 'long',
         year: 'numeric',
-      }).format(new Date());
+      }).format(now);
 
       let cleaned = formatted.trim();
       if (lang === 'ru') {
@@ -299,37 +411,71 @@ export default function HomeDashboard({ initialQazaCount, initialPrayers }: Home
       if (lang === 'uz') return '18-Rabiʼus soniy 1448 hijriy';
       return '18 Раби аль-ахир 1448 г. хиджры';
     }
-  }, [lang]);
+  }, [lang, now]);
 
-  // Dynamic next prayer countdown
-  const nextPrayerCountdown = useMemo(() => calculateNextPrayer(prayers), [prayers]);
+  // Live Next Prayer Countdown (calculated dynamically from current ticking time)
+  const nextPrayer = useMemo(() => calculateNextPrayerCountdown(prayers, now), [prayers, now]);
 
-  // Specific status change from dropdown
-  const handleSetStatus = (id: PrayerId, status: PrayerStatus) => {
-    const normalizedStatus: PrayerStatus = status === 'PRAYED' ? 'PRAYED_ON_TIME' : status;
-    setPrayers((prev) =>
-      prev.map((item) =>
-        item.id === id ? { ...item, status: normalizedStatus, updatedAt: new Date().toISOString() } : item
-      )
-    );
-    setActiveMenuPrayerId(null);
+  // Status Change Handler with visual save state and backend sync
+  const handleSetStatus = useCallback(
+    async (id: PrayerId, status: PrayerStatus) => {
+      const normalizedStatus: PrayerStatus = status === 'PRAYED' ? 'PRAYED_ON_TIME' : status;
 
-    // Background sync to MongoDB Atlas if authenticated
-    if (user) {
-      const todayStr = getTodayString();
-      fetch('/api/prayers', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          date: todayStr,
-          prayerId: id,
-          status: normalizedStatus,
-        }),
-      }).catch((err) => console.warn('Background prayer sync error:', err));
-    }
-  };
+      // 1. Instant 0ms optimistic UI update
+      setPrayers((prev) =>
+        prev.map((item) =>
+          item.id === id ? { ...item, status: normalizedStatus, updatedAt: new Date().toISOString() } : item
+        )
+      );
+      setActiveMenuPrayerId(null);
 
-  // Quick primary action: toggle Prayed / Pending
+      // 2. Set saving status feedback
+      setSavingStatus((prev) => ({ ...prev, [id]: 'saving' }));
+
+      // 3. Background sync to MongoDB Atlas if authenticated
+      if (user) {
+        try {
+          const todayStr = getTodayString();
+          const res = await fetch('/api/prayers', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              date: todayStr,
+              prayerId: id,
+              status: normalizedStatus,
+            }),
+          });
+
+          if (res.ok) {
+            setSavingStatus((prev) => ({ ...prev, [id]: 'saved' }));
+            setTimeout(() => {
+              setSavingStatus((prev) => ({ ...prev, [id]: 'idle' }));
+            }, 2000);
+          } else {
+            setSavingStatus((prev) => ({ ...prev, [id]: 'error' }));
+            setTimeout(() => {
+              setSavingStatus((prev) => ({ ...prev, [id]: 'idle' }));
+            }, 3000);
+          }
+        } catch (err) {
+          console.warn('Background prayer sync error:', err);
+          setSavingStatus((prev) => ({ ...prev, [id]: 'error' }));
+          setTimeout(() => {
+            setSavingStatus((prev) => ({ ...prev, [id]: 'idle' }));
+          }, 3000);
+        }
+      } else {
+        // Guest mode local save
+        setSavingStatus((prev) => ({ ...prev, [id]: 'saved' }));
+        setTimeout(() => {
+          setSavingStatus((prev) => ({ ...prev, [id]: 'idle' }));
+        }, 1500);
+      }
+    },
+    [user, setPrayers]
+  );
+
+  // Quick toggle (done / pending)
   const handleQuickToggle = (id: PrayerId) => {
     const current = prayers.find((p) => p.id === id);
     const isCompleted =
@@ -340,25 +486,20 @@ export default function HomeDashboard({ initialQazaCount, initialPrayers }: Home
     handleSetStatus(id, nextStatus);
   };
 
-  // Fulfill 1 Qaza prayer
+  // Qaza count helpers
   const handleFulfillQaza = () => {
-    if (qazaCount > 0) {
-      setQazaCount((prev) => prev - 1);
-    }
+    if (qazaCount > 0) setQazaCount((prev) => prev - 1);
   };
 
-  // Add 1 missed (Qaza) prayer
   const handleAddMissed = () => {
     setQazaCount((prev) => prev + 1);
   };
 
-  // Start inline editing of Qaza count
   const handleStartEditing = () => {
     setCustomQazaInput(String(qazaCount));
     setIsEditingQaza(true);
   };
 
-  // Save custom Qaza count
   const handleSaveCustomQaza = () => {
     const parsed = parseInt(customQazaInput, 10);
     if (!isNaN(parsed) && parsed >= 0) {
@@ -367,15 +508,37 @@ export default function HomeDashboard({ initialQazaCount, initialPrayers }: Home
     setIsEditingQaza(false);
   };
 
-  // Cancel custom Qaza editing
   const handleCancelEditing = () => {
     setIsEditingQaza(false);
   };
 
-  const completedCount = prayers.filter(
-    (p) => p.status === 'PRAYED' || p.status === 'PRAYED_ON_TIME' || p.status === 'PRAYED_LATE'
-  ).length;
-  const currentList = prayers;
+  // Daily Obligatory Prayer Performance metrics:
+  // Strictly counts original-day performance: on-time or late.
+  // Made-up prayers do NOT count as completing the original prayer on its original date.
+  const completedCount = useMemo(() => {
+    return prayers.filter(
+      (p) => p.status === 'PRAYED' || p.status === 'PRAYED_ON_TIME' || p.status === 'PRAYED_LATE'
+    ).length;
+  }, [prayers]);
+
+  const missedCount = useMemo(() => {
+    return prayers.filter((p) => p.status === 'MISSED').length;
+  }, [prayers]);
+
+  const madeUpCount = useMemo(() => {
+    return prayers.filter((p) => p.status === 'MADE_UP').length;
+  }, [prayers]);
+
+  const pendingCount = useMemo(() => {
+    return prayers.filter((p) => p.status === 'PENDING').length;
+  }, [prayers]);
+
+  const completionPercentage = Math.round((completedCount / 5) * 100);
+
+  // SVG Progress Ring calculations (radius = 34, perimeter = ~213.6)
+  const ringRadius = 34;
+  const ringCircumference = 2 * Math.PI * ringRadius;
+  const ringOffset = ringCircumference - (completedCount / 5) * ringCircumference;
 
   // Accountability fine calculation: 15,000 UZS base pledge per unfulfilled Qaza
   const totalFineUZS = qazaCount * 15000;
@@ -400,6 +563,10 @@ export default function HomeDashboard({ initialQazaCount, initialPrayers }: Home
               <MapPin className="w-3 h-3 text-emerald-600 dark:text-emerald-400 shrink-0" />
               <span>{locationName}</span>
             </div>
+            <span className="text-slate-300 dark:text-slate-700 text-xs hidden sm:inline">•</span>
+            <span className="text-[11px] font-medium text-slate-400 dark:text-slate-500">
+              {calcMethodName}
+            </span>
           </div>
         </div>
 
@@ -416,34 +583,203 @@ export default function HomeDashboard({ initialQazaCount, initialPrayers }: Home
         </div>
       </div>
 
-      {/* Dynamic Next Prayer Countdown Banner */}
-      {nextPrayerCountdown && (
-        <div className="flex items-center justify-between p-4 rounded-2xl bg-slate-900 text-white dark:bg-slate-800 shadow-sm border border-slate-800 dark:border-slate-700">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/20 text-emerald-400">
-              <Timer className="w-5 h-5" />
+      {/* ========================================================================= */}
+      {/* 2-Column Responsive Header: Next Prayer Card & Daily Completion Progress */}
+      {/* ========================================================================= */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Card A: Next Prayer Card */}
+        <div className="rounded-2xl bg-gradient-to-br from-slate-900 via-slate-850 to-slate-800 text-white p-5 shadow-sm border border-slate-700/80 flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-500/20 text-emerald-400">
+                  <Timer className="w-4 h-4" />
+                </div>
+                <span className="text-xs font-semibold uppercase tracking-wider text-slate-300">
+                  {t.dashboard.nextPrayer}
+                </span>
+              </div>
+
+              {/* Status pill: Live / Fallback / Error */}
+              {apiStatus === 'loading' ? (
+                <span className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-400">
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  <span>{t.common.loading}</span>
+                </span>
+              ) : apiStatus === 'fallback' ? (
+                <span
+                  title={t.dashboard.apiError}
+                  className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full bg-amber-950/80 text-amber-300 border border-amber-800"
+                >
+                  <AlertTriangle className="w-2.5 h-2.5 text-amber-400" />
+                  <span>{t.dashboard.location}</span>
+                </span>
+              ) : apiStatus === 'error' ? (
+                <span className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full bg-rose-950/80 text-rose-300 border border-rose-800">
+                  <AlertTriangle className="w-2.5 h-2.5 text-rose-400" />
+                  <span>{t.dashboard.apiError}</span>
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full bg-emerald-950/80 text-emerald-300 border border-emerald-800">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  <span>{locationName}</span>
+                </span>
+              )}
             </div>
-            <div>
-              <span className="text-xs text-slate-400 font-medium">
-                {t.dashboard.nextPrayer}
-              </span>
-              <p className="text-sm font-bold text-slate-100">
-                {t.prayers[nextPrayerCountdown.prayerId]}
-              </p>
+
+            <div className="flex items-baseline justify-between mt-2">
+              <div>
+                <p className="text-2xl font-black tracking-tight text-white">
+                  {t.prayers[nextPrayer.prayerId]}
+                </p>
+                <div className="flex items-center gap-1.5 text-xs text-slate-400 mt-0.5">
+                  <Clock className="w-3.5 h-3.5" />
+                  <span>{nextPrayer.prayerTime}</span>
+                  {nextPrayer.isTomorrow && (
+                    <span className="text-[10px] px-1.5 py-0.2 rounded-md bg-white/10 text-slate-300 font-medium">
+                      Ertangi
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Live Ticking Countdown */}
+              <div className="text-right">
+                <span className="text-[11px] font-medium text-slate-400 block mb-0.5">
+                  {t.dashboard.in}
+                </span>
+                <p
+                  suppressHydrationWarning
+                  className="text-xl sm:text-2xl font-black text-emerald-400 font-mono tracking-tight"
+                >
+                  {String(nextPrayer.hours).padStart(2, '0')}:
+                  {String(nextPrayer.mins).padStart(2, '0')}:
+                  {String(nextPrayer.secs).padStart(2, '0')}
+                </p>
+              </div>
             </div>
           </div>
-          <div className="text-right">
-            <span className="text-xs text-slate-400">{t.dashboard.in}</span>
-            <p suppressHydrationWarning className="text-base font-extrabold text-emerald-400">
-              {nextPrayerCountdown.hours > 0 && `${nextPrayerCountdown.hours} ${t.common.hoursUnit} `}
-              {nextPrayerCountdown.mins} {t.common.minsUnit}
-            </p>
+
+          <div className="mt-4 pt-3 border-t border-slate-700/60 flex items-center justify-between text-xs text-slate-400">
+            <span className="text-[11px]">{calcMethodName} usuli bo‘yicha</span>
+            {notificationPermission === 'granted' ? (
+              <span className="inline-flex items-center gap-1 text-[11px] text-emerald-400 font-medium">
+                <Bell className="w-3.5 h-3.5 text-emerald-400" />
+                <span>{t.dashboard.notificationsEnabled}</span>
+              </span>
+            ) : notificationPermission === 'denied' ? (
+              <span
+                title={t.dashboard.notificationsBlocked}
+                className="inline-flex items-center gap-1 text-[11px] text-slate-500 font-medium"
+              >
+                <BellOff className="w-3.5 h-3.5" />
+                <span>{t.dashboard.notificationsBlocked}</span>
+              </span>
+            ) : notificationPermission === 'default' ? (
+              <button
+                type="button"
+                onClick={handleRequestNotification}
+                className="inline-flex items-center gap-1 text-[11px] text-emerald-400 hover:text-emerald-300 font-semibold cursor-pointer underline"
+              >
+                <Bell className="w-3.5 h-3.5" />
+                <span>{t.dashboard.enableNotifications}</span>
+              </button>
+            ) : null}
           </div>
         </div>
-      )}
+
+        {/* Card B: Daily Prayer Progress Card (with Visual Progress Ring) */}
+        <div className="rounded-2xl bg-white dark:bg-slate-900 p-5 shadow-xs border border-slate-200 dark:border-slate-800 flex flex-col justify-between">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+              {t.dashboard.dailyProgressTitle}
+            </span>
+            <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400">
+              {completionPercentage}%
+            </span>
+          </div>
+
+          <div className="my-3 flex items-center gap-4 sm:gap-6">
+            {/* Visual SVG Progress Ring */}
+            <div className="relative w-20 h-20 shrink-0 flex items-center justify-center">
+              <svg className="w-20 h-20 -rotate-90 transform" viewBox="0 0 80 80">
+                {/* Background Ring */}
+                <circle
+                  cx="40"
+                  cy="40"
+                  r={ringRadius}
+                  stroke="currentColor"
+                  strokeWidth="7"
+                  className="text-slate-100 dark:text-slate-800"
+                  fill="transparent"
+                />
+                {/* Foreground Active Ring */}
+                <circle
+                  cx="40"
+                  cy="40"
+                  r={ringRadius}
+                  stroke="currentColor"
+                  strokeWidth="7"
+                  strokeDasharray={ringCircumference}
+                  strokeDashoffset={ringOffset}
+                  strokeLinecap="round"
+                  className="text-emerald-600 dark:text-emerald-500 transition-all duration-700 ease-out"
+                  fill="transparent"
+                />
+              </svg>
+              <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
+                <span className="text-base font-black text-slate-900 dark:text-slate-100 leading-none">
+                  {completedCount}
+                  <span className="text-xs text-slate-400 font-semibold">/5</span>
+                </span>
+              </div>
+            </div>
+
+            {/* Concise Status Breakdown Pills */}
+            <div className="flex-1 grid grid-cols-2 gap-2 text-xs">
+              <div className="p-2 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-100 dark:border-emerald-900/50">
+                <span className="text-[10px] font-semibold text-emerald-800 dark:text-emerald-300 block">
+                  {t.statuses.PRAYED_ON_TIME}
+                </span>
+                <span className="text-sm font-bold text-emerald-900 dark:text-emerald-200">
+                  {completedCount}
+                </span>
+              </div>
+              <div className="p-2 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] font-semibold text-slate-600 dark:text-slate-400 block">
+                  {t.statuses.PENDING}
+                </span>
+                <span className="text-sm font-bold text-slate-800 dark:text-slate-200">
+                  {pendingCount}
+                </span>
+              </div>
+              <div className="p-2 rounded-xl bg-rose-50/70 dark:bg-rose-950/30 border border-rose-100 dark:border-rose-900/50">
+                <span className="text-[10px] font-semibold text-rose-800 dark:text-rose-300 block">
+                  {t.statuses.MISSED}
+                </span>
+                <span className="text-sm font-bold text-rose-900 dark:text-rose-200">
+                  {missedCount}
+                </span>
+              </div>
+              <div className="p-2 rounded-xl bg-sky-50/70 dark:bg-sky-950/30 border border-sky-100 dark:border-sky-900/50">
+                <span className="text-[10px] font-semibold text-sky-800 dark:text-sky-300 block">
+                  {t.statuses.MADE_UP}
+                </span>
+                <span className="text-sm font-bold text-sky-900 dark:text-sky-200">
+                  {madeUpCount}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <p className="text-[10px] text-slate-400 dark:text-slate-500 italic">
+            * {t.dashboard.madeUpDistinctNote}
+          </p>
+        </div>
+      </div>
 
       {/* Accountability & Qaza Ledger Card */}
-      <div className="rounded-2xl bg-gradient-to-br from-emerald-700 to-emerald-800 text-white p-6 shadow-sm border border-emerald-600/50">
+      <div className="rounded-2xl bg-gradient-to-br from-emerald-700 to-emerald-800 text-white p-5 sm:p-6 shadow-sm border border-emerald-600/50">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <span className="text-xs font-semibold uppercase tracking-wider text-emerald-200">
             {t.accountability.title}
@@ -541,7 +877,9 @@ export default function HomeDashboard({ initialQazaCount, initialPrayers }: Home
         </div>
       </div>
 
-      {/* Today's Prayers List */}
+      {/* ========================================================================= */}
+      {/* Today's Prayers List (Chronological with instant feedback & status menu)  */}
+      {/* ========================================================================= */}
       <div>
         <div className="flex items-center justify-between mb-3">
           <div>
@@ -551,7 +889,7 @@ export default function HomeDashboard({ initialQazaCount, initialPrayers }: Home
               </h2>
               <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200/70 dark:border-emerald-800/70">
                 <MapPin className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
-                <span>{t.dashboard.location}</span>
+                <span>{locationName}</span>
               </span>
             </div>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
@@ -561,11 +899,12 @@ export default function HomeDashboard({ initialQazaCount, initialPrayers }: Home
         </div>
 
         <div className="space-y-3">
-          {currentList.map((prayer) => {
+          {prayers.map((prayer) => {
             const config = STATUS_CONFIG[prayer.status];
             const isMenuOpen = activeMenuPrayerId === prayer.id;
             const prayerLabel = t.prayers[prayer.id] || prayer.name;
             const statusLabel = t.statuses[prayer.status];
+            const itemSaveStatus = savingStatus[prayer.id];
 
             return (
               <div
@@ -584,9 +923,29 @@ export default function HomeDashboard({ initialQazaCount, initialPrayers }: Home
                       <CheckCircle2 className={`w-6 h-6 transition-transform active:scale-90 ${config.iconClass}`} />
                     </button>
                     <div>
-                      <span className="font-bold text-sm text-slate-900 dark:text-slate-100">
-                        {prayerLabel}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-sm text-slate-900 dark:text-slate-100">
+                          {prayerLabel}
+                        </span>
+                        {itemSaveStatus === 'saving' && (
+                          <span className="inline-flex items-center gap-1 text-[10px] text-slate-400">
+                            <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                            <span>{t.dashboard.saving}</span>
+                          </span>
+                        )}
+                        {itemSaveStatus === 'saved' && (
+                          <span className="inline-flex items-center gap-0.5 text-[10px] text-emerald-600 font-medium">
+                            <Check className="w-3 h-3" />
+                            <span>{t.dashboard.saved}</span>
+                          </span>
+                        )}
+                        {itemSaveStatus === 'error' && (
+                          <span className="inline-flex items-center gap-0.5 text-[10px] text-rose-500 font-medium">
+                            <AlertTriangle className="w-3 h-3" />
+                            <span>{t.dashboard.saveFailed}</span>
+                          </span>
+                        )}
+                      </div>
                       <div className="flex items-center gap-1.5 text-xs text-slate-400 mt-0.5">
                         <Clock className="w-3 h-3" />
                         <span>{prayer.time} – {prayer.endTime}</span>

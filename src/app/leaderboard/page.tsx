@@ -59,7 +59,16 @@ export default function LeaderboardPage() {
   }, [period]);
 
   useEffect(() => {
-    fetchLeaderboard();
+    let ignore = false;
+    async function load() {
+      if (!ignore) {
+        await fetchLeaderboard();
+      }
+    }
+    load();
+    return () => {
+      ignore = true;
+    };
   }, [fetchLeaderboard]);
 
   const handleToggleOptIn = async () => {

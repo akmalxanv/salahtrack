@@ -119,6 +119,19 @@ export interface TranslationContent {
     markMadeUp: string;
     resetToPending: string;
     location: string;
+    dailyProgressTitle: string;
+    completedCountOfTotal: string;
+    madeUpDistinctNote: string;
+    saving: string;
+    saved: string;
+    saveFailed: string;
+    notifications: string;
+    notificationsEnabled: string;
+    notificationsBlocked: string;
+    enableNotifications: string;
+    locationUnavailable: string;
+    apiError: string;
+    calcMethod: string;
   };
   accountability: {
     title: string;
@@ -310,6 +323,18 @@ export interface TranslationContent {
     dailyOneExtra: string;
     dailyFiveExtra: string;
     daysToComplete: string;
+    historicalEditNotice: string;
+    editRecord: string;
+    doneEditing: string;
+    futureDateError: string;
+    accountabilityBreakdown: string;
+    baseFine: string;
+    overdueFine: string;
+    daysOverdue: string;
+    noFines: string;
+    settledAmount: string;
+    recordPayment: string;
+    recordPaymentDesc: string;
   };
   account: {
     title: string;
@@ -474,6 +499,19 @@ export const translations: Record<Language, TranslationContent> = {
       markMadeUp: 'Восполнен (Каза)',
       resetToPending: 'Сбросить в ожидание',
       location: 'Ташкент',
+      dailyProgressTitle: 'Дневной прогресс',
+      completedCountOfTotal: 'из 5 выполнено',
+      madeUpDistinctNote: 'Восполненные каза не засчитываются в исходный день',
+      saving: 'Сохранение...',
+      saved: 'Сохранено',
+      saveFailed: 'Ошибка сохранения',
+      notifications: 'Напоминания',
+      notificationsEnabled: 'Напоминания включены',
+      notificationsBlocked: 'Напоминания заблокированы в браузере',
+      enableNotifications: 'Включить напоминания',
+      locationUnavailable: 'Геолокация недоступна',
+      apiError: 'Ошибка загрузки расписания',
+      calcMethod: 'Метод расчёта',
     },
     accountability: {
       title: 'Учёт Каза и обязательств',
@@ -665,6 +703,18 @@ export const translations: Record<Language, TranslationContent> = {
       dailyOneExtra: 'Если восполнять по 1 намазу в день',
       dailyFiveExtra: 'Если восполнять по 1 дню (5 намазов) в день',
       daysToComplete: 'дней до полного восполнения',
+      historicalEditNotice: 'Вы можете корректировать прошлые записи. Будущие даты заблокированы.',
+      editRecord: 'Редактировать запись',
+      doneEditing: 'Готово',
+      futureDateError: 'Нельзя отмечать намазы на будущие даты',
+      accountabilityBreakdown: 'Детализация подотчётности и обязательств',
+      baseFine: 'Базовый взнос дисциплины (15 000 UZS за пропуск)',
+      overdueFine: 'Штраф за просрочку свыше 7 дней (+15 000 UZS)',
+      daysOverdue: 'дней с даты намаза',
+      noFines: 'Нет начисленных взносов или долгов',
+      settledAmount: 'Зафиксированная сумма взносов',
+      recordPayment: 'Зафиксировать погашение / садака',
+      recordPaymentDesc: 'Это инструмент личной дисциплины и самоконтроля, а не религиозное предписание.',
     },
     account: {
       title: 'Аккаунт и настройки',
@@ -828,6 +878,19 @@ export const translations: Record<Language, TranslationContent> = {
       markMadeUp: 'Made Up (Qaza)',
       resetToPending: 'Reset to Pending',
       location: 'Tashkent',
+      dailyProgressTitle: 'Daily Progress',
+      completedCountOfTotal: 'of 5 completed',
+      madeUpDistinctNote: 'Made-up prayers do not count towards original day completion',
+      saving: 'Saving...',
+      saved: 'Saved',
+      saveFailed: 'Save failed',
+      notifications: 'Reminders',
+      notificationsEnabled: 'Reminders enabled',
+      notificationsBlocked: 'Reminders blocked by browser',
+      enableNotifications: 'Enable reminders',
+      locationUnavailable: 'Location unavailable',
+      apiError: 'Schedule update error',
+      calcMethod: 'Calculation Method',
     },
     accountability: {
       title: 'Qaza & Accountability Tracker',
@@ -1019,6 +1082,18 @@ export const translations: Record<Language, TranslationContent> = {
       dailyOneExtra: 'With 1 extra prayer made up daily',
       dailyFiveExtra: 'With 1 full day (5 prayers) made up daily',
       daysToComplete: 'days to completely fulfill',
+      historicalEditNotice: 'You can correct past records. Future dates cannot be logged.',
+      editRecord: 'Edit Record',
+      doneEditing: 'Done',
+      futureDateError: 'Cannot log prayers for future dates',
+      accountabilityBreakdown: 'Accountability & Fine Breakdown',
+      baseFine: 'Base discipline fine (15,000 UZS per missed prayer)',
+      overdueFine: 'Overdue penalty after 7 days (+15,000 UZS)',
+      daysOverdue: 'days since prayer date',
+      noFines: 'No outstanding fines or debts',
+      settledAmount: 'Recorded settled / donated amount',
+      recordPayment: 'Record Settlement / Sadaqah',
+      recordPaymentDesc: 'This is a personal self-discipline mechanism, not a religious ruling.',
     },
     account: {
       title: 'Account & Settings',
@@ -1182,6 +1257,19 @@ export const translations: Record<Language, TranslationContent> = {
       markMadeUp: 'Qazo o‘tildi',
       resetToPending: 'Kutilmoqdaga qaytarish',
       location: 'Toshkent',
+      dailyProgressTitle: 'Bugungi natija',
+      completedCountOfTotal: 'ta o‘qildi (5 tadan)',
+      madeUpDistinctNote: 'O‘tilgan qazolar dastlabki kun natijasiga qo‘shilmaydi',
+      saving: 'Saqlanmoqda...',
+      saved: 'Saqlandi',
+      saveFailed: 'Saqlashda xatolik',
+      notifications: 'Eslatmalar',
+      notificationsEnabled: 'Eslatmalar yoqilgan',
+      notificationsBlocked: 'Brauzerda eslatmalar bloklangan',
+      enableNotifications: 'Eslatmalarni yoqish',
+      locationUnavailable: 'Joylashuv aniqlanmadi',
+      apiError: 'Vaqtlar yangilanmadi',
+      calcMethod: 'Hisoblash usuli',
     },
     accountability: {
       title: 'Qazo va shaxsiy intizom hisobi',
@@ -1373,6 +1461,18 @@ export const translations: Record<Language, TranslationContent> = {
       dailyOneExtra: 'Har kuni 1 ta qo‘shimcha namoz o‘qilsa',
       dailyFiveExtra: 'Har kuni 1 kunlik (5 ta) qazo o‘qilsa',
       daysToComplete: 'kunda to‘liq yopiladi',
+      historicalEditNotice: 'O‘tgan kunlar yozuvlarini to‘g‘rilash mumkin. Kelajak sanalar bloklangan.',
+      editRecord: 'Yozuvni tahrirlash',
+      doneEditing: 'Tayyor',
+      futureDateError: 'Kelajak sanalar uchun namoz belgilanmaydi',
+      accountabilityBreakdown: 'Shaxsiy intizom va badal hisobi',
+      baseFine: 'Asosiy intizom badali (har bir qazo uchun 15 000 UZS)',
+      overdueFine: '7 kundan oshgan qazo uchun qo‘shimcha jarima (+15 000 UZS)',
+      daysOverdue: 'kun o‘tdi',
+      noFines: 'Hisoblangan intizomiy jarimalar mavjud emas',
+      settledAmount: 'Qayd etilgan / to‘langan xayriya summasi',
+      recordPayment: 'Hisob-kitobni qayd etish / Ehson',
+      recordPaymentDesc: 'Ushbu tizim faqat shaxsiy intizom va o‘z-o‘zini hisobga tortish vositasi bo‘lib, shariat fatvosi emas.',
     },
     account: {
       title: 'Hisob va sozlamalar',

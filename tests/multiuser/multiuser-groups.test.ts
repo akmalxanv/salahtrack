@@ -4,32 +4,98 @@ import mongoose from 'mongoose';
 import { NextRequest } from 'next/server.js';
 
 import { Group } from '../../src/models/Group.ts';
+import { User } from '../../src/models/User.ts';
+import { Session } from '../../src/models/Session.ts';
 import { generateInviteCode } from '../../src/lib/groups.ts';
-import * as authGuard from '../../src/lib/auth/guard.ts';
 import { GET as listGroupsHandler, POST as createGroupHandler } from '../../src/app/api/groups/route.ts';
 import { POST as joinGroupHandler } from '../../src/app/api/groups/join/route.ts';
-import { GET as getGroupHandler, DELETE as leaveGroupHandler } from '../../src/app/api/groups/[id]/route.ts';
+import { GET as getGroupHandler } from '../../src/app/api/groups/[id]/route.ts';
+
 // In-memory mock stores
-interface MockGroupDoc {
+interface MockUserDoc {
   _id: mongoose.Types.ObjectId;
   name: string;
-  description?: string;
-  creatorId: mongoose.Types.ObjectId;
-  inviteCode: string;
-  members: Array<{
-    userId: mongoose.Types.ObjectId;
-    role: 'owner' | 'admin' | 'member';
-    joinedAt: Date;
-  }>;
+  email: string;
+  username: string;
+  role: 'user' | 'admin';
+  preferences: {
+    language: 'uz' | 'ru' | 'en';
+    calculationMethod?: string;
+    showOnLeaderboard?: boolean;
+  };
   createdAt: Date;
   updatedAt: Date;
 }
 
-let mockGroups: MockGroupDoc[] = [];
+interface MockSessionDoc {
+  _id: mongoose.Types.ObjectId;
+  sessionToken: string;
+  userId: mongoose.Types.ObjectId;
+  expiresAt: Date;
+  lastActiveAt: Date;
+  createdAt: Date;
+  updatedAt: Date;
+  save: () => Promise<MockSessionDoc>;
+}
+
+let mockUsers: MockUserDoc[] = [];
+let mockSessions: MockSessionDoc[] = [];
+
+function setupMocks() {
+  mockUsers = [];
+  mockSessions = [];
+
+  // Cache connection in global.mongooseCache so connectDB() returns instantly
+  global.mongooseCache = {
+    conn: mongoose,
+    promise: Promise.resolve(mongoose),
+  };
+
+  const userModel = User as unknown as Record<string, unknown>;
+  const sessionModel = Session as unknown as Record<string, unknown>;
+
+  userModel.findById = async (id: mongoose.Types.ObjectId | string) => {
+    const idStr = id.toString();
+    const found = mockUsers.find((u) => u._id.toString() === idStr);
+    return found ? found : null;
+  };
+
+  sessionModel.findOne = async (query: { sessionToken?: string }) => {
+    const found = mockSessions.find((s) => s.sessionToken === query.sessionToken);
+    return found ? found : null;
+  };
+}
+
+function createAuthenticatedSession(userId: mongoose.Types.ObjectId, name = 'User A', username = 'usera'): string {
+  const token = `token-${userId.toString()}`;
+  mockUsers.push({
+    _id: userId,
+    name,
+    email: `${username}@example.com`,
+    username,
+    role: 'user',
+    preferences: { language: 'uz', showOnLeaderboard: true },
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+
+  mockSessions.push({
+    _id: new mongoose.Types.ObjectId(),
+    sessionToken: token,
+    userId,
+    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+    lastActiveAt: new Date(),
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    save: async function () { return this; },
+  });
+
+  return token;
+}
 
 describe('Multi-User Accountability Circles & BOLA Protection', () => {
   beforeEach(() => {
-    mockGroups = [];
+    setupMocks();
   });
 
   describe('1. Invite Code Generator', () => {
@@ -72,9 +138,6 @@ describe('Multi-User Accountability Circles & BOLA Protection', () => {
 
   describe('3. Group API Endpoints & Authorization', () => {
     it('rejects unauthenticated requests to /api/groups with 401 Unauthorized', async () => {
-      // Mock unauthenticated
-      (authGuard as unknown as { authenticateRequest: () => Promise<null> }).authenticateRequest = async () => null;
-
       const req = new NextRequest('http://localhost:3000/api/groups');
       const res = await listGroupsHandler(req);
       assert.equal(res.status, 401);
@@ -86,16 +149,14 @@ describe('Multi-User Accountability Circles & BOLA Protection', () => {
 
     it('rejects group creation with missing or invalid name with 400 Bad Request', async () => {
       const userAId = new mongoose.Types.ObjectId();
-      (authGuard as unknown as {
-        authenticateRequest: () => Promise<{ user: { id: string; name: string; username: string }; session: object }>;
-      }).authenticateRequest = async () => ({
-        user: { id: userAId.toString(), name: 'User A', username: 'usera' },
-        session: {},
-      });
+      const token = createAuthenticatedSession(userAId, 'User A', 'usera');
 
       const req = new NextRequest('http://localhost:3000/api/groups', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `salahtrack_session=${token}`,
+        },
         body: JSON.stringify({ name: ' ' }),
       });
 
@@ -109,16 +170,14 @@ describe('Multi-User Accountability Circles & BOLA Protection', () => {
 
     it('rejects joining a group with empty invite code with 400 Bad Request', async () => {
       const userBId = new mongoose.Types.ObjectId();
-      (authGuard as unknown as {
-        authenticateRequest: () => Promise<{ user: { id: string; name: string; username: string }; session: object }>;
-      }).authenticateRequest = async () => ({
-        user: { id: userBId.toString(), name: 'User B', username: 'userb' },
-        session: {},
-      });
+      const token = createAuthenticatedSession(userBId, 'User B', 'userb');
 
       const req = new NextRequest('http://localhost:3000/api/groups/join', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `salahtrack_session=${token}`,
+        },
         body: JSON.stringify({ inviteCode: '' }),
       });
 
@@ -131,14 +190,13 @@ describe('Multi-User Accountability Circles & BOLA Protection', () => {
 
     it('rejects GET /api/groups/[id] with invalid ObjectId with 400 Bad Request', async () => {
       const userAId = new mongoose.Types.ObjectId();
-      (authGuard as unknown as {
-        authenticateRequest: () => Promise<{ user: { id: string; name: string; username: string }; session: object }>;
-      }).authenticateRequest = async () => ({
-        user: { id: userAId.toString(), name: 'User A', username: 'usera' },
-        session: {},
-      });
+      const token = createAuthenticatedSession(userAId, 'User A', 'usera');
 
-      const req = new NextRequest('http://localhost:3000/api/groups/invalid-id');
+      const req = new NextRequest('http://localhost:3000/api/groups/invalid-id', {
+        headers: {
+          Cookie: `salahtrack_session=${token}`,
+        },
+      });
       const res = await getGroupHandler(req, { params: Promise.resolve({ id: 'invalid-id' }) });
       assert.equal(res.status, 400);
       const json = await res.json();
@@ -150,13 +208,7 @@ describe('Multi-User Accountability Circles & BOLA Protection', () => {
       const userCId = new mongoose.Types.ObjectId();
       const mockGroupId = new mongoose.Types.ObjectId();
       const ownerId = new mongoose.Types.ObjectId();
-
-      (authGuard as unknown as {
-        authenticateRequest: () => Promise<{ user: { id: string; name: string; username: string }; session: object }>;
-      }).authenticateRequest = async () => ({
-        user: { id: userCId.toString(), name: 'User C', username: 'userc' },
-        session: {},
-      });
+      const token = createAuthenticatedSession(userCId, 'User C', 'userc');
 
       // Mock Group.findById to return a group where User C is NOT a member
       (Group as unknown as { findById: () => { lean: () => Promise<object> } }).findById = () => ({
@@ -169,7 +221,11 @@ describe('Multi-User Accountability Circles & BOLA Protection', () => {
         }),
       });
 
-      const req = new NextRequest(`http://localhost:3000/api/groups/${mockGroupId}`);
+      const req = new NextRequest(`http://localhost:3000/api/groups/${mockGroupId}`, {
+        headers: {
+          Cookie: `salahtrack_session=${token}`,
+        },
+      });
       const res = await getGroupHandler(req, { params: Promise.resolve({ id: mockGroupId.toString() }) });
       assert.equal(res.status, 403);
       const json = await res.json();

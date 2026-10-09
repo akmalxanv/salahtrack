@@ -22,7 +22,7 @@ export default function BottomNav() {
               key={item.href}
               href={item.href}
               aria-label={label}
-              className={`flex flex-col items-center py-1 px-1.5 sm:px-3 rounded-xl transition-colors ${
+              className={`flex flex-col items-center justify-center min-h-[44px] min-w-[48px] py-1 px-1 sm:px-3 rounded-xl transition-colors ${
                 isActive
                   ? 'text-emerald-600 dark:text-emerald-400 font-semibold'
                   : 'text-slate-500 hover:text-slate-900 dark:text-slate-400'

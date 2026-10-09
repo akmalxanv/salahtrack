@@ -154,12 +154,50 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // 4. Accountability balance: sum of all active fines
-    const totalFinesAgg = await PrayerRecord.aggregate([
-      { $match: { userId: auth.user.id } },
-      { $group: { _id: null, total: { $sum: '$finesAccrued' } } },
-    ]);
-    const accountabilityAmount = totalFinesAgg[0]?.total || 0;
+    // 4. Accountability balance & detailed breakdown
+    const fineBreakdown: Array<{
+      date: string;
+      prayerId: PrayerId;
+      baseAmount: number;
+      overdueAmount: number;
+      totalAmount: number;
+      isOverdue: boolean;
+      daysPassed: number;
+    }> = [];
+
+    let totalMissedCount = 0;
+    let totalOverdueCount = 0;
+    let totalOutstandingAmount = 0;
+    const nowTime = Date.now();
+    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+
+    for (const rec of allUserRecords) {
+      const recDate = new Date(`${rec.date}T00:00:00Z`).getTime();
+      const diffMs = nowTime - recDate;
+      const daysPassed = Math.max(0, Math.floor(diffMs / (24 * 60 * 60 * 1000)));
+      const isOverdue = diffMs > sevenDaysMs;
+
+      for (const p of PRAYER_KEYS) {
+        if (rec.prayers?.[p]?.status === 'MISSED') {
+          totalMissedCount++;
+          const base = 15000;
+          const overdue = isOverdue ? 15000 : 0;
+          const total = base + overdue;
+          if (isOverdue) totalOverdueCount++;
+          totalOutstandingAmount += total;
+
+          fineBreakdown.push({
+            date: rec.date,
+            prayerId: p,
+            baseAmount: base,
+            overdueAmount: overdue,
+            totalAmount: total,
+            isOverdue,
+            daysPassed,
+          });
+        }
+      }
+    }
 
     return NextResponse.json(
       {
@@ -195,8 +233,14 @@ export async function GET(request: NextRequest) {
             best: bestStreak,
           },
           accountability: {
-            totalAmount: accountabilityAmount,
+            totalAmount: totalOutstandingAmount,
+            totalMissed: totalMissedCount,
+            totalOverdue: totalOverdueCount,
             currency: 'UZS',
+            baseRatePerPrayer: 15000,
+            overdueRatePerPrayer: 15000,
+            gracePeriodDays: 7,
+            breakdown: fineBreakdown,
           },
         },
       },

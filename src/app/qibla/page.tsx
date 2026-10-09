@@ -271,7 +271,7 @@ export default function QiblaPage() {
 
         {/* Compass Dial Outer Ring */}
         <div
-          className={`relative w-72 h-72 sm:w-80 sm:h-80 rounded-full border-4 transition-colors duration-300 flex items-center justify-center ${
+          className={`relative w-64 h-64 sm:w-80 sm:h-80 rounded-full border-4 transition-colors duration-300 flex items-center justify-center ${
             isAligned
               ? 'border-emerald-500 shadow-lg shadow-emerald-500/25 ring-4 ring-emerald-500/20'
               : 'border-slate-200 dark:border-slate-700 shadow-inner'
