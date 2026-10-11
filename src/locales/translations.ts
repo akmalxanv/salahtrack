@@ -238,6 +238,46 @@ export interface TranslationContent {
     distanceToKaaba: string;
     kmUnit: string;
     comingSoon?: string;
+    turnLeft: string;
+    turnRight: string;
+    aligned: string;
+    levelOptimal: string;
+    slightTilt: string;
+    excessiveTilt: string;
+    calibrateTitle: string;
+    calibrateDesc: string;
+    calibrateFigure8: string;
+    calibrateClose: string;
+    calibrateButton: string;
+    selectCity: string;
+    searchCityPlaceholder: string;
+    customCoords: string;
+    latLabel: string;
+    lngLabel: string;
+    applyCoords: string;
+    uzbekistanRegions: string;
+    internationalCities: string;
+    currentLocation: string;
+    desktopSliderHint: string;
+    manualSimulation: string;
+    headingLabel: string;
+    degreesUnit: string;
+    detectedLocation: string;
+    defaultLocation: string;
+    enableSensor: string;
+    requestPermissionHint: string;
+    cardinalN: string;
+    cardinalE: string;
+    cardinalS: string;
+    cardinalW: string;
+    kaabaBeacon: string;
+    accuracyOptimal: string;
+    accuracyWarning: string;
+    sensorNotSupported: string;
+    noCitiesFound: string;
+    invalidCoordinates: string;
+    destinationKaaba: string;
+    resetSensor: string;
   };
   settings: {
     title: string;
@@ -618,6 +658,46 @@ export const translations: Record<Language, TranslationContent> = {
       distanceToKaaba: 'Расстояние до Каабы',
       kmUnit: 'км',
       comingSoon: 'Модуль направления Киблы находится в разработке.',
+      turnLeft: 'Поверните налево на %s°',
+      turnRight: 'Поверните направо на %s°',
+      aligned: 'Направление на Каабу найдено',
+      levelOptimal: 'Телефон лежит ровно (точно)',
+      slightTilt: 'Небольшой наклон',
+      excessiveTilt: 'Держите телефон ровнее',
+      calibrateTitle: 'Калибровка компаса',
+      calibrateDesc: 'Для точности датчика покрутите телефон в воздухе в форме восьмерки (∞)',
+      calibrateFigure8: 'Движение в форме восьмерки',
+      calibrateClose: 'Закрыть',
+      calibrateButton: 'Калибровка',
+      selectCity: 'Выбрать город',
+      searchCityPlaceholder: 'Поиск города...',
+      customCoords: 'Пользовательские координаты',
+      latLabel: 'Широта (Latitude)',
+      lngLabel: 'Долгота (Longitude)',
+      applyCoords: 'Применить',
+      uzbekistanRegions: 'Регионы Узбекистана',
+      internationalCities: 'Международные города',
+      currentLocation: 'Текущее местоположение (GPS)',
+      desktopSliderHint: 'Потяните для проверки компаса',
+      manualSimulation: 'Ручное вращение',
+      headingLabel: 'Текущий курс',
+      degreesUnit: '°',
+      detectedLocation: 'Определено по GPS',
+      defaultLocation: 'Город по умолчанию',
+      enableSensor: 'Включить датчик',
+      requestPermissionHint: 'Нажмите, чтобы включить доступ к компасу',
+      cardinalN: 'С',
+      cardinalE: 'В',
+      cardinalS: 'Ю',
+      cardinalW: 'З',
+      kaabaBeacon: 'Кааба',
+      accuracyOptimal: 'Оптимальный уровень',
+      accuracyWarning: 'Высокий наклон устройства',
+      sensorNotSupported: 'Датчик компаса недоступен',
+      noCitiesFound: 'Города не найдены',
+      invalidCoordinates: 'Некорректные координаты (широта: -90..90, долгота: -180..180)',
+      destinationKaaba: 'Священная Кааба',
+      resetSensor: 'Вернуться к датчику',
     },
     settings: {
       title: 'Настройки',
@@ -997,6 +1077,46 @@ export const translations: Record<Language, TranslationContent> = {
       distanceToKaaba: 'Distance to Kaaba',
       kmUnit: 'km',
       comingSoon: 'Qibla direction module under active development.',
+      turnLeft: 'Turn left %s°',
+      turnRight: 'Turn right %s°',
+      aligned: 'Facing the Kaaba',
+      levelOptimal: 'Device flat (optimal)',
+      slightTilt: 'Slight tilt',
+      excessiveTilt: 'Hold device flatter',
+      calibrateTitle: 'Compass Calibration',
+      calibrateDesc: 'Move your device in a figure-8 motion in the air to calibrate the magnetometer',
+      calibrateFigure8: 'Figure-8 motion',
+      calibrateClose: 'Close',
+      calibrateButton: 'Calibrate',
+      selectCity: 'Select City',
+      searchCityPlaceholder: 'Search city...',
+      customCoords: 'Custom coordinates',
+      latLabel: 'Latitude',
+      lngLabel: 'Longitude',
+      applyCoords: 'Apply',
+      uzbekistanRegions: 'Uzbekistan Regions',
+      internationalCities: 'International Cities',
+      currentLocation: 'Current location (GPS)',
+      desktopSliderHint: 'Drag slider to test compass on desktop',
+      manualSimulation: 'Manual simulation',
+      headingLabel: 'Device Heading',
+      degreesUnit: '°',
+      detectedLocation: 'Detected Location',
+      defaultLocation: 'Default City',
+      enableSensor: 'Enable Sensor',
+      requestPermissionHint: 'Tap to allow access to compass sensor',
+      cardinalN: 'N',
+      cardinalE: 'E',
+      cardinalS: 'S',
+      cardinalW: 'W',
+      kaabaBeacon: 'Kaaba',
+      accuracyOptimal: 'Optimal level',
+      accuracyWarning: 'High device tilt',
+      sensorNotSupported: 'Compass sensor unavailable',
+      noCitiesFound: 'No cities found',
+      invalidCoordinates: 'Invalid coordinates (latitude: -90..90, longitude: -180..180)',
+      destinationKaaba: 'Holy Kaaba',
+      resetSensor: 'Reset to sensor',
     },
     settings: {
       title: 'Settings',
@@ -1376,6 +1496,46 @@ export const translations: Record<Language, TranslationContent> = {
       distanceToKaaba: 'Ka’bagacha masofa',
       kmUnit: 'km',
       comingSoon: 'Qibla yo‘nalishi moduli ishlab chiqilmoqda.',
+      turnLeft: 'Chapga %s° buring',
+      turnRight: 'O\'ngga %s° buring',
+      aligned: 'Ka\'ba yo\'nalishiga to\'g\'rilandi',
+      levelOptimal: 'Telefon tekis (aniq)',
+      slightTilt: 'Biroz qiyshaygan',
+      excessiveTilt: 'Telefonni tekisroq tuting',
+      calibrateTitle: 'Kompasni kalibrlash',
+      calibrateDesc: 'Datchik aniqligini oshirish uchun telefonni havoda 8 shaklida harakatlantiring',
+      calibrateFigure8: '8 shaklida harakatlantiring',
+      calibrateClose: 'Yopish',
+      calibrateButton: 'Kalibrlash',
+      selectCity: 'Shaharni tanlang',
+      searchCityPlaceholder: 'Shahar nomini qidiring...',
+      customCoords: 'Maxsus koordinatalar',
+      latLabel: 'Kenglik (Latitude)',
+      lngLabel: 'Uzunlik (Longitude)',
+      applyCoords: 'Qo\'llash',
+      uzbekistanRegions: 'O\'zbekiston hududlari',
+      internationalCities: 'Xalqaro shaharlar',
+      currentLocation: 'Joriy joylashuv (GPS)',
+      desktopSliderHint: 'Kompasni sinash uchun suring',
+      manualSimulation: 'Qo\'lda boshqarish (test)',
+      headingLabel: 'Qurilma azimuti',
+      degreesUnit: '°',
+      detectedLocation: 'Aniqlangan joylashuv',
+      defaultLocation: 'Standart shahar',
+      enableSensor: 'Datchikni yoqish',
+      requestPermissionHint: 'Kompas datchigiga ruxsat berish uchun bosing',
+      cardinalN: 'Sh',
+      cardinalE: 'Shq',
+      cardinalS: 'J',
+      cardinalW: 'G\'',
+      kaabaBeacon: 'Ka\'ba',
+      accuracyOptimal: 'Optimal tekislik',
+      accuracyWarning: 'Qiyalik darajasi yuqori',
+      sensorNotSupported: 'Kompas datchigi topilmadi',
+      noCitiesFound: 'Shaharlar topilmadi',
+      invalidCoordinates: 'Noto\'g\'ri koordinatalar (kenglik: -90..90, uzunlik: -180..180)',
+      destinationKaaba: 'Muqaddas Ka\'ba',
+      resetSensor: 'Sensorga qaytish',
     },
     settings: {
       title: 'Sozlamalar',

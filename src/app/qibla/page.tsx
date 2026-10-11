@@ -3,13 +3,15 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Compass,
-  Navigation,
   MapPin,
   RotateCw,
-  CheckCircle2,
   Info,
+  Navigation,
   Smartphone,
-  LocateFixed,
+  Sliders,
+  CheckCircle2,
+  Globe,
+  Radio,
 } from 'lucide-react';
 import { useLanguage } from '@/context/LanguageContext';
 import {
@@ -17,10 +19,29 @@ import {
   calculateDistanceToKaaba,
   getCompassDirection,
   DEFAULT_OBSERVER,
+  KAABA_COORDS,
+  validateCoordinates,
 } from '@/lib/qibla';
 
+/**
+ * Sanitizes location names read from storage or user input:
+ * strips control characters, HTML tags, trims, and bounds length to 100 chars.
+ */
+function sanitizeLocationName(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const sanitized = raw.replace(/[\x00-\x1F\x7F<>]/g, '').trim().slice(0, 100);
+  return sanitized.length > 0 ? sanitized : null;
+}
+import { useDeviceOrientation } from '@/hooks/useDeviceOrientation';
+import { AstrolabeDial } from '@/components/qibla/AstrolabeDial';
+import { SpiritLevel } from '@/components/qibla/SpiritLevel';
+import { TurnGuidanceCard } from '@/components/qibla/TurnGuidanceCard';
+import { CityPickerModal } from '@/components/qibla/CityPickerModal';
+import { CalibrationModal } from '@/components/qibla/CalibrationModal';
+import type { CityPreset } from '@/types/qibla';
+
 export default function QiblaPage() {
-  const { t } = useLanguage();
+  const { t, lang } = useLanguage();
 
   // Observer coordinates
   const [coords, setCoords] = useState<{ lat: number; lng: number; isDefault: boolean }>({
@@ -33,12 +54,11 @@ export default function QiblaPage() {
   const [geoError, setGeoError] = useState<string | null>(null);
   const [locating, setLocating] = useState(false);
 
-  // Compass sensor state
-  const [deviceHeading, setDeviceHeading] = useState<number | null>(null);
-  const [sensorAvailable, setSensorAvailable] = useState<boolean | null>(null);
-  const [permissionRequested, setPermissionRequested] = useState(false);
+  // Modal display states
+  const [isCityPickerOpen, setIsCityPickerOpen] = useState(false);
+  const [isCalibrationOpen, setIsCalibrationOpen] = useState(false);
 
-  // Calculate mathematical bearing and distance
+  // Geodesic Calculations
   const qiblaBearing = useMemo(
     () => calculateQiblaBearing(coords.lat, coords.lng),
     [coords.lat, coords.lng]
@@ -54,16 +74,67 @@ export default function QiblaPage() {
     [qiblaBearing]
   );
 
-  // Check if phone is aligned with Kaaba (within +/- 4 degrees)
-  const isAligned = useMemo(() => {
-    if (deviceHeading === null) return false;
-    const diff = Math.abs(deviceHeading - qiblaBearing);
-    return diff <= 4 || diff >= 356;
-  }, [deviceHeading, qiblaBearing]);
+  // Decoupled 60fps Device Orientation Hook
+  const {
+    heading,
+    turnGuidance,
+    tiltMetrics,
+    isAligned,
+    isSensorAvailable,
+    permissionState,
+    isSecureContext,
+    isSimulating,
+    simulatedHeading,
+    setSimulatedHeading,
+    requestPermission,
+    dialRef,
+    needleRef,
+    unwrappedDialAngle,
+    unwrappedNeedleAngle,
+  } = useDeviceOrientation({
+    qiblaBearing,
+  });
 
-  // Request browser geolocation
+  // Restore cached location from localStorage on mount with strict validation
+  useEffect(() => {
+    try {
+      const cached = localStorage.getItem('salahtrack_location');
+      const cachedName = localStorage.getItem('salahtrack_city_name');
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        const validation = validateCoordinates(parsed?.lat, parsed?.lng);
+        if (validation.valid && validation.lat !== undefined && validation.lng !== undefined) {
+          const validLat = validation.lat;
+          const validLng = validation.lng;
+          const cleanName =
+            sanitizeLocationName(cachedName) ||
+            `${validLat.toFixed(4)}°, ${validLng.toFixed(4)}°`;
+
+          queueMicrotask(() => {
+            setCoords({
+              lat: validLat,
+              lng: validLng,
+              isDefault: false,
+            });
+            setLocationName(cleanName);
+          });
+        }
+      }
+    } catch {
+      // Ignore storage errors
+    }
+  }, []);
+
+  // Request browser GPS geolocation with secure context guard
   const detectLocation = useCallback(() => {
-    if (typeof window === 'undefined' || !navigator.geolocation) {
+    if (typeof window === 'undefined') return;
+
+    if ('isSecureContext' in window && !window.isSecureContext) {
+      setGeoError(t.qibla.sensorNotSupported);
+      return;
+    }
+
+    if (!navigator.geolocation) {
       setGeoError(t.qibla.permissionDenied);
       return;
     }
@@ -73,23 +144,31 @@ export default function QiblaPage() {
 
     navigator.geolocation.getCurrentPosition(
       (pos) => {
+        const validation = validateCoordinates(pos.coords.latitude, pos.coords.longitude);
+        if (!validation.valid || validation.lat === undefined || validation.lng === undefined) {
+          setGeoError(t.qibla.invalidCoordinates);
+          setLocating(false);
+          return;
+        }
+
         const newCoords = {
-          lat: Math.round(pos.coords.latitude * 10000) / 10000,
-          lng: Math.round(pos.coords.longitude * 10000) / 10000,
+          lat: Math.round(validation.lat * 10000) / 10000,
+          lng: Math.round(validation.lng * 10000) / 10000,
           isDefault: false,
         };
+        const label = `${newCoords.lat.toFixed(4)}°, ${newCoords.lng.toFixed(4)}°`;
         setCoords(newCoords);
-        setLocationName(`${newCoords.lat}°, ${newCoords.lng}°`);
+        setLocationName(label);
         setLocating(false);
 
-        // Cache in localStorage for subsequent visits and prayer times
         try {
           localStorage.setItem('salahtrack_location', JSON.stringify({
             lat: newCoords.lat,
             lng: newCoords.lng,
           }));
+          localStorage.setItem('salahtrack_city_name', label);
         } catch {
-          // ignore
+          // Ignore storage errors
         }
       },
       (err) => {
@@ -99,106 +178,67 @@ export default function QiblaPage() {
       },
       { timeout: 8000, enableHighAccuracy: true }
     );
-  }, [t.qibla.permissionDenied]);
+  }, [t.qibla.permissionDenied, t.qibla.sensorNotSupported, t.qibla.invalidCoordinates]);
 
-  // Check cached location on mount
-  useEffect(() => {
+  // Handle selection of a preset city with coordinate validation & name sanitization
+  const handleSelectCity = useCallback((city: CityPreset) => {
+    if (!city || !city.coordinates) return;
+    const validation = validateCoordinates(city.coordinates.lat, city.coordinates.lng);
+    if (!validation.valid || validation.lat === undefined || validation.lng === undefined) return;
+
+    const newCoords = {
+      lat: validation.lat,
+      lng: validation.lng,
+      isDefault: false,
+    };
+    const rawLabel = (city.nativeNames && city.nativeNames[lang]) || city.name;
+    const cityLabel = sanitizeLocationName(rawLabel) || city.name;
+    setCoords(newCoords);
+    setLocationName(cityLabel);
+    setGeoError(null);
+
     try {
-      const cached = localStorage.getItem('salahtrack_location');
-      if (cached) {
-        const parsed = JSON.parse(cached);
-        if (typeof parsed.lat === 'number' && typeof parsed.lng === 'number') {
-          queueMicrotask(() => {
-            setCoords({
-              lat: parsed.lat,
-              lng: parsed.lng,
-              isDefault: false,
-            });
-            setLocationName(`${parsed.lat}°, ${parsed.lng}°`);
-          });
-        }
-      }
+      localStorage.setItem('salahtrack_location', JSON.stringify({
+        lat: newCoords.lat,
+        lng: newCoords.lng,
+      }));
+      localStorage.setItem('salahtrack_city_name', cityLabel);
     } catch {
-      // ignore
+      // Ignore storage errors
     }
-  }, []);
+  }, [lang]);
 
-  // Request iOS permission if needed
-  const requestCompassPermission = async () => {
-    setPermissionRequested(true);
-    if (
-      typeof window !== 'undefined' &&
-      typeof (DeviceOrientationEvent as unknown as { requestPermission?: () => Promise<string> }).requestPermission === 'function'
-    ) {
-      try {
-        const response = await (DeviceOrientationEvent as unknown as { requestPermission: () => Promise<string> }).requestPermission();
-        if (response === 'granted') {
-          setSensorAvailable(true);
-        } else {
-          setSensorAvailable(false);
-        }
-      } catch (err) {
-        console.warn('DeviceOrientation permission error:', err);
-        setSensorAvailable(false);
-      }
-    }
-  };
-
-  // Device orientation event listener
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-
-    const handleOrientation = (event: DeviceOrientationEvent) => {
-      // iOS Safari provides webkitCompassHeading directly
-      const webkitHeading = (event as unknown as { webkitCompassHeading?: number }).webkitCompassHeading;
-
-      if (typeof webkitHeading === 'number' && !isNaN(webkitHeading)) {
-        setDeviceHeading(Math.round(webkitHeading));
-        setSensorAvailable(true);
-        return;
-      }
-
-      // Android provides alpha
-      if (event.alpha !== null && !isNaN(event.alpha)) {
-        // Absolute orientation
-        const heading = (360 - event.alpha) % 360;
-        setDeviceHeading(Math.round(heading));
-        setSensorAvailable(true);
-        return;
-      }
-    };
-
-    // Listen to standard or absolute orientation
-    window.addEventListener('deviceorientation', handleOrientation, true);
-    if ('ondeviceorientationabsolute' in window) {
-      window.addEventListener('deviceorientationabsolute' as unknown as keyof WindowEventMap, handleOrientation as EventListener, true);
+  // Handle custom coordinates input with strict sanitization
+  const handleSelectCustomCoords = useCallback((lat: number, lng: number, label: string) => {
+    const validation = validateCoordinates(lat, lng);
+    if (!validation.valid || validation.lat === undefined || validation.lng === undefined) {
+      setGeoError(validation.error || t.qibla.invalidCoordinates);
+      return;
     }
 
-    // Set fallback timeout if no sensor event fires within 1.5 seconds
-    const timeoutId = setTimeout(() => {
-      setSensorAvailable((prev) => (prev === true ? true : false));
-    }, 1500);
+    const cleanLabel =
+      sanitizeLocationName(label) ||
+      `${validation.lat.toFixed(4)}°, ${validation.lng.toFixed(4)}°`;
 
-    return () => {
-      window.removeEventListener('deviceorientation', handleOrientation, true);
-      if ('ondeviceorientationabsolute' in window) {
-        window.removeEventListener('deviceorientationabsolute' as unknown as keyof WindowEventMap, handleOrientation as EventListener, true);
-      }
-      clearTimeout(timeoutId);
-    };
-  }, []);
+    const newCoords = { lat: validation.lat, lng: validation.lng, isDefault: false };
+    setCoords(newCoords);
+    setLocationName(cleanLabel);
+    setGeoError(null);
 
-  // Relative needle rotation:
-  // If sensor is active: rotate dial with heading, needle points to Kaaba
-  // If sensor is NOT active: fixed north dial, needle points to qiblaBearing
-  const dialRotation = deviceHeading !== null ? -deviceHeading : 0;
-  const needleAngle = deviceHeading !== null
-    ? (qiblaBearing - deviceHeading + 360) % 360
-    : qiblaBearing;
+    try {
+      localStorage.setItem('salahtrack_location', JSON.stringify({
+        lat: validation.lat,
+        lng: validation.lng,
+      }));
+      localStorage.setItem('salahtrack_city_name', cleanLabel);
+    } catch {
+      // Ignore storage errors
+    }
+  }, [t.qibla.invalidCoordinates]);
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto pb-12">
-      {/* Header */}
+      {/* Header with Title and Control Triggers */}
       <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-2 border-b border-slate-200/80 dark:border-slate-800/80">
         <div>
           <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2.5">
@@ -210,23 +250,32 @@ export default function QiblaPage() {
           </p>
         </div>
 
-        {/* Location Detection Button */}
-        <button
-          type="button"
-          onClick={detectLocation}
-          disabled={locating}
-          className="inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-950/50 dark:text-emerald-300 dark:hover:bg-emerald-900/50 border border-emerald-200 dark:border-emerald-800 transition-colors shadow-xs cursor-pointer disabled:opacity-60 self-start sm:self-auto"
-        >
-          {locating ? (
-            <RotateCw className="w-3.5 h-3.5 animate-spin" />
-          ) : (
-            <LocateFixed className="w-3.5 h-3.5" />
-          )}
-          <span>{locating ? '...' : locationName}</span>
-        </button>
+        {/* Action Triggers: City Selector & Calibration */}
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* City Selector Button */}
+          <button
+            type="button"
+            onClick={() => setIsCityPickerOpen(true)}
+            className="inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-950/50 dark:text-emerald-300 dark:hover:bg-emerald-900/50 border border-emerald-200 dark:border-emerald-800 transition-colors shadow-xs cursor-pointer"
+          >
+            <MapPin className="w-3.5 h-3.5 shrink-0" />
+            <span className="truncate max-w-[140px] sm:max-w-[180px]">{locationName}</span>
+          </button>
+
+          {/* Calibration Button */}
+          <button
+            type="button"
+            onClick={() => setIsCalibrationOpen(true)}
+            className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 transition-colors shadow-xs cursor-pointer"
+            aria-label={t.qibla.calibrateButton}
+          >
+            <RotateCw className="w-3.5 h-3.5" />
+            <span className="hidden xs:inline">{t.qibla.calibrateButton}</span>
+          </button>
+        </div>
       </header>
 
-      {/* Geolocation Notice / Fallback Banner */}
+      {/* Geolocation Notice / Fallback Banner if applicable */}
       {geoError && (
         <div className="flex items-start gap-3 p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/50 text-amber-800 dark:text-amber-300 text-xs">
           <Info className="w-4 h-4 shrink-0 mt-0.5" />
@@ -234,14 +283,49 @@ export default function QiblaPage() {
         </div>
       )}
 
-      {/* Main Interactive Compass Dial Card */}
-      <div className="flex flex-col items-center justify-center p-8 sm:p-12 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 shadow-sm relative overflow-hidden">
-        {/* Subtle decorative background pattern */}
-        <div className="absolute inset-0 bg-gradient-to-b from-emerald-500/5 via-transparent to-transparent pointer-events-none" />
+      {/* Insecure Context (HTTP) Security Advisory Banner */}
+      {!isSecureContext && (
+        <div className="flex items-start gap-3 p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/50 text-amber-800 dark:text-amber-300 text-xs shadow-xs">
+          <Info className="w-4 h-4 shrink-0 mt-0.5" />
+          <div>
+            <p className="font-semibold">{t.qibla.sensorNotSupported}</p>
+            <p className="mt-0.5 text-[11px] text-amber-700 dark:text-amber-400">
+              Browser security policies restrict hardware compass orientation and GPS access to secure contexts (HTTPS). Manual rotation slider and city presets are enabled.
+            </p>
+          </div>
+        </div>
+      )}
 
-        {/* Sensor Status Chip */}
+      {/* iOS Safari Sensor Permission Prompt Banner */}
+      {permissionState === 'prompt' && !isSensorAvailable && (
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-2xl bg-emerald-50/90 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-900 dark:text-emerald-100 shadow-xs">
+          <div className="flex items-center gap-3">
+            <Radio className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0 animate-pulse" />
+            <span className="text-xs font-medium">{t.qibla.requestPermissionHint}</span>
+          </div>
+          <button
+            type="button"
+            onClick={requestPermission}
+            className="px-4 py-2 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs transition-transform active:scale-95 cursor-pointer shrink-0"
+          >
+            {t.qibla.enableSensor}
+          </button>
+        </div>
+      )}
+
+      {/* Main Astrolabe Instrument Stage */}
+      <div className="flex flex-col items-center justify-center p-6 sm:p-10 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 shadow-sm relative overflow-hidden">
+        {/* Subtle decorative background gradient */}
+        <div className="absolute inset-0 bg-gradient-to-b from-amber-500/5 via-transparent to-transparent pointer-events-none" />
+
+        {/* Sensor Status Indicator Chip */}
         <div className="mb-6 flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 shadow-2xs">
-          {sensorAvailable ? (
+          {isSimulating ? (
+            <>
+              <Sliders className="w-3.5 h-3.5 text-amber-500" />
+              <span>{t.qibla.manualSimulation}</span>
+            </>
+          ) : isSensorAvailable ? (
             <>
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
               <span>{t.qibla.compassSensor}</span>
@@ -254,120 +338,28 @@ export default function QiblaPage() {
           )}
         </div>
 
-        {/* iOS Sensor Permission Button if not yet granted on iOS */}
-        {typeof window !== 'undefined' &&
-          'DeviceOrientationEvent' in window &&
-          typeof (DeviceOrientationEvent as unknown as { requestPermission?: () => Promise<string> }).requestPermission === 'function' &&
-          !sensorAvailable &&
-          !permissionRequested && (
-            <button
-              type="button"
-              onClick={requestCompassPermission}
-              className="mb-6 px-4 py-2 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-transform active:scale-95"
-            >
-              Enable Device Sensor
-            </button>
-          )}
-
-        {/* Compass Dial Outer Ring */}
-        <div
-          className={`relative w-64 h-64 sm:w-80 sm:h-80 rounded-full border-4 transition-colors duration-300 flex items-center justify-center ${
-            isAligned
-              ? 'border-emerald-500 shadow-lg shadow-emerald-500/25 ring-4 ring-emerald-500/20'
-              : 'border-slate-200 dark:border-slate-700 shadow-inner'
-          }`}
-          style={{
-            background: 'radial-gradient(circle, rgba(16,185,129,0.04) 0%, rgba(15,23,42,0.02) 100%)',
-          }}
-        >
-          {/* Rotating Compass Dial Plate */}
-          <div
-            className="absolute inset-2 rounded-full transition-transform duration-200 ease-out"
-            style={{ transform: `rotate(${dialRotation}deg)` }}
-          >
-            {/* Cardinal Markers: N, E, S, W */}
-            <span className="absolute top-2 left-1/2 -translate-x-1/2 text-xs font-bold text-rose-500 tracking-wider">
-              N
-            </span>
-            <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs font-semibold text-slate-400">
-              E
-            </span>
-            <span className="absolute bottom-2 left-1/2 -translate-x-1/2 text-xs font-semibold text-slate-400">
-              S
-            </span>
-            <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs font-semibold text-slate-400">
-              W
-            </span>
-
-            {/* Dial Ticks (Every 30 degrees) */}
-            {Array.from({ length: 12 }).map((_, i) => (
-              <div
-                key={i}
-                className="absolute w-full top-1/2 left-0 -translate-y-1/2 flex justify-between px-1 pointer-events-none"
-                style={{ transform: `rotate(${i * 30}deg)` }}
-              >
-                <div
-                  className={`h-0.5 rounded-full ${
-                    i % 3 === 0
-                      ? 'w-3 bg-slate-400 dark:bg-slate-500'
-                      : 'w-1.5 bg-slate-300 dark:bg-slate-700'
-                  }`}
-                />
-                <div
-                  className={`h-0.5 rounded-full ${
-                    i % 3 === 0
-                      ? 'w-3 bg-slate-400 dark:bg-slate-500'
-                      : 'w-1.5 bg-slate-300 dark:bg-slate-700'
-                  }`}
-                />
-              </div>
-            ))}
-          </div>
-
-          {/* Qibla Needle Pointer */}
-          <div
-            className="absolute inset-0 flex items-center justify-center transition-transform duration-300 ease-out pointer-events-none"
-            style={{ transform: `rotate(${needleAngle}deg)` }}
-          >
-            {/* Upper Needle (Pointing to Kaaba) */}
-            <div className="relative w-2 h-28 -top-14 flex flex-col items-center">
-              {/* Kaaba Icon / Target marker */}
-              <div
-                className={`w-7 h-7 rounded-full flex items-center justify-center text-white shadow-md transition-all ${
-                  isAligned
-                    ? 'bg-emerald-500 ring-4 ring-emerald-400/40 scale-110'
-                    : 'bg-emerald-600'
-                }`}
-              >
-                <Navigation className="w-3.5 h-3.5 fill-current" />
-              </div>
-              <div
-                className={`w-1.5 flex-1 rounded-full transition-colors ${
-                  isAligned ? 'bg-emerald-500' : 'bg-emerald-600'
-                }`}
-              />
-            </div>
-
-            {/* Lower Needle (Opposite Direction) */}
-            <div className="relative w-1 h-20 top-10 bg-slate-300 dark:bg-slate-700 rounded-full" />
-          </div>
-
-          {/* Center Hub */}
-          <div className="relative w-6 h-6 rounded-full bg-slate-900 dark:bg-slate-100 border-2 border-white dark:border-slate-800 shadow-md flex items-center justify-center z-10">
-            <div className="w-2 h-2 rounded-full bg-emerald-500" />
-          </div>
+        {/* 60fps Astrolabe Compass Dial Component */}
+        <div className="my-2">
+          <AstrolabeDial
+            qiblaBearing={qiblaBearing}
+            dialRef={dialRef}
+            needleRef={needleRef}
+            dialAngle={unwrappedDialAngle}
+            needleAngle={unwrappedNeedleAngle}
+            isAligned={isAligned}
+          />
         </div>
 
-        {/* Alignment Indicator Banner */}
+        {/* Alignment Success Banner */}
         {isAligned && (
-          <div className="mt-6 flex items-center gap-2 px-4 py-2 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 font-semibold text-xs border border-emerald-300 dark:border-emerald-800 animate-bounce">
+          <div className="mt-8 flex items-center gap-2 px-4 py-2 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 font-semibold text-xs border border-emerald-300 dark:border-emerald-800 animate-bounce">
             <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-            <span>{t.qibla.headingToKaaba} — Kaaba Aligned!</span>
+            <span>{t.qibla.aligned}</span>
           </div>
         )}
 
-        {/* Prominent Bearing and Angle Readout */}
-        <div className="mt-8 text-center">
+        {/* Azimuth & Cardinal Angle Readout */}
+        <div className="mt-6 text-center">
           <div className="text-4xl sm:text-5xl font-extrabold text-slate-900 dark:text-slate-100 tracking-tight">
             {qiblaBearing}°
             <span className="text-xl sm:text-2xl font-semibold text-emerald-600 dark:text-emerald-400 ml-2">
@@ -380,10 +372,100 @@ export default function QiblaPage() {
         </div>
       </div>
 
-      {/* Metrics & Geodesic Calculation Cards */}
+      {/* Dynamic Turn Guidance Cue */}
+      <TurnGuidanceCard guidance={turnGuidance} />
+
+      {/* Spirit Level Bubble Vial (Tilt Metrics) */}
+      <SpiritLevel
+        tiltMagnitude={tiltMetrics.tiltMagnitude}
+        tiltStatus={tiltMetrics.tiltStatus}
+        bubbleX={tiltMetrics.bubbleX}
+        bubbleY={tiltMetrics.bubbleY}
+      />
+
+      {/* Desktop / Manual Simulation Slider */}
+      <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 shadow-2xs space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Sliders className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+            <h3 className="text-xs font-semibold text-slate-900 dark:text-slate-100">
+              {t.qibla.manualSimulation}
+            </h3>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-mono font-bold text-slate-700 dark:text-slate-300">
+              {Math.round(simulatedHeading ?? heading)}°
+            </span>
+            {isSimulating && (
+              <button
+                type="button"
+                onClick={() => setSimulatedHeading(null)}
+                className="px-2 py-0.5 rounded-md text-[11px] font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 transition-colors cursor-pointer"
+              >
+                {t.qibla.resetSensor}
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Range Slider for Manual Heading Rotation */}
+        <input
+          type="range"
+          min="0"
+          max="359"
+          value={Math.round(simulatedHeading ?? heading)}
+          onChange={(e) => setSimulatedHeading(Number(e.target.value))}
+          className="w-full accent-emerald-600 cursor-pointer"
+          aria-label={t.qibla.manualSimulation}
+        />
+
+        <div className="flex items-center justify-between text-[11px] text-slate-400">
+          <span>{t.qibla.desktopSliderHint}</span>
+          {/* Quick preset buttons: North, East, South, West, Kaaba */}
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setSimulatedHeading(0)}
+              className="px-1.5 py-0.5 rounded-xs bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-600 dark:text-slate-300 font-mono text-[10px]"
+            >
+              0°
+            </button>
+            <button
+              type="button"
+              onClick={() => setSimulatedHeading(90)}
+              className="px-1.5 py-0.5 rounded-xs bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-600 dark:text-slate-300 font-mono text-[10px]"
+            >
+              90°
+            </button>
+            <button
+              type="button"
+              onClick={() => setSimulatedHeading(180)}
+              className="px-1.5 py-0.5 rounded-xs bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-600 dark:text-slate-300 font-mono text-[10px]"
+            >
+              180°
+            </button>
+            <button
+              type="button"
+              onClick={() => setSimulatedHeading(270)}
+              className="px-1.5 py-0.5 rounded-xs bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-600 dark:text-slate-300 font-mono text-[10px]"
+            >
+              270°
+            </button>
+            <button
+              type="button"
+              onClick={() => setSimulatedHeading(qiblaBearing)}
+              className="px-2 py-0.5 rounded-xs bg-emerald-100 dark:bg-emerald-950/60 hover:bg-emerald-200 text-emerald-700 dark:text-emerald-300 font-semibold text-[10px]"
+            >
+              {t.qibla.kaabaBeacon} ({qiblaBearing}°)
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Geodesic Calculation & Coordinates Metric Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        {/* Distance Card */}
-        <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 shadow-xs flex items-center gap-4">
+        {/* Distance to Kaaba Card */}
+        <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 shadow-2xs flex items-center gap-4">
           <div className="w-12 h-12 rounded-xl bg-teal-50 dark:bg-teal-950/50 text-teal-600 dark:text-teal-400 flex items-center justify-center shrink-0">
             <Navigation className="w-6 h-6" />
           </div>
@@ -401,20 +483,80 @@ export default function QiblaPage() {
         </div>
 
         {/* Observer Coordinates Card */}
-        <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 shadow-xs flex items-center gap-4">
-          <div className="w-12 h-12 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
-            <MapPin className="w-6 h-6" />
+        <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 shadow-2xs flex items-center justify-between gap-4">
+          <div className="flex items-center gap-4 min-w-0">
+            <div className="w-12 h-12 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
+              <MapPin className="w-6 h-6" />
+            </div>
+            <div className="min-w-0">
+              <span className="text-xs text-slate-500 dark:text-slate-400 font-medium">
+                {coords.isDefault ? t.qibla.defaultLocation : t.qibla.detectedLocation}
+              </span>
+              <p className="text-sm font-bold text-slate-900 dark:text-slate-100 truncate">
+                {coords.lat.toFixed(4)}° N, {coords.lng.toFixed(4)}° E
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsCityPickerOpen(true)}
+            className="p-2 rounded-xl text-slate-400 hover:text-emerald-600 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors shrink-0"
+            aria-label={t.qibla.selectCity}
+          >
+            <MapPin className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Qibla Direction Azimuth Card */}
+        <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 shadow-2xs flex items-center gap-4">
+          <div className="w-12 h-12 rounded-xl bg-amber-50 dark:bg-amber-950/50 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0">
+            <Compass className="w-6 h-6" />
           </div>
           <div>
             <span className="text-xs text-slate-500 dark:text-slate-400 font-medium">
-              {coords.isDefault ? DEFAULT_OBSERVER.cityName : 'Detected Location'}
+              {t.qibla.directionBearing}
+            </span>
+            <p className="text-lg font-bold text-slate-900 dark:text-slate-100">
+              {qiblaBearing}°{' '}
+              <span className="text-xs font-semibold text-slate-500">
+                ({cardinalDir})
+              </span>
+            </p>
+          </div>
+        </div>
+
+        {/* Destination Target: Holy Kaaba Card */}
+        <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 shadow-2xs flex items-center gap-4">
+          <div className="w-12 h-12 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 flex items-center justify-center shrink-0">
+            <Globe className="w-6 h-6" />
+          </div>
+          <div>
+            <span className="text-xs text-slate-500 dark:text-slate-400 font-medium">
+              {t.qibla.destinationKaaba}
             </span>
             <p className="text-sm font-bold text-slate-900 dark:text-slate-100 truncate">
-              {coords.lat}° N, {coords.lng}° E
+              {KAABA_COORDS.lat}° N, {KAABA_COORDS.lng}° E
             </p>
           </div>
         </div>
       </div>
+
+      {/* City Picker Modal */}
+      <CityPickerModal
+        isOpen={isCityPickerOpen}
+        onClose={() => setIsCityPickerOpen(false)}
+        onSelectCity={handleSelectCity}
+        onSelectCustomCoords={handleSelectCustomCoords}
+        onDetectGps={detectLocation}
+        isLocatingGps={locating}
+        currentCoords={coords}
+      />
+
+      {/* Calibration Guidance Modal */}
+      <CalibrationModal
+        isOpen={isCalibrationOpen}
+        onClose={() => setIsCalibrationOpen(false)}
+      />
     </div>
   );
 }

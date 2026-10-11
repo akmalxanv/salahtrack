@@ -24,6 +24,7 @@ import { useAuth } from '@/context/AuthContext';
 import LanguageSelector from '@/components/LanguageSelector';
 import { PrayerItem, PrayerStatus, PrayerId, StreakData, DEFAULT_STREAK } from '@/types/prayer';
 import { calculateStreakTransition, evaluateRolloverStreak } from '@/lib/streak';
+import { validateCoordinates } from '@/lib/qibla';
 
 export const DEFAULT_PRAYERS: PrayerItem[] = [
   { id: 'fajr', name: 'Fajr', time: '04:47', endTime: '06:19', status: 'PENDING' },
@@ -346,9 +347,10 @@ export default function HomeDashboard({
           const cached = localStorage.getItem('salahtrack_location');
           if (cached) {
             const parsed = JSON.parse(cached);
-            if (typeof parsed.lat === 'number' && typeof parsed.lng === 'number') {
-              lat = parsed.lat;
-              lng = parsed.lng;
+            const validation = validateCoordinates(parsed?.lat, parsed?.lng);
+            if (validation.valid && validation.lat !== undefined && validation.lng !== undefined) {
+              lat = validation.lat;
+              lng = validation.lng;
             }
           }
         } catch {
