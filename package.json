@@ -10,6 +10,7 @@
     "lint:fix": "eslint --fix",
     "typecheck": "tsc --noEmit --incremental false",
     "test": "node --experimental-strip-types --test 'tests/**/*.test.ts'",
+    "db:test": "node --env-file=.env.local scripts/test-db.mjs",
     "prepare": "husky"
   },
   "dependencies": {
