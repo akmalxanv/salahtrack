@@ -1,0 +1,20 @@
+#!/usr/bin/env sh
+
+echo "🔍 [pre-commit] Checking for forbidden secrets and private keys..."
+
+# 1. Guard against committing secret files (.env, .env.local, private keys, certificates) at any directory depth
+FORBIDDEN_FILES=$(git diff --cached --name-only | grep -E '(^|/)(\.env(\..+)?|.*\.pem|.*\.key|id_rsa.*|.*\.pfx)$' || true)
+if [ -n "$FORBIDDEN_FILES" ]; then
+  echo "❌ [pre-commit] Error: Attempting to commit forbidden secret files:"
+  echo "$FORBIDDEN_FILES"
+  echo "💡 Unstage them using: git restore --staged <file>"
+  exit 1
+fi
+
+echo "🧹 [pre-commit] Running lint-staged (ESLint autofix + zero warnings)..."
+npx lint-staged
+
+echo "🛡️  [pre-commit] Running whole-project TypeScript type-check..."
+npm run typecheck
+
+echo "✅ [pre-commit] All pre-commit quality checks passed successfully!"
