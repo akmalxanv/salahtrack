@@ -67,3 +67,15 @@ export interface AccountabilitySummary {
   items: AccountabilityBreakdownItem[];
 }
 
+export interface StreakData {
+  current: number;
+  best: number;
+  lastActiveDate: string;
+}
+
+export const DEFAULT_STREAK: StreakData = {
+  current: 0,
+  best: 0,
+  lastActiveDate: '',
+};
+

@@ -59,11 +59,13 @@ export function useLocalStorage<T>(key: string, initialValue: T) {
   useEffect(() => {
     if (typeof window === 'undefined') return;
     try {
+      const isSecure = window.location.protocol === 'https:';
+      const secureAttr = isSecure ? '; Secure' : '';
       const item = window.localStorage.getItem(key);
       if (item !== null) {
-        document.cookie = `${key}=${encodeURIComponent(item)}; path=/; max-age=31536000; SameSite=Lax`;
+        document.cookie = `${key}=${encodeURIComponent(item)}; path=/; max-age=31536000; SameSite=Lax${secureAttr}`;
       } else if (initialValue !== undefined && initialValue !== null) {
-        document.cookie = `${key}=${encodeURIComponent(JSON.stringify(initialValue))}; path=/; max-age=31536000; SameSite=Lax`;
+        document.cookie = `${key}=${encodeURIComponent(JSON.stringify(initialValue))}; path=/; max-age=31536000; SameSite=Lax${secureAttr}`;
       }
     } catch {
       // ignore
@@ -74,11 +76,20 @@ export function useLocalStorage<T>(key: string, initialValue: T) {
     (valueOrFn: T | ((prev: T) => T)) => {
       try {
         const currentItem = window.localStorage.getItem(key);
-        const currentParsed: T = currentItem !== null ? JSON.parse(currentItem) : initialValue;
+        let currentParsed: T = initialValue;
+        if (currentItem !== null) {
+          try {
+            currentParsed = JSON.parse(currentItem);
+          } catch {
+            currentParsed = initialValue;
+          }
+        }
         const nextValue = valueOrFn instanceof Function ? valueOrFn(currentParsed) : valueOrFn;
         const serialized = JSON.stringify(nextValue);
         window.localStorage.setItem(key, serialized);
-        document.cookie = `${key}=${encodeURIComponent(serialized)}; path=/; max-age=31536000; SameSite=Lax`;
+        const isSecure = typeof window !== 'undefined' && window.location.protocol === 'https:';
+        const secureAttr = isSecure ? '; Secure' : '';
+        document.cookie = `${key}=${encodeURIComponent(serialized)}; path=/; max-age=31536000; SameSite=Lax${secureAttr}`;
         window.dispatchEvent(new Event('local-storage-update'));
       } catch (error) {
         console.error(`Error saving to localStorage key "${key}":`, error);

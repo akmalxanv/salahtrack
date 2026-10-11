@@ -62,6 +62,7 @@ interface StatsData {
   streaks: {
     current: number;
     best: number;
+    lastActiveDate?: string;
   };
   accountability: {
     totalAmount: number;
@@ -530,7 +531,7 @@ function ProgressContent() {
                   <span className="text-2xl font-bold text-slate-900 dark:text-slate-100">
                     {stats?.streaks.current || 0}
                   </span>
-                  <span className="text-xs text-slate-400 font-medium">kun</span>
+                  <span className="text-xs text-slate-400 font-medium">{t.dashboard.streakDays}</span>
                 </div>
                 <span className="text-[10px] text-slate-400 mt-2 block">
                   {t.progress.summary.bestStreak}: {stats?.streaks.best || 0}

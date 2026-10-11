@@ -22,7 +22,8 @@ import { useLocalStorage, getTodayString, useIsMounted } from '@/hooks/useLocalS
 import { useLanguage } from '@/context/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
 import LanguageSelector from '@/components/LanguageSelector';
-import { PrayerItem, PrayerStatus, PrayerId } from '@/types/prayer';
+import { PrayerItem, PrayerStatus, PrayerId, StreakData, DEFAULT_STREAK } from '@/types/prayer';
+import { calculateStreakTransition, evaluateRolloverStreak } from '@/lib/streak';
 
 export const DEFAULT_PRAYERS: PrayerItem[] = [
   { id: 'fajr', name: 'Fajr', time: '04:47', endTime: '06:19', status: 'PENDING' },
@@ -157,9 +158,14 @@ function calculateNextPrayerCountdown(prayers: PrayerItem[], now: Date): NextPra
 interface HomeDashboardProps {
   initialQazaCount: number | null;
   initialPrayers: PrayerItem[] | null;
+  initialStreak?: StreakData | null;
 }
 
-export default function HomeDashboard({ initialQazaCount, initialPrayers }: HomeDashboardProps) {
+export default function HomeDashboard({
+  initialQazaCount,
+  initialPrayers,
+  initialStreak,
+}: HomeDashboardProps) {
   const isMounted = useIsMounted();
   const { t, lang } = useLanguage();
   const { user } = useAuth();
@@ -177,6 +183,11 @@ export default function HomeDashboard({ initialQazaCount, initialPrayers }: Home
   const [qazaCount, setQazaCount] = useLocalStorage<number>(
     'salahtrack_qaza_count',
     initialQazaCount ?? 0
+  );
+
+  const [streak, setStreak] = useLocalStorage<StreakData>(
+    'salahtrack_streak',
+    initialStreak || DEFAULT_STREAK
   );
 
   const [activeMenuPrayerId, setActiveMenuPrayerId] = useState<string | null>(null);
@@ -259,7 +270,17 @@ export default function HomeDashboard({ initialQazaCount, initialPrayers }: Home
         }
       })
       .catch((err) => console.warn('Could not sync initial prayers:', err));
-  }, [user, setPrayers]);
+
+    // Fetch /api/stats?today=${todayStr} to ensure streak is reconciled with MongoDB Atlas
+    fetch(`/api/stats?today=${todayStr}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => {
+        if (json?.success && json?.data?.streaks) {
+          setStreak(json.data.streaks);
+        }
+      })
+      .catch((err) => console.warn('Could not sync initial streak stats:', err));
+  }, [user, setPrayers, setStreak]);
 
   // Day rollover logic
   useEffect(() => {
@@ -280,10 +301,13 @@ export default function HomeDashboard({ initialQazaCount, initialPrayers }: Home
         status: 'PENDING' as PrayerStatus,
       }));
 
+      // Update streak via evaluateRolloverStreak so active streaks are preserved while today is pending, or reset if >1 day was skipped
+      setStreak((prevStreak) => evaluateRolloverStreak(prevStreak, today));
+
       setPrayers(resetPrayers);
       setLastSavedDate(today);
     }
-  }, [isMounted, lastSavedDate, prayers, setPrayers, setLastSavedDate, setQazaCount]);
+  }, [isMounted, lastSavedDate, prayers, setPrayers, setLastSavedDate, setQazaCount, setStreak]);
 
   // Gregorian date display
   const gregorianDate = useMemo(() => {
@@ -420,22 +444,27 @@ export default function HomeDashboard({ initialQazaCount, initialPrayers }: Home
   const handleSetStatus = useCallback(
     async (id: PrayerId, status: PrayerStatus) => {
       const normalizedStatus: PrayerStatus = status === 'PRAYED' ? 'PRAYED_ON_TIME' : status;
+      const todayStr = getTodayString();
 
       // 1. Instant 0ms optimistic UI update
-      setPrayers((prev) =>
-        prev.map((item) =>
-          item.id === id ? { ...item, status: normalizedStatus, updatedAt: new Date().toISOString() } : item
-        )
+      const updatedPrayers = prayers.map((item) =>
+        item.id === id ? { ...item, status: normalizedStatus, updatedAt: new Date().toISOString() } : item
       );
+      setPrayers(updatedPrayers);
       setActiveMenuPrayerId(null);
 
-      // 2. Set saving status feedback
+      // 2. Optimistic streak transition calculation
+      const hasCompletedPrayer = updatedPrayers.some(
+        (p) => p.status === 'PRAYED' || p.status === 'PRAYED_ON_TIME' || p.status === 'PRAYED_LATE'
+      );
+      setStreak((prevStreak) => calculateStreakTransition(prevStreak, todayStr, hasCompletedPrayer));
+
+      // 3. Set saving status feedback
       setSavingStatus((prev) => ({ ...prev, [id]: 'saving' }));
 
-      // 3. Background sync to MongoDB Atlas if authenticated
+      // 4. Background sync to MongoDB Atlas if authenticated
       if (user) {
         try {
-          const todayStr = getTodayString();
           const res = await fetch('/api/prayers', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -451,6 +480,19 @@ export default function HomeDashboard({ initialQazaCount, initialPrayers }: Home
             setTimeout(() => {
               setSavingStatus((prev) => ({ ...prev, [id]: 'idle' }));
             }, 2000);
+
+            // Background sync stats to reconcile streak with MongoDB Atlas
+            try {
+              const statsRes = await fetch(`/api/stats?today=${todayStr}`);
+              if (statsRes.ok) {
+                const statsJson = await statsRes.json();
+                if (statsJson?.success && statsJson?.data?.streaks) {
+                  setStreak(statsJson.data.streaks);
+                }
+              }
+            } catch (statsErr) {
+              console.warn('Background stats sync error:', statsErr);
+            }
           } else {
             setSavingStatus((prev) => ({ ...prev, [id]: 'error' }));
             setTimeout(() => {
@@ -472,7 +514,7 @@ export default function HomeDashboard({ initialQazaCount, initialPrayers }: Home
         }, 1500);
       }
     },
-    [user, setPrayers]
+    [user, prayers, setPrayers, setStreak]
   );
 
   // Quick toggle (done / pending)
@@ -572,9 +614,24 @@ export default function HomeDashboard({ initialQazaCount, initialPrayers }: Home
 
         <div className="flex items-center gap-3 self-end sm:self-auto">
           {/* Consistency Streak */}
-          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 font-semibold text-xs border border-amber-200/60 dark:border-amber-900/60 shadow-xs">
-            <Flame className="w-4 h-4 fill-amber-500 stroke-amber-500" />
-            <span>7 {t.dashboard.streakDays}</span>
+          <div
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full font-semibold text-xs border shadow-xs transition-colors ${
+              streak.current > 0
+                ? 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 border-amber-200/60 dark:border-amber-900/60'
+                : 'bg-slate-100 dark:bg-slate-800/60 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700'
+            }`}
+            title={`${streak.current} ${t.dashboard.streakDays}`}
+          >
+            <Flame
+              className={`w-4 h-4 ${
+                streak.current > 0
+                  ? 'fill-amber-500 stroke-amber-500 text-amber-500'
+                  : 'text-slate-400 dark:text-slate-500'
+              }`}
+            />
+            <span suppressHydrationWarning>
+              {streak.current} {t.dashboard.streakDays}
+            </span>
           </div>
 
           <div className="md:hidden">

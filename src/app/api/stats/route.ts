@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server.js';
 import { connectDB } from '../../../lib/mongodb.ts';
 import { PrayerRecord } from '../../../models/Prayer.ts';
 import { authenticateRequest } from '../../../lib/auth/index.ts';
+import { calculateStreakFromHistory } from '../../../lib/streak.ts';
 import type { PrayerId } from '../../../types/prayer.ts';
 
 const PRAYER_KEYS: PrayerId[] = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
@@ -22,12 +23,30 @@ export async function GET(request: NextRequest) {
 
     await connectDB();
 
-    const now = new Date();
-    const todayStr = now.toISOString().split('T')[0];
+    const { searchParams } = new URL(request.url);
+    const clientToday = searchParams.get('today');
+    const todayRegex = /^\d{4}-\d{2}-\d{2}$/;
+    const serverToday = new Date().toISOString().split('T')[0];
+    const maxAllowedDate = new Date(Date.now() + 14 * 60 * 60 * 1000).toISOString().split('T')[0];
+    let todayStr = serverToday;
+
+    if (clientToday && todayRegex.test(clientToday)) {
+      const [y, m, d] = clientToday.split('-').map(Number);
+      const parsedUtc = new Date(Date.UTC(y, m - 1, d));
+      // Verify date is a real calendar date and doesn't exceed global timezone threshold
+      if (
+        parsedUtc.toISOString().split('T')[0] === clientToday &&
+        clientToday <= maxAllowedDate
+      ) {
+        todayStr = clientToday;
+      }
+    }
 
     // Compute date boundaries
-    const sevenDaysAgo = new Date(now.getTime() - 6 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-    const thirtyDaysAgo = new Date(now.getTime() - 29 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const [y, m, d] = todayStr.split('-').map(Number);
+    const todayUtc = Date.UTC(y, m - 1, d);
+    const sevenDaysAgo = new Date(todayUtc - 6 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const thirtyDaysAgo = new Date(todayUtc - 29 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
     // Query records for the last 30 days
     const recentRecords = await PrayerRecord.find({
@@ -103,56 +122,7 @@ export async function GET(request: NextRequest) {
       recordMap.set(rec.date, comp);
     }
 
-    // Calculate current streak: consecutive days with at least 1 prayer (or all 5)
-    let currentStreak = 0;
-    const checkDate = new Date(now);
-
-    // If today has completed prayers, start from today, otherwise check from yesterday
-    const todayCount = recordMap.get(todayStr) || 0;
-    if (todayCount === 0) {
-      checkDate.setDate(checkDate.getDate() - 1);
-    }
-
-    while (true) {
-      const dStr = checkDate.toISOString().split('T')[0];
-      const count = recordMap.get(dStr) || 0;
-      if (count > 0) {
-        currentStreak++;
-        checkDate.setDate(checkDate.getDate() - 1);
-      } else {
-        break;
-      }
-    }
-
-    // Calculate best streak across entire history
-    let bestStreak = currentStreak;
-    let tempStreak = 0;
-    const sortedDates = Array.from(recordMap.keys()).sort();
-
-    for (let i = 0; i < sortedDates.length; i++) {
-      const dateKey = sortedDates[i];
-      const count = recordMap.get(dateKey) || 0;
-
-      if (count > 0) {
-        if (i === 0) {
-          tempStreak = 1;
-        } else {
-          const prev = new Date(sortedDates[i - 1]);
-          const curr = new Date(dateKey);
-          const diffDays = Math.round((curr.getTime() - prev.getTime()) / (1000 * 60 * 60 * 24));
-          if (diffDays === 1) {
-            tempStreak++;
-          } else {
-            tempStreak = 1;
-          }
-        }
-        if (tempStreak > bestStreak) {
-          bestStreak = tempStreak;
-        }
-      } else {
-        tempStreak = 0;
-      }
-    }
+    const streakData = calculateStreakFromHistory(recordMap, todayStr);
 
     // 4. Accountability balance & detailed breakdown
     const fineBreakdown: Array<{
@@ -229,8 +199,9 @@ export async function GET(request: NextRequest) {
             madeUp: totalMadeUp30d,
           },
           streaks: {
-            current: currentStreak,
-            best: bestStreak,
+            current: streakData.current,
+            best: streakData.best,
+            lastActiveDate: streakData.lastActiveDate,
           },
           accountability: {
             totalAmount: totalOutstandingAmount,
