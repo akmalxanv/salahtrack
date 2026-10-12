@@ -81,7 +81,7 @@ export default function ForgotPasswordPage() {
           <div className="space-y-2">
             <p className="font-medium">{successNotice}</p>
             <p className="text-xs text-emerald-700 dark:text-emerald-400">
-              Check your terminal in local dev mode to view the generated reset URL.
+              {t.auth.forgotPassword.devTerminalNotice}
             </p>
           </div>
         </div>

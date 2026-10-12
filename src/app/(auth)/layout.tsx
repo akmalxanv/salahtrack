@@ -47,7 +47,7 @@ export default function AuthLayout({
 
       {/* Calm Footer */}
       <footer className="w-full max-w-5xl mx-auto px-4 py-6 text-center text-xs text-slate-400 dark:text-slate-600">
-        <p>© {new Date().getFullYear()} Namozlarim.uz. Built for mindful worshippers and personal accountability.</p>
+        <p>© {new Date().getFullYear()} Namozlarim.uz. {t.auth.footerTagline}</p>
       </footer>
     </div>
   );

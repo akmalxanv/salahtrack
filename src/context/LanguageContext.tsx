@@ -44,14 +44,14 @@ function subscribe(callback: () => void) {
 }
 
 const LanguageContext = createContext<LanguageContextType>({
-  lang: 'en',
+  lang: 'uz',
   setLang: () => {},
-  t: translations.en,
+  t: translations.uz,
 });
 
 export const LanguageProvider = ({
   children,
-  initialLang = 'en',
+  initialLang = 'uz',
 }: {
   children: React.ReactNode;
   initialLang?: Language;
@@ -89,7 +89,7 @@ export const LanguageProvider = ({
     }
   }, []);
 
-  const t: TranslationKey = translations[lang] || translations[initialLang] || translations.en;
+  const t: TranslationKey = translations[lang] || translations[initialLang] || translations.uz;
 
   return (
     <LanguageContext.Provider value={{ lang, setLang, t }}>

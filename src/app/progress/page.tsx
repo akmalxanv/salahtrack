@@ -548,10 +548,10 @@ function ProgressContent() {
                     {stats?.counts30d.onTime || 0}
                   </span>
                   <span className="text-xs text-amber-500 font-medium">
-                    +{stats?.counts30d.late || 0} late
+                    +{stats?.counts30d.late || 0} {t.stats.lateCount.toLowerCase()}
                   </span>
                 </div>
-                <span className="text-[10px] text-slate-400 mt-2 block">30 kunlik ko‘rsatkich</span>
+                <span className="text-[10px] text-slate-400 mt-2 block">{t.progress.indicator30d}</span>
               </div>
 
               {/* Accountability Outstanding Balance */}
@@ -570,7 +570,7 @@ function ProgressContent() {
                   onClick={() => handleTabChange('qaza')}
                   className="text-[11px] font-semibold text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 mt-2 flex items-center gap-1 cursor-pointer"
                 >
-                  <span>Batafsil hisob</span>
+                  <span>{t.progress.detailedBreakdown}</span>
                   <ChevronRight className="w-3 h-3" />
                 </button>
               </div>
@@ -606,7 +606,7 @@ function ProgressContent() {
                 <div className="flex items-center gap-2.5">
                   <HistoryIcon className="w-5 h-5 text-emerald-600" />
                   <h2 className="text-base font-bold text-slate-900 dark:text-slate-100">
-                    So‘nggi kunlar jurnali
+                    {t.progress.recentHistoryTitle}
                   </h2>
                 </div>
                 <button
@@ -614,7 +614,7 @@ function ProgressContent() {
                   onClick={() => handleTabChange('history')}
                   className="text-xs font-semibold text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 flex items-center gap-1 cursor-pointer"
                 >
-                  <span>Hammasini ko‘rish</span>
+                  <span>{t.progress.viewAll}</span>
                   <ChevronRight className="w-3.5 h-3.5" />
                 </button>
               </div>
@@ -754,7 +754,7 @@ function ProgressContent() {
                     <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-100 dark:border-slate-800">
                       <div>
                         <span className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                          {record.date} {record.date === todayStr && '(Bugun)'}
+                          {record.date} {record.date === todayStr && `(${t.progress.todayBadge})`}
                         </span>
                         <span className="text-xs text-slate-400 ml-3">
                           {completedInRecord} / 5 {t.history.prayersCompleted}
@@ -966,9 +966,9 @@ function ProgressContent() {
                 </span>
               </p>
               <div className="flex items-center gap-4 text-xs text-slate-300 mt-2">
-                <span>{accountabilityMissed} ta qazo</span>
+                <span>{t.progress.missedPrayersCount.replace('{count}', String(accountabilityMissed))}</span>
                 <span>•</span>
-                <span className="text-amber-400">{accountabilityOverdue} ta 7 kundan oshgan</span>
+                <span className="text-amber-400">{t.progress.overduePrayersCount.replace('{count}', String(accountabilityOverdue))}</span>
               </div>
             </div>
 
@@ -977,7 +977,7 @@ function ProgressContent() {
                 {t.accountability.disclaimer}
               </span>
               <p className="text-[11px] leading-relaxed text-slate-300">
-                {t.progress.recordPaymentDesc} Har bir qazo uchun 15 000 UZS, 7 kundan kechiksa qo‘shimcha 15 000 UZS intizom badali hisoblanadi.
+                {t.progress.recordPaymentDesc} {t.progress.finesPolicyNotice}
               </p>
             </div>
           </div>
@@ -989,7 +989,7 @@ function ProgressContent() {
                 {t.progress.settledAmount}
               </span>
               <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-0.5">
-                {(settledDonations || 0).toLocaleString()} <span className="text-xs text-slate-400 font-normal">UZS</span>
+                {(settledDonations || 0).toLocaleString()} <span className="text-xs text-slate-400 font-normal">{t.common.currency}</span>
               </p>
             </div>
 
@@ -1000,7 +1000,7 @@ function ProgressContent() {
                     type="number"
                     min="1000"
                     step="5000"
-                    placeholder="Masalan: 15000"
+                    placeholder={t.progress.settlementPlaceholder}
                     value={settlementInput}
                     onChange={(e) => setSettlementInput(e.target.value)}
                     className="w-36 px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs text-slate-900 dark:text-slate-100"
@@ -1061,13 +1061,13 @@ function ProgressContent() {
                         </span>
                         {item.isOverdue && (
                           <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-rose-100 dark:bg-rose-950/80 text-rose-700 dark:text-rose-300">
-                            7 kundan oshgan ({item.daysPassed} kun)
+                            {t.progress.overdueBadge.replace('{days}', String(item.daysPassed))}
                           </span>
                         )}
                       </div>
                       <p className="text-[11px] text-slate-400 mt-1">
-                        {item.baseAmount.toLocaleString()} UZS (asosiy)
-                        {item.overdueAmount > 0 && ` + ${item.overdueAmount.toLocaleString()} UZS (kechikish)`}
+                        {item.baseAmount.toLocaleString()} UZS {t.progress.baseFineLabel}
+                        {item.overdueAmount > 0 && ` + ${item.overdueAmount.toLocaleString()} UZS ${t.progress.overdueFineLabel}`}
                       </p>
                     </div>
 

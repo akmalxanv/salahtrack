@@ -696,7 +696,7 @@ export default function HomeDashboard({
                   <span>{nextPrayer.prayerTime}</span>
                   {nextPrayer.isTomorrow && (
                     <span className="text-[10px] px-1.5 py-0.2 rounded-md bg-white/10 text-slate-300 font-medium">
-                      Ertangi
+                      {t.dashboard.tomorrowPrayer}
                     </span>
                   )}
                 </div>
@@ -720,7 +720,7 @@ export default function HomeDashboard({
           </div>
 
           <div className="mt-4 pt-3 border-t border-slate-700/60 flex items-center justify-between text-xs text-slate-400">
-            <span className="text-[11px]">{calcMethodName} usuli bo‘yicha</span>
+            <span className="text-[11px]">{t.dashboard.calcMethodBased.replace('{method}', calcMethodName)}</span>
             {notificationPermission === 'granted' ? (
               <span className="inline-flex items-center gap-1 text-[11px] text-emerald-400 font-medium">
                 <Bell className="w-3.5 h-3.5 text-emerald-400" />
@@ -977,7 +977,7 @@ export default function HomeDashboard({
                       type="button"
                       onClick={() => handleQuickToggle(prayer.id)}
                       className="cursor-pointer focus:outline-hidden"
-                      aria-label={`Mark ${prayerLabel}`}
+                      aria-label={`${t.dashboard.markPrayed}: ${prayerLabel}`}
                     >
                       <CheckCircle2 className={`w-6 h-6 transition-transform active:scale-90 ${config.iconClass}`} />
                     </button>

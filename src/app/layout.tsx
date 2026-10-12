@@ -50,7 +50,7 @@ export default async function RootLayout({
   const initialLang: Language =
     langCookie && (langCookie === 'en' || langCookie === 'ru' || langCookie === 'uz')
       ? langCookie
-      : 'en';
+      : 'uz';
 
   const session = await getCurrentSession();
   const initialUser = session?.user || null;

@@ -76,6 +76,7 @@ export interface TranslationContent {
       backToLogin: string;
       infoNotice: string;
       successNotice: string;
+      devTerminalNotice: string;
     };
     resetPassword: {
       title: string;
@@ -89,6 +90,7 @@ export interface TranslationContent {
       successNotice: string;
       backToLogin: string;
       invalidToken: string;
+      requestNewLinkHint: string;
     };
     validation: {
       passwordRequirements: string;
@@ -101,6 +103,12 @@ export interface TranslationContent {
       button: string;
       loggingOut: string;
     };
+    showPassword: string;
+    hidePassword: string;
+    passwordCriteriaLength: string;
+    passwordCriteriaLetters: string;
+    passwordCriteriaSpecial: string;
+    footerTagline: string;
   };
   prayers: Record<'fajr' | 'dhuhr' | 'asr' | 'maghrib' | 'isha', string>;
   statuses: Record<'PENDING' | 'PRAYED_ON_TIME' | 'PRAYED_LATE' | 'MISSED' | 'MADE_UP' | 'PRAYED', string>;
@@ -132,6 +140,8 @@ export interface TranslationContent {
     locationUnavailable: string;
     apiError: string;
     calcMethod: string;
+    tomorrowPrayer: string;
+    calcMethodBased: string;
   };
   accountability: {
     title: string;
@@ -323,6 +333,8 @@ export interface TranslationContent {
     member: string;
     tabGlobal: string;
     tabGroups: string;
+    viewCircle: string;
+    descriptionPlaceholder: string;
   };
   progress: {
     title: string;
@@ -375,6 +387,18 @@ export interface TranslationContent {
     settledAmount: string;
     recordPayment: string;
     recordPaymentDesc: string;
+    indicator30d: string;
+    detailedBreakdown: string;
+    recentHistoryTitle: string;
+    viewAll: string;
+    todayBadge: string;
+    missedPrayersCount: string;
+    overduePrayersCount: string;
+    finesPolicyNotice: string;
+    settlementPlaceholder: string;
+    overdueBadge: string;
+    baseFineLabel: string;
+    overdueFineLabel: string;
   };
   account: {
     title: string;
@@ -483,6 +507,7 @@ export const translations: Record<Language, TranslationContent> = {
         backToLogin: 'Вернуться ко входу',
         infoNotice: 'На ваш email будет отправлена одноразовая ссылка, действующая 15 минут.',
         successNotice: 'Если аккаунт с этим email существует, инструкция по сбросу отправлена.',
+        devTerminalNotice: 'Проверьте терминал в режиме разработки, чтобы увидеть сгенерированную ссылку сброса.',
       },
       resetPassword: {
         title: 'Установка нового пароля',
@@ -496,6 +521,7 @@ export const translations: Record<Language, TranslationContent> = {
         successNotice: 'Пароль успешно обновлен. Теперь вы можете войти с новыми данными.',
         backToLogin: 'Перейти ко входу',
         invalidToken: 'Недействительная или устаревшая ссылка для сброса пароля.',
+        requestNewLinkHint: 'Пожалуйста, запросите новую ссылку для сброса пароля.',
       },
       validation: {
         passwordRequirements: 'Пароль должен содержать не менее 8 символов, включая заглавную и строчную буквы, цифру и спецсимвол.',
@@ -508,6 +534,12 @@ export const translations: Record<Language, TranslationContent> = {
         button: 'Выйти из аккаунта',
         loggingOut: 'Выход...',
       },
+      showPassword: 'Показать пароль',
+      hidePassword: 'Скрыть пароль',
+      passwordCriteriaLength: '8–128 символов',
+      passwordCriteriaLetters: 'Заглавные и строчные буквы',
+      passwordCriteriaSpecial: 'Цифра и специальный символ',
+      footerTagline: 'Создано для осознанного совершения намаза и личной дисциплины.',
     },
     prayers: {
       fajr: 'Фаджр',
@@ -552,6 +584,8 @@ export const translations: Record<Language, TranslationContent> = {
       locationUnavailable: 'Геолокация недоступна',
       apiError: 'Ошибка загрузки расписания',
       calcMethod: 'Метод расчёта',
+      tomorrowPrayer: 'Завтра',
+      calcMethodBased: 'По методу {method}',
     },
     accountability: {
       title: 'Учёт Каза и обязательств',
@@ -743,6 +777,8 @@ export const translations: Record<Language, TranslationContent> = {
       member: 'Участник',
       tabGlobal: 'Общий рейтинг',
       tabGroups: 'Мои группы',
+      viewCircle: 'Открыть',
+      descriptionPlaceholder: 'Например: Семейный круг совместной ответственности',
     },
     progress: {
       title: 'Личный прогресс',
@@ -795,6 +831,18 @@ export const translations: Record<Language, TranslationContent> = {
       settledAmount: 'Зафиксированная сумма взносов',
       recordPayment: 'Зафиксировать погашение / садака',
       recordPaymentDesc: 'Это инструмент личной дисциплины и самоконтроля, а не религиозное предписание.',
+      indicator30d: 'Показатель за 30 дней',
+      detailedBreakdown: 'Подробный расчет',
+      recentHistoryTitle: 'Журнал последних дней',
+      viewAll: 'Смотреть все',
+      todayBadge: 'Сегодня',
+      missedPrayersCount: '{count} пропущенных (каза)',
+      overduePrayersCount: '{count} просрочено (>7 дн.)',
+      finesPolicyNotice: 'Базовая ставка: 15 000 UZS за пропущенный намаз, при просрочке свыше 7 дней начисляется дополнительный штраф 15 000 UZS.',
+      settlementPlaceholder: 'Например: 15000',
+      overdueBadge: 'Свыше 7 дней ({days} дн.)',
+      baseFineLabel: '(базовый)',
+      overdueFineLabel: '(просрочка)',
     },
     account: {
       title: 'Аккаунт и настройки',
@@ -902,6 +950,7 @@ export const translations: Record<Language, TranslationContent> = {
         backToLogin: 'Back to Sign In',
         infoNotice: 'A single-use reset link valid for 15 minutes will be dispatched.',
         successNotice: 'If an account with that email exists, reset instructions have been sent.',
+        devTerminalNotice: 'Check your terminal in local dev mode to view the generated reset URL.',
       },
       resetPassword: {
         title: 'Set New Password',
@@ -915,6 +964,7 @@ export const translations: Record<Language, TranslationContent> = {
         successNotice: 'Password updated successfully. Please sign in with your new password.',
         backToLogin: 'Go to Sign In',
         invalidToken: 'Invalid or expired password reset link.',
+        requestNewLinkHint: 'Please request a new reset link to proceed.',
       },
       validation: {
         passwordRequirements: 'Password must be at least 8 characters with lowercase, uppercase, number, and special character.',
@@ -927,6 +977,12 @@ export const translations: Record<Language, TranslationContent> = {
         button: 'Sign Out',
         loggingOut: 'Signing out...',
       },
+      showPassword: 'Show password',
+      hidePassword: 'Hide password',
+      passwordCriteriaLength: '8-128 characters',
+      passwordCriteriaLetters: 'Uppercase & lowercase letters',
+      passwordCriteriaSpecial: 'Number & special character',
+      footerTagline: 'Built for mindful worshippers and personal accountability.',
     },
     prayers: {
       fajr: 'Fajr',
@@ -971,6 +1027,8 @@ export const translations: Record<Language, TranslationContent> = {
       locationUnavailable: 'Location unavailable',
       apiError: 'Schedule update error',
       calcMethod: 'Calculation Method',
+      tomorrowPrayer: 'Tomorrow',
+      calcMethodBased: 'Based on {method} method',
     },
     accountability: {
       title: 'Qaza & Accountability Tracker',
@@ -1162,6 +1220,8 @@ export const translations: Record<Language, TranslationContent> = {
       member: 'Member',
       tabGlobal: 'Global Leaderboard',
       tabGroups: 'My Circles',
+      viewCircle: 'View',
+      descriptionPlaceholder: 'e.g. Monthly prayer accountability circle',
     },
     progress: {
       title: 'Personal Progress',
@@ -1214,6 +1274,18 @@ export const translations: Record<Language, TranslationContent> = {
       settledAmount: 'Recorded settled / donated amount',
       recordPayment: 'Record Settlement / Sadaqah',
       recordPaymentDesc: 'This is a personal self-discipline mechanism, not a religious ruling.',
+      indicator30d: '30-day indicator',
+      detailedBreakdown: 'Detailed breakdown',
+      recentHistoryTitle: 'Recent days log',
+      viewAll: 'View all',
+      todayBadge: 'Today',
+      missedPrayersCount: '{count} missed (qaza)',
+      overduePrayersCount: '{count} overdue (>7 days)',
+      finesPolicyNotice: 'Base fine: 15,000 UZS per missed prayer, with an additional 15,000 UZS overdue penalty after 7 days.',
+      settlementPlaceholder: 'e.g. 15000',
+      overdueBadge: 'Overdue (>7 days, {days}d)',
+      baseFineLabel: '(base)',
+      overdueFineLabel: '(overdue)',
     },
     account: {
       title: 'Account & Settings',
@@ -1321,6 +1393,7 @@ export const translations: Record<Language, TranslationContent> = {
         backToLogin: 'Kirishga qaytish',
         infoNotice: 'Emailingizga 15 daqiqa davomida amal qiluvchi bir martalik havola yuboriladi.',
         successNotice: 'Agar ushbu email bilan hisob mavjud bo‘lsa, tiklash ko‘rsatmalari yuborildi.',
+        devTerminalNotice: 'Yaratilgan tiklash havolasini ko‘rish uchun lokal rejimdagi terminalni tekshiring.',
       },
       resetPassword: {
         title: 'Yangi parol o‘rnatish',
@@ -1334,6 +1407,7 @@ export const translations: Record<Language, TranslationContent> = {
         successNotice: 'Parol muvaffaqiyatli yangilandi. Yangi parol bilan tizimga kiring.',
         backToLogin: 'Kirish sahifasiga o‘tish',
         invalidToken: 'Yaroqsiz yoki muddati o‘tgan tiklash havolasi.',
+        requestNewLinkHint: 'Davom etish uchun parolni tiklash havolasini qayta so‘rang.',
       },
       validation: {
         passwordRequirements: 'Parol kamida 8 ta belgidan iborat bo‘lishi, katta va kichik harf, raqam va maxsus belgini o‘z ichiga olishi kerak.',
@@ -1346,6 +1420,12 @@ export const translations: Record<Language, TranslationContent> = {
         button: 'Tizimdan chiqish',
         loggingOut: 'Chiqilmoqda...',
       },
+      showPassword: 'Parolni ko‘rsatish',
+      hidePassword: 'Parolni yashirish',
+      passwordCriteriaLength: '8-128 ta belgi',
+      passwordCriteriaLetters: 'Katta va kichik harflar',
+      passwordCriteriaSpecial: 'Raqam va maxsus belgi',
+      footerTagline: 'Namozlarni o‘z vaqtida ado etish va shaxsiy intizom uchun yaratilgan.',
     },
     prayers: {
       fajr: 'Bomdod',
@@ -1390,6 +1470,8 @@ export const translations: Record<Language, TranslationContent> = {
       locationUnavailable: 'Joylashuv aniqlanmadi',
       apiError: 'Vaqtlar yangilanmadi',
       calcMethod: 'Hisoblash usuli',
+      tomorrowPrayer: 'Ertangi',
+      calcMethodBased: '{method} usuli bo‘yicha',
     },
     accountability: {
       title: 'Qazo va shaxsiy intizom hisobi',
@@ -1581,6 +1663,8 @@ export const translations: Record<Language, TranslationContent> = {
       member: 'A’zo',
       tabGlobal: 'Umumiy reyting',
       tabGroups: 'Mening guruhlarim',
+      viewCircle: 'Ko‘rish',
+      descriptionPlaceholder: 'masalan, Oylik oilaviy namoz mas’uliyati guruhi',
     },
     progress: {
       title: 'Shaxsiy rivojlanish',
@@ -1633,6 +1717,18 @@ export const translations: Record<Language, TranslationContent> = {
       settledAmount: 'Qayd etilgan / to‘langan xayriya summasi',
       recordPayment: 'Hisob-kitobni qayd etish / Ehson',
       recordPaymentDesc: 'Ushbu tizim faqat shaxsiy intizom va o‘z-o‘zini hisobga tortish vositasi bo‘lib, shariat fatvosi emas.',
+      indicator30d: '30 kunlik ko‘rsatkich',
+      detailedBreakdown: 'Batafsil hisob',
+      recentHistoryTitle: 'So‘nggi kunlar jurnali',
+      viewAll: 'Hammasini ko‘rish',
+      todayBadge: 'Bugun',
+      missedPrayersCount: '{count} ta qazo',
+      overduePrayersCount: '{count} ta 7 kundan oshgan',
+      finesPolicyNotice: 'Har bir qazo uchun 15 000 UZS, 7 kundan kechiksa qo‘shimcha 15 000 UZS intizom badali hisoblanadi.',
+      settlementPlaceholder: 'Masalan: 15000',
+      overdueBadge: '7 kundan oshgan ({days} kun)',
+      baseFineLabel: '(asosiy)',
+      overdueFineLabel: '(kechikish)',
     },
     account: {
       title: 'Hisob va sozlamalar',

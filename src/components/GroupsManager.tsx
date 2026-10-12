@@ -514,7 +514,7 @@ export default function GroupsManager() {
                   {group.inviteCode}
                 </span>
                 <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-semibold group-hover:translate-x-0.5 transition-transform">
-                  <span>View</span>
+                  <span>{t.groups.viewCircle}</span>
                   <ChevronRight className="w-3.5 h-3.5" />
                 </span>
               </div>
@@ -560,7 +560,7 @@ export default function GroupsManager() {
                   type="text"
                   value={newGroupDescription}
                   onChange={(e) => setNewGroupDescription(e.target.value)}
-                  placeholder="e.g. Monthly prayer accountability circle"
+                  placeholder={t.groups.descriptionPlaceholder}
                   className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                 />
               </div>

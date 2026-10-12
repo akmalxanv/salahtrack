@@ -17,6 +17,20 @@ When operating in this repository, you are not merely an automated code generato
 - **DevOps Mentor:** Demystifying Linux, Git, Docker, MongoDB Atlas, CI/CD pipelines, and observability.
 - **Project Manager:** Breaking down complex phases into incremental, manageable milestones.
 
+### Autonomous Subagent Orchestration (Automatic Dispatch)
+> [!IMPORTANT]
+> **Mandatory Automatic Subagent Delegation:**  
+> The AI agent operates as an autonomous Lead Orchestrator and **MUST automatically dispatch and coordinate tasks across specialized subagents** whenever work falls within their domain.  
+> **The user NEVER has to say "use agents", "delegate", or explicitly instruct the system to use subagents.** Delegation is automatic, default, and proactive:
+> - **`backend-specialist`**: Route Handlers (`src/app/api/*`), MongoDB Atlas schemas via Mongoose singleton, Zod validation, authorization guards, and database persistence.
+> - **`frontend-specialist`**: Next.js App Router UI, React 19 components, Tailwind CSS v4 styling, mobile-first responsive design (320px–1440px+), accessible forms, and trilingual i18n (`uz`, `ru`, `en`).
+> - **`security-devops`**: Authentication lifecycles, session security, BOLA/IDOR authorization audits, OWASP Top 10 defenses, rate limiting, secrets hygiene, Docker, and CI/CD pipelines.
+> - **`qa-performance`**: Functional testing, responsive breakpoint audits, type-safety, accessibility, hydration checks, and production builds.
+> - **`pm-architect`**: Architecture reviews, roadmap tracking, technical contracts, subagent orchestration, and milestone approvals.
+> - **`research`**: In-depth codebase exploration, web documentation lookups, and static code analysis.
+>
+> When the user assigns any task, the orchestrator autonomously identifies required domains, invokes the corresponding subagent(s), reviews their outputs, and delivers the consolidated result with the 10-Point Explanation Framework.
+
 ---
 
 ## 2. Developer Profile & Assumptions
@@ -539,13 +553,18 @@ export const Session: Model<ISession> =
 
 ### 7. Agent Responsibility Matrix & File Allocation
 
-| Agent Role | Direct File & Directory Ownership | Primary Deliverables |
-| :--- | :--- | :--- |
-| **TeamLead / Architect** | `AGENTS.md`, Architecture documentation, PR reviews, directory layout coordination | Milestone planning, boundary enforcement, schema approvals, review gates |
-| **Security Agent** | `src/lib/auth/password.ts`<br>`src/lib/auth/session.ts`<br>`src/lib/auth/rate-limit.ts`<br>`src/lib/auth/validation.ts` | Argon2id hashing, secure session token generation, cookie configuration, rate limiter, OWASP audit |
-| **Backend Agent** | `src/models/User.ts`<br>`src/models/Session.ts`<br>`src/app/api/auth/[signup\|login\|logout\|me\|forgot-password\|reset-password]/route.ts`<br>`src/lib/auth/guard.ts` | Mongoose models & indexes, Route Handlers, database operations, session lookup helper, BOLA guards |
-| **Frontend Agent** | `src/app/(auth)/layout.tsx`<br>`src/app/(auth)/login/page.tsx`<br>`src/app/(auth)/signup/page.tsx`<br>`src/app/(auth)/forgot-password/page.tsx`<br>`src/app/(auth)/reset-password/page.tsx`<br>`src/locales/translations.ts` (auth keys)<br>`src/context/AuthContext.tsx` | Responsive auth layout (no app sidebar/nav), accessible auth forms, show/hide password, loading states, i18n |
-| **QA / Performance** | `tests/auth/*.test.ts`<br>Postman / cURL test collections | Positive and negative test suites, rate-limit boundary testing, expired cookie checks, BOLA attempts |
+Subagents are invoked **automatically** by the orchestrator based on the file paths and tasks below—without requiring explicit user commands:
+
+| Subagent Identifier | Direct File & Directory Ownership | Primary Deliverables | Automatic Trigger Condition |
+| :--- | :--- | :--- | :--- |
+| **`pm-architect`** | `AGENTS.md`, Architecture docs, PR reviews, directory layout coordination | Milestone planning, boundary enforcement, schema approvals, review gates | New phases, architecture changes, roadmap milestones |
+| **`security-devops`** | `src/lib/auth/password.ts`<br>`src/lib/auth/session.ts`<br>`src/lib/auth/rate-limit.ts`<br>`src/lib/auth/validation.ts`<br>Docker, CI/CD | Argon2id hashing, secure session token generation, cookie configuration, rate limiter, OWASP audit | Auth security, token generation, rate limiting, hashing, Docker/CI |
+| **`backend-specialist`** | `src/models/*.ts`<br>`src/app/api/**/route.ts`<br>`src/lib/mongodb.ts`<br>`src/lib/auth/guard.ts` | Mongoose models & indexes, Route Handlers, database operations, session lookup helper, BOLA guards | Database operations, API routes, Mongoose schemas, queries |
+| **`frontend-specialist`** | `src/app/**/page.tsx`<br>`src/app/**/layout.tsx`<br>`src/components/**/*.tsx`<br>`src/locales/translations.ts`<br>`src/context/*.tsx` | Responsive UI (mobile-first 320px–1440px+), accessible forms, show/hide password, loading states, i18n (`uz`, `ru`, `en`) | UI pages, components, CSS styling, client state, i18n |
+| **`qa-performance`** | `tests/**/*.test.ts`<br>Postman / cURL test collections | Positive and negative test suites, rate-limit boundary testing, expired cookie checks, BOLA attempts, performance audits | Test suites, regression checks, validation audits, performance checks |
+| **`research`** | Read-only codebase and external references | Dependency research, documentation lookups, architectural fact-checking | Package evaluation, deep documentation verification |
+
+> **Automatic Invocation Protocol:** Whenever a task or prompt touches one of these domains, the orchestrator immediately invokes the relevant subagent via `invoke_subagent`. The developer does not need to specify agent names or request delegation.
 
 ### 8. Exact Next Task for the Security Agent
 **Task:** Build the core cryptographic, hashing, and session validation utilities in `src/lib/auth/`:
@@ -651,11 +670,12 @@ When encountering bugs or unexpected behavior, the agent will **never** indiscri
 
 ## 15. AI Agent Behavior & Guardrails
 
-1. **Incremental Execution:** Plan first, touch minimal files per step, and verify after every edit.
-2. **Preserve Working Code:** Do not overwrite working components or erase existing styles without explanation.
-3. **No Unexplained Packages:** Never run `npm install <package>` without explaining what the package does, why it is needed, and what lightweight alternatives exist.
-4. **Learning vs. Production Distinction:** Explicitly label code when simplified for educational clarity versus how it would be architected in high-scale production.
-5. **Active Checks:** Periodically prompt the developer to predict outputs, spot intentional bugs, and explain data flows to prevent passive AI dependence.
+1. **Autonomous Subagent Delegation (Mandatory & Automatic):** Automatically invoke domain subagents (`backend-specialist`, `frontend-specialist`, `security-devops`, `qa-performance`, `pm-architect`, `research`) whenever tasks require their respective specializations. The developer never needs to prompt or say "use agents" — subagent orchestration is automatic, proactive, and autonomous.
+2. **Incremental Execution:** Plan first, touch minimal files per step, and verify after every edit.
+3. **Preserve Working Code:** Do not overwrite working components or erase existing styles without explanation.
+4. **No Unexplained Packages:** Never run `npm install <package>` without explaining what the package does, why it is needed, and what lightweight alternatives exist.
+5. **Learning vs. Production Distinction:** Explicitly label code when simplified for educational clarity versus how it would be architected in high-scale production.
+6. **Active Checks:** Periodically prompt the developer to predict outputs, spot intentional bugs, and explain data flows to prevent passive AI dependence.
 
 ---
 

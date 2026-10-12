@@ -230,7 +230,7 @@ export default function SignupPage() {
               type="button"
               onClick={() => setShowPassword(!showPassword)}
               className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
-              aria-label={showPassword ? 'Hide password' : 'Show password'}
+              aria-label={showPassword ? t.auth.hidePassword : t.auth.showPassword}
             >
               {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
             </button>
@@ -241,15 +241,15 @@ export default function SignupPage() {
             <div className="p-2.5 rounded-lg bg-slate-100/70 dark:bg-slate-800/50 border border-slate-200/60 dark:border-slate-700/60 space-y-1 text-xs">
               <div className="flex items-center gap-1.5 text-slate-600 dark:text-slate-400">
                 {passwordChecks.length ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <X className="w-3.5 h-3.5 text-slate-400" />}
-                <span>8-128 characters</span>
+                <span>{t.auth.passwordCriteriaLength}</span>
               </div>
               <div className="flex items-center gap-1.5 text-slate-600 dark:text-slate-400">
                 {passwordChecks.uppercase && passwordChecks.lowercase ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <X className="w-3.5 h-3.5 text-slate-400" />}
-                <span>Uppercase & lowercase letters</span>
+                <span>{t.auth.passwordCriteriaLetters}</span>
               </div>
               <div className="flex items-center gap-1.5 text-slate-600 dark:text-slate-400">
                 {passwordChecks.number && passwordChecks.special ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <X className="w-3.5 h-3.5 text-slate-400" />}
-                <span>Number & special character</span>
+                <span>{t.auth.passwordCriteriaSpecial}</span>
               </div>
             </div>
           )}

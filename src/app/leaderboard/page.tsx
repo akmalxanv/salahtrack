@@ -334,10 +334,10 @@ export default function LeaderboardPage() {
                 <div className="hidden sm:block text-right">
                   <div className="flex items-center justify-end gap-1 text-xs text-slate-500 dark:text-slate-400">
                     <Clock className="w-3.5 h-3.5 text-emerald-600" />
-                    <span>{entry.onTimeCount} on-time</span>
+                    <span>{entry.onTimeCount} {t.leaderboard.onTimeCount.toLowerCase()}</span>
                   </div>
                   <p className="text-[11px] text-slate-400">
-                    {entry.consistencyPercentage}% consistency
+                    {entry.consistencyPercentage}% {t.leaderboard.consistency.toLowerCase()}
                   </p>
                 </div>
 
