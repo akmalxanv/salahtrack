@@ -11,8 +11,12 @@ import { getCurrentSession } from '@/lib/auth/guard';
 const inter = Inter({ subsets: ['latin', 'cyrillic'] });
 
 export const metadata: Metadata = {
-  title: 'SalahTrack — Prayer Tracking & Accountability',
-  description: 'Production-grade Muslim prayer tracking and personal accountability platform',
+  metadataBase: new URL('https://namozlarim.uz'),
+  title: 'Namozlarim.uz — Namoz va shaxsiy intizom platformasi',
+  description: 'Musulmonlar uchun namoz vaqtlarini kuzatish, qazolarni hisoblash va shaxsiy intizom platformasi',
+  alternates: {
+    canonical: 'https://namozlarim.uz',
+  },
   icons: {
     icon: [
       { url: '/favicon.ico', sizes: 'any' },
@@ -41,7 +45,8 @@ export default async function RootLayout({
   children: React.ReactNode;
 }) {
   const cookieStore = await cookies();
-  const langCookie = cookieStore.get('salahtrack_lang')?.value as Language | undefined;
+  const rawLang = cookieStore.get('namozlarim_lang')?.value || cookieStore.get('salahtrack_lang')?.value;
+  const langCookie = rawLang as Language | undefined;
   const initialLang: Language =
     langCookie && (langCookie === 'en' || langCookie === 'ru' || langCookie === 'uz')
       ? langCookie

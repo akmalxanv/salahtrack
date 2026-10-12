@@ -3,7 +3,7 @@ import { NextRequest } from 'next/server.js';
 import { connectDB } from '../mongodb.ts';
 import { User, type IUser } from '../../models/User.ts';
 import { Session, type ISession } from '../../models/Session.ts';
-import { SESSION_COOKIE_NAME } from './session.ts';
+import { PRIMARY_SESSION_COOKIE, LEGACY_SESSION_COOKIE } from './session.ts';
 
 /**
  * Sanitized public profile of an authenticated user.
@@ -105,13 +105,15 @@ export async function validateSessionToken(token: string): Promise<AuthContext |
 export async function getCurrentSession(): Promise<AuthContext | null> {
   try {
     const cookieStore = await cookies();
-    const sessionCookie = cookieStore.get(SESSION_COOKIE_NAME);
+    const sessionToken =
+      cookieStore.get(PRIMARY_SESSION_COOKIE)?.value ||
+      cookieStore.get(LEGACY_SESSION_COOKIE)?.value;
 
-    if (!sessionCookie || !sessionCookie.value) {
+    if (!sessionToken) {
       return null;
     }
 
-    return await validateSessionToken(sessionCookie.value);
+    return await validateSessionToken(sessionToken);
   } catch {
     return null;
   }
@@ -128,13 +130,17 @@ export async function authenticateRequest(request?: NextRequest): Promise<AuthCo
   let token: string | undefined;
 
   if (request) {
-    token = request.cookies.get(SESSION_COOKIE_NAME)?.value;
+    token =
+      request.cookies.get(PRIMARY_SESSION_COOKIE)?.value ||
+      request.cookies.get(LEGACY_SESSION_COOKIE)?.value;
   }
 
   if (!token) {
     try {
       const cookieStore = await cookies();
-      token = cookieStore.get(SESSION_COOKIE_NAME)?.value;
+      token =
+        cookieStore.get(PRIMARY_SESSION_COOKIE)?.value ||
+        cookieStore.get(LEGACY_SESSION_COOKIE)?.value;
     } catch {
       // In certain runtimes where cookies() is not available, ignore
     }

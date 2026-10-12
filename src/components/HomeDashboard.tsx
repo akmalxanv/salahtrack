@@ -240,7 +240,7 @@ export default function HomeDashboard({
         const permission = await Notification.requestPermission();
         setNotificationPermission(permission as 'default' | 'granted' | 'denied');
         if (permission === 'granted') {
-          new Notification('SalahTrack', {
+          new Notification('Namozlarim', {
             body: t.dashboard.notificationsEnabled,
             icon: '/favicon.ico',
           });

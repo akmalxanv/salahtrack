@@ -1,10 +1,13 @@
 import crypto from 'node:crypto';
 
 /**
- * Standard cookie name for the authenticated session identifier.
- * Stored strictly on the server and transmitted via secure HttpOnly cookie.
+ * Primary and legacy session cookie names.
+ * PRIMARY_SESSION_COOKIE ('namozlarim_session') is issued for new sessions under the Namozlarim / Namozlarim.uz rebrand.
+ * LEGACY_SESSION_COOKIE ('salahtrack_session') is maintained and accepted for seamless backwards compatibility.
  */
-export const SESSION_COOKIE_NAME = 'salahtrack_session';
+export const PRIMARY_SESSION_COOKIE = 'namozlarim_session';
+export const LEGACY_SESSION_COOKIE = 'salahtrack_session';
+export const SESSION_COOKIE_NAME = PRIMARY_SESSION_COOKIE;
 
 /**
  * Session durations:
@@ -46,14 +49,18 @@ export function generateSessionToken(): string {
  * - Path: '/' (available across all application routes)
  *
  * @param rememberMe When true, session lifetime is extended from 7 to 30 days.
+ * @param cookieName Cookie identifier (defaults to PRIMARY_SESSION_COOKIE).
  */
-export function getSessionCookieOptions(rememberMe: boolean = false): SessionCookieOptions {
+export function getSessionCookieOptions(
+  rememberMe: boolean = false,
+  cookieName: string = PRIMARY_SESSION_COOKIE
+): SessionCookieOptions {
   const maxAge = rememberMe
     ? REMEMBER_ME_SESSION_DURATION_SECONDS
     : STANDARD_SESSION_DURATION_SECONDS;
 
   return {
-    name: SESSION_COOKIE_NAME,
+    name: cookieName,
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax',
@@ -64,10 +71,14 @@ export function getSessionCookieOptions(rememberMe: boolean = false): SessionCoo
 
 /**
  * Returns cookie options with maxAge=0 for immediate session cookie destruction upon logout.
+ *
+ * @param cookieName Cookie identifier to expire (defaults to PRIMARY_SESSION_COOKIE).
  */
-export function getExpiredSessionCookieOptions(): SessionCookieOptions {
+export function getExpiredSessionCookieOptions(
+  cookieName: string = PRIMARY_SESSION_COOKIE
+): SessionCookieOptions {
   return {
-    name: SESSION_COOKIE_NAME,
+    name: cookieName,
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax',

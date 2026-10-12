@@ -12,6 +12,9 @@ import {
   generateSessionToken,
   calculateSessionExpiry,
   getSessionCookieOptions,
+  getExpiredSessionCookieOptions,
+  PRIMARY_SESSION_COOKIE,
+  LEGACY_SESSION_COOKIE,
   sanitizeUser,
 } from '../../../../lib/auth/index.ts';
 
@@ -105,8 +108,9 @@ export async function POST(request: NextRequest) {
       ipAddress,
     });
 
-    // 8. Set HttpOnly session cookie
-    const cookieOpts = getSessionCookieOptions(rememberMe);
+    // 8. Set HttpOnly session cookies (issue primary, expire legacy)
+    const primaryCookieOpts = getSessionCookieOptions(rememberMe, PRIMARY_SESSION_COOKIE);
+    const legacyExpiredOpts = getExpiredSessionCookieOptions(LEGACY_SESSION_COOKIE);
     const response = NextResponse.json(
       {
         success: true,
@@ -117,7 +121,8 @@ export async function POST(request: NextRequest) {
       { status: 200 }
     );
 
-    response.cookies.set(cookieOpts.name, sessionToken, cookieOpts);
+    response.cookies.set(primaryCookieOpts.name, sessionToken, primaryCookieOpts);
+    response.cookies.set(legacyExpiredOpts.name, '', legacyExpiredOpts);
     return response;
   } catch (error) {
     const err = error as Error & { code?: string | number };

@@ -26,7 +26,9 @@ export default async function HomePage() {
   const cookieStore = await cookies();
 
   // Read saved qaza count from cookies for immediate SSR rendering
-  const qazaCookie = cookieStore.get('salahtrack_qaza_count')?.value;
+  const qazaCookie =
+    cookieStore.get('namozlarim_qaza_count')?.value ||
+    cookieStore.get('salahtrack_qaza_count')?.value;
   let initialQazaCount: number | null = null;
   if (qazaCookie !== undefined) {
     try {
@@ -38,7 +40,9 @@ export default async function HomePage() {
   }
 
   // Read saved prayers from cookies for immediate SSR rendering
-  const prayersCookie = cookieStore.get('salahtrack_daily_prayers')?.value;
+  const prayersCookie =
+    cookieStore.get('namozlarim_daily_prayers')?.value ||
+    cookieStore.get('salahtrack_daily_prayers')?.value;
   let initialPrayers: PrayerItem[] | null = null;
   if (prayersCookie) {
     try {
@@ -50,7 +54,9 @@ export default async function HomePage() {
   }
 
   // Read saved streak from cookies for immediate SSR rendering
-  const streakCookie = cookieStore.get('salahtrack_streak')?.value;
+  const streakCookie =
+    cookieStore.get('namozlarim_streak')?.value ||
+    cookieStore.get('salahtrack_streak')?.value;
   let initialStreak: StreakData | null = null;
   if (streakCookie) {
     try {

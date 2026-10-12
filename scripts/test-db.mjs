@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 async function testConnection() {
   const uri = process.env.MONGODB_URI;
 
-  console.log('\n🔍 [SalahTrack] MongoDB Atlas Connection Tester');
+  console.log('\n🔍 [Namozlarim] MongoDB Atlas Connection Tester');
   console.log('--------------------------------------------------');
 
   if (!uri) {
@@ -20,7 +20,7 @@ async function testConnection() {
   if (uri.includes('<db_password>') || uri.includes('<password>')) {
     console.error('\n⚠️  ACTION REQUIRED: Placeholder password detected!');
     console.error('👉 Please replace "<db_password>" in your .env.local file with your actual database user password.');
-    console.error('   Example: mongodb+srv://insaz11k:MyActualPassword123@cluster0.l1sxcgy.mongodb.net/salahtrack?retryWrites=true&w=majority&appName=Cluster0\n');
+    console.error('   Example: mongodb+srv://insaz11k:MyActualPassword123@cluster0.l1sxcgy.mongodb.net/namozlarim?retryWrites=true&w=majority&appName=Cluster0\n');
     process.exit(1);
   }
 
@@ -41,7 +41,7 @@ async function testConnection() {
     console.log('📶 Cluster Ping:  ', ping?.ok === 1 ? 'OK (Latency verified)' : ping);
 
     console.log('--------------------------------------------------');
-    console.log('🎉 SalahTrack database connection is verified and ready!\n');
+    console.log('🎉 Namozlarim / Namozlarim.uz database connection is verified and ready!\n');
 
     await mongoose.disconnect();
     process.exit(0);

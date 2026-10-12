@@ -1,7 +1,7 @@
 {
-  "name": "SalahTrack — Prayer Tracking & Accountability",
-  "short_name": "SalahTrack",
-  "description": "Production-grade Muslim prayer tracking and personal accountability platform",
+  "name": "Namozlarim — Namoz va qazo hisobi platformasi",
+  "short_name": "Namozlarim",
+  "description": "Namozlarim.uz — Musulmonlar uchun namoz va qazo hisobi platformasi",
   "icons": [
     {
       "src": "/android-chrome-192x192.png",

@@ -9,7 +9,29 @@ interface LanguageContextType {
   t: TranslationKey;
 }
 
-const STORAGE_KEY = 'salahtrack_lang';
+const STORAGE_KEY = 'namozlarim_lang';
+const FALLBACK_STORAGE_KEY = 'salahtrack_lang';
+
+function isValidLanguage(val: unknown): val is Language {
+  return val === 'en' || val === 'ru' || val === 'uz';
+}
+
+function getStoredLanguage(): Language | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const primary = window.localStorage.getItem(STORAGE_KEY);
+    if (isValidLanguage(primary)) {
+      return primary;
+    }
+    const fallback = window.localStorage.getItem(FALLBACK_STORAGE_KEY);
+    if (isValidLanguage(fallback)) {
+      return fallback;
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
 
 function subscribe(callback: () => void) {
   if (typeof window === 'undefined') return () => {};
@@ -35,15 +57,8 @@ export const LanguageProvider = ({
   initialLang?: Language;
 }) => {
   const getSnapshot = useCallback((): Language => {
-    try {
-      const saved = window.localStorage.getItem(STORAGE_KEY) as Language;
-      if (saved && (saved === 'en' || saved === 'ru' || saved === 'uz')) {
-        return saved;
-      }
-    } catch {
-      // ignore
-    }
-    return initialLang;
+    const saved = getStoredLanguage();
+    return saved || initialLang;
   }, [initialLang]);
 
   const getServerSnapshot = useCallback((): Language => {
@@ -55,12 +70,10 @@ export const LanguageProvider = ({
   // Sync cookie so server can pre-render matching language on future reloads
   useEffect(() => {
     try {
-      const saved = window.localStorage.getItem(STORAGE_KEY) as Language;
-      const targetLang = (saved && (saved === 'en' || saved === 'ru' || saved === 'uz')) ? saved : initialLang;
+      const saved = getStoredLanguage();
+      const targetLang = saved || initialLang;
       document.cookie = `${STORAGE_KEY}=${targetLang}; path=/; max-age=31536000; SameSite=Lax`;
-      if (!saved) {
-        window.localStorage.setItem(STORAGE_KEY, targetLang);
-      }
+      window.localStorage.setItem(STORAGE_KEY, targetLang);
     } catch {
       // ignore
     }

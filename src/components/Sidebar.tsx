@@ -2,8 +2,9 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Moon, LogOut, LogIn } from 'lucide-react';
+import { LogOut, LogIn } from 'lucide-react';
 import LanguageSelector from './LanguageSelector';
+import BrandLogo from './BrandLogo';
 import { useLanguage } from '@/context/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
 import { NAV_ITEMS } from '@/config/navigation';
@@ -16,9 +17,7 @@ export default function Sidebar() {
   return (
     <aside className="hidden md:flex flex-col w-64 h-screen sticky top-0 border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shrink-0">
       <div className="flex items-center gap-3 mb-8">
-        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-500 text-white font-bold shadow-md shadow-emerald-600/20">
-          <Moon className="h-5 w-5" />
-        </div>
+        <BrandLogo size={40} priority />
         <div>
           <h1 className="font-bold text-slate-900 dark:text-slate-100 text-base leading-tight">
             {t.appTitle}

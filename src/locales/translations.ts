@@ -408,8 +408,8 @@ export interface TranslationContent {
 
 export const translations: Record<Language, TranslationContent> = {
   ru: {
-    appTitle: 'SalahTrack',
-    appSubtitle: 'Трекер намаза и самоконтроля',
+    appTitle: 'Namozlarim',
+    appSubtitle: 'Трекер намаза и духовного самоконтроля',
     common: {
       hoursUnit: 'ч',
       minsUnit: 'мин',
@@ -592,7 +592,7 @@ export const translations: Record<Language, TranslationContent> = {
       title: 'Профиль',
       subtitle: 'Личные данные, настройки аккаунта и самоконтроля',
       account: 'Учетная запись',
-      accountDesc: 'Авторизованный пользователь SalahTrack',
+      accountDesc: 'Авторизованный пользователь Namozlarim',
       personalInfo: 'Персональная информация',
       fullName: 'Полное имя',
       username: 'Имя пользователя',
@@ -815,7 +815,7 @@ export const translations: Record<Language, TranslationContent> = {
       },
       sections: {
         personalInfo: 'Личная информация',
-        personalInfoDesc: 'Ваше имя и идентификационные данные в SalahTrack',
+        personalInfoDesc: 'Ваше имя и идентификационные данные в Namozlarim',
         preferences: 'Параметры и расчет',
         preferencesDesc: 'Язык приложения и богословский метод расчета времени намаза',
         privacy: 'Приватность и участие в сообществе',
@@ -827,8 +827,8 @@ export const translations: Record<Language, TranslationContent> = {
   },
 
   en: {
-    appTitle: 'SalahTrack',
-    appSubtitle: 'Prayer Tracker & Personal Accountability',
+    appTitle: 'Namozlarim',
+    appSubtitle: 'Prayer Tracker & Personal Accountability Platform',
     common: {
       hoursUnit: 'h',
       minsUnit: 'm',
@@ -1011,7 +1011,7 @@ export const translations: Record<Language, TranslationContent> = {
       title: 'Profile',
       subtitle: 'Account details, prayer preferences, and self-discipline settings',
       account: 'Account Status',
-      accountDesc: 'Authenticated SalahTrack User',
+      accountDesc: 'Authenticated Namozlarim User',
       personalInfo: 'Personal Information',
       fullName: 'Full Name',
       username: 'Username',
@@ -1234,7 +1234,7 @@ export const translations: Record<Language, TranslationContent> = {
       },
       sections: {
         personalInfo: 'Personal Information',
-        personalInfoDesc: 'Your display name and identification on SalahTrack',
+        personalInfoDesc: 'Your display name and identification on Namozlarim',
         preferences: 'Preferences & Calculation',
         preferencesDesc: 'App interface language and astronomical prayer time calculation method',
         privacy: 'Privacy & Community',
@@ -1246,8 +1246,8 @@ export const translations: Record<Language, TranslationContent> = {
   },
 
   uz: {
-    appTitle: 'SalahTrack',
-    appSubtitle: 'Namoz va shaxsiy intizom trekeri',
+    appTitle: 'Namozlarim',
+    appSubtitle: 'Namoz va shaxsiy intizom platformasi',
     common: {
       hoursUnit: 'soat',
       minsUnit: 'daqiqa',
@@ -1430,7 +1430,7 @@ export const translations: Record<Language, TranslationContent> = {
       title: 'Profil',
       subtitle: 'Shaxsiy ma’lumotlar va o‘z-o‘zini nazorat qilish sozlamalari',
       account: 'Hisob holati',
-      accountDesc: 'SalahTrack tizimining tasdiqlangan foydalanuvchisi',
+      accountDesc: 'Namozlarim tizimining tasdiqlangan foydalanuvchisi',
       personalInfo: 'Shaxsiy ma’lumotlar',
       fullName: 'To‘liq ism',
       username: 'Foydalanuvchi nomi',
@@ -1653,7 +1653,7 @@ export const translations: Record<Language, TranslationContent> = {
       },
       sections: {
         personalInfo: 'Shaxsiy ma’lumotlar',
-        personalInfoDesc: 'SalahTrack-dagi ismingiz va identifikatsiya ma’lumotlaringiz',
+        personalInfoDesc: 'Namozlarim-dagi ismingiz va identifikatsiya ma’lumotlaringiz',
         preferences: 'Sozlamalar va hisoblash',
         preferencesDesc: 'Ilova tili va astronomik namoz vaqtini hisoblash uslubi',
         privacy: 'Maxfiylik va guruhlar',

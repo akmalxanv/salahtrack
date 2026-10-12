@@ -11,6 +11,7 @@ import {
 } from '../../src/lib/auth/guard.ts';
 import { clearRateLimitStore } from '../../src/lib/auth/rate-limit.ts';
 import { hashPassword } from '../../src/lib/auth/password.ts';
+import { PRIMARY_SESSION_COOKIE, LEGACY_SESSION_COOKIE } from '../../src/lib/auth/session.ts';
 
 // Import route handlers
 import { POST as signupHandler } from '../../src/app/api/auth/signup/route.ts';
@@ -246,10 +247,11 @@ describe('Backend Authentication Layer Tests', () => {
       assert.strictEqual(json.data.user.username, 'bilal_k');
       assert.strictEqual(json.data.user.passwordHash, undefined, 'passwordHash must NOT be returned in response');
 
-      // Check cookie
+      // Check cookies (issues PRIMARY_SESSION_COOKIE and expires LEGACY_SESSION_COOKIE)
       const cookieHeader = res.headers.get('set-cookie');
       assert.ok(cookieHeader, 'Set-Cookie header must be present');
-      assert.ok(cookieHeader.includes('salahtrack_session='), 'Cookie name must be salahtrack_session');
+      assert.ok(cookieHeader.includes(`${PRIMARY_SESSION_COOKIE}=`), `Must set ${PRIMARY_SESSION_COOKIE}`);
+      assert.ok(cookieHeader.includes(`${LEGACY_SESSION_COOKIE}=`), `Must clear legacy ${LEGACY_SESSION_COOKIE}`);
       assert.ok(cookieHeader.toLowerCase().includes('httponly'), 'Cookie must be HttpOnly');
 
       // Verify user in store
@@ -359,7 +361,8 @@ describe('Backend Authentication Layer Tests', () => {
 
       const cookieHeader = res.headers.get('set-cookie');
       assert.ok(cookieHeader);
-      assert.ok(cookieHeader.includes('salahtrack_session='));
+      assert.ok(cookieHeader.includes(`${PRIMARY_SESSION_COOKIE}=`), `Must set ${PRIMARY_SESSION_COOKIE}`);
+      assert.ok(cookieHeader.includes(`${LEGACY_SESSION_COOKIE}=`), `Must clear legacy ${LEGACY_SESSION_COOKIE}`);
 
       // Check session in store
       assert.strictEqual(mockSessions.length, 1);
@@ -478,15 +481,17 @@ describe('Backend Authentication Layer Tests', () => {
       // Session must be deleted from database
       assert.strictEqual(mockSessions.length, 0);
 
-      // Cookie must have Max-Age=0 (cleared)
+      // Both primary and legacy cookies must have Max-Age=0 (cleared)
       const cookieHeader = res.headers.get('set-cookie');
       assert.ok(cookieHeader);
+      assert.ok(cookieHeader.includes(`${PRIMARY_SESSION_COOKIE}=`), `Must clear ${PRIMARY_SESSION_COOKIE}`);
+      assert.ok(cookieHeader.includes(`${LEGACY_SESSION_COOKIE}=`), `Must clear ${LEGACY_SESSION_COOKIE}`);
       assert.ok(cookieHeader.includes('Max-Age=0') || cookieHeader.includes('max-age=0'));
     });
   });
 
   describe('4. GET /api/auth/me', () => {
-    it('returns sanitized user data when valid session cookie is provided', async () => {
+    it('returns sanitized user data when legacy session cookie is provided', async () => {
       const userId = new mongoose.Types.ObjectId();
       const sessionToken = 'me_valid_session_token';
 
@@ -516,7 +521,7 @@ describe('Backend Authentication Layer Tests', () => {
       const req = new NextRequest('http://localhost:3000/api/auth/me', {
         method: 'GET',
         headers: {
-          cookie: `salahtrack_session=${sessionToken}`,
+          cookie: `${LEGACY_SESSION_COOKIE}=${sessionToken}`,
         },
       });
 
@@ -528,6 +533,50 @@ describe('Backend Authentication Layer Tests', () => {
       assert.strictEqual(json.data.user.email, 'owner@salahtrack.uz');
       assert.strictEqual(json.data.user.username, 'owner_user');
       assert.strictEqual(json.data.user.passwordHash, undefined, 'passwordHash must never be exposed');
+    });
+
+    it('returns sanitized user data when primary session cookie is provided', async () => {
+      const userId = new mongoose.Types.ObjectId();
+      const sessionToken = 'me_primary_session_token';
+
+      mockUsers.push({
+        _id: userId,
+        name: 'Primary Owner',
+        email: 'primary@namozlarim.uz',
+        username: 'primary_user',
+        passwordHash: '$argon2id$v=19$somehash',
+        role: 'user',
+        preferences: { language: 'uz', calculationMethod: 'MWL' },
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+      mockSessions.push({
+        _id: new mongoose.Types.ObjectId(),
+        sessionToken,
+        userId,
+        expiresAt: new Date(Date.now() + 1000000),
+        lastActiveAt: new Date(),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        save: async function () { return this; },
+      });
+
+      const req = new NextRequest('http://localhost:3000/api/auth/me', {
+        method: 'GET',
+        headers: {
+          cookie: `${PRIMARY_SESSION_COOKIE}=${sessionToken}`,
+        },
+      });
+
+      const res = await meHandler(req);
+      assert.strictEqual(res.status, 200);
+
+      const json = await res.json();
+      assert.strictEqual(json.success, true);
+      assert.strictEqual(json.data.user.email, 'primary@namozlarim.uz');
+      assert.strictEqual(json.data.user.username, 'primary_user');
+      assert.strictEqual(json.data.user.passwordHash, undefined);
     });
 
     it('returns 401 Unauthorized when session cookie is missing', async () => {
