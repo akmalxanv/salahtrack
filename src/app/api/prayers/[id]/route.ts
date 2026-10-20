@@ -62,6 +62,24 @@ export async function GET(request: NextRequest, props: RouteContext) {
       );
     }
 
+    // Deterministically recalculate fines accrued in case overdue threshold was crossed since last write
+    const currentFines = calculateFines(record.date, record.prayers);
+    if (record.finesAccrued !== currentFines) {
+      record.finesAccrued = currentFines;
+      if (typeof record.save === 'function') {
+        if (typeof record.markModified === 'function') {
+          record.markModified('finesAccrued');
+        }
+        await record.save();
+      }
+      if (typeof PrayerRecord.updateOne === 'function') {
+        await PrayerRecord.updateOne(
+          { _id: record._id, userId: auth.user.id },
+          { $set: { finesAccrued: currentFines } }
+        );
+      }
+    }
+
     return NextResponse.json(
       {
         success: true,

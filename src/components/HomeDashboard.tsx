@@ -58,38 +58,39 @@ const STATUS_CONFIG: Record<
   }
 > = {
   PENDING: {
-    badgeClass: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 border-slate-200 dark:border-slate-700',
+    badgeClass: 'bg-slate-100 text-slate-700 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700',
     borderClass: 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700',
     bgClass: 'bg-white dark:bg-slate-900',
     iconClass: 'text-slate-300 dark:text-slate-600',
   },
   PRAYED: {
-    badgeClass: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/70 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800',
-    borderClass: 'border-emerald-300 dark:border-emerald-800/80',
+    badgeClass: 'bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/80 dark:text-emerald-300 dark:border-emerald-800',
+    borderClass: 'border-emerald-200 dark:border-emerald-800',
     bgClass: 'bg-emerald-50/40 dark:bg-emerald-950/20',
     iconClass: 'text-emerald-600 dark:text-emerald-400 fill-emerald-100 dark:fill-emerald-950',
   },
   PRAYED_ON_TIME: {
-    badgeClass: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/70 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800',
-    borderClass: 'border-emerald-300 dark:border-emerald-800/80',
+    badgeClass: 'bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/80 dark:text-emerald-300 dark:border-emerald-800',
+    borderClass: 'border-emerald-200 dark:border-emerald-800',
     bgClass: 'bg-emerald-50/40 dark:bg-emerald-950/20',
     iconClass: 'text-emerald-600 dark:text-emerald-400 fill-emerald-100 dark:fill-emerald-950',
   },
   PRAYED_LATE: {
-    badgeClass: 'bg-amber-100 text-amber-800 dark:bg-amber-950/70 dark:text-amber-300 border-amber-300 dark:border-amber-800',
-    borderClass: 'border-amber-300 dark:border-amber-800/80',
-    bgClass: 'bg-amber-50/40 dark:bg-amber-950/20',
-    iconClass: 'text-amber-600 dark:text-amber-400 fill-amber-100 dark:fill-amber-950',
+    // Legacy documents normalized to Prayed badge
+    badgeClass: 'bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/80 dark:text-emerald-300 dark:border-emerald-800',
+    borderClass: 'border-emerald-200 dark:border-emerald-800',
+    bgClass: 'bg-emerald-50/40 dark:bg-emerald-950/20',
+    iconClass: 'text-emerald-600 dark:text-emerald-400 fill-emerald-100 dark:fill-emerald-950',
   },
   MISSED: {
-    badgeClass: 'bg-rose-100 text-rose-800 dark:bg-rose-950/70 dark:text-rose-300 border-rose-300 dark:border-rose-800',
-    borderClass: 'border-rose-300 dark:border-rose-800/80',
+    badgeClass: 'bg-rose-50 text-rose-800 border-rose-200 dark:bg-rose-950/80 dark:text-rose-300 dark:border-rose-800',
+    borderClass: 'border-rose-200 dark:border-rose-800',
     bgClass: 'bg-rose-50/30 dark:bg-rose-950/20',
     iconClass: 'text-rose-600 dark:text-rose-400 fill-rose-100 dark:fill-rose-950',
   },
   MADE_UP: {
-    badgeClass: 'bg-sky-100 text-sky-800 dark:bg-sky-950/70 dark:text-sky-300 border-sky-300 dark:border-sky-800',
-    borderClass: 'border-sky-300 dark:border-sky-800/80',
+    badgeClass: 'bg-sky-50 text-sky-800 border-sky-200 dark:bg-sky-950/80 dark:text-sky-300 dark:border-sky-800',
+    borderClass: 'border-sky-200 dark:border-sky-800',
     bgClass: 'bg-sky-50/30 dark:bg-sky-950/20',
     iconClass: 'text-sky-600 dark:text-sky-400 fill-sky-100 dark:fill-sky-950',
   },
@@ -851,7 +852,7 @@ export default function HomeDashboard({
             <div className="flex-1 grid grid-cols-2 gap-2 text-xs">
               <div className="p-2 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-100 dark:border-emerald-900/50">
                 <span className="text-[10px] font-semibold text-emerald-800 dark:text-emerald-300 block">
-                  {t.statuses.PRAYED_ON_TIME}
+                  {t.statuses.PRAYED}
                 </span>
                 <span className="text-sm font-bold text-emerald-900 dark:text-emerald-200">
                   {completedCount}
@@ -1015,7 +1016,7 @@ export default function HomeDashboard({
             const config = STATUS_CONFIG[prayer.status];
             const isMenuOpen = activeMenuPrayerId === prayer.id;
             const prayerLabel = t.prayers[prayer.id] || prayer.name;
-            const statusLabel = t.statuses[prayer.status];
+            const statusLabel = prayer.status === 'PRAYED_LATE' ? t.statuses.PRAYED : t.statuses[prayer.status];
             const itemSaveStatus = savingStatus[prayer.id];
 
             return (
@@ -1084,68 +1085,62 @@ export default function HomeDashboard({
                   </div>
                 </div>
 
-                {/* 5 Status Action Buttons: On-Time, Late, Missed, Made-Up, Pending */}
+                {/* 3 Canonical Status Action Buttons: Prayed, Made Up, Qaza (+ Reset if active) */}
                 {isMenuOpen && (
-                  <div className="mt-3 pt-3 border-t border-slate-200 dark:border-slate-800 grid grid-cols-2 sm:grid-cols-5 gap-1.5 text-xs">
-                    <button
-                      type="button"
-                      onClick={() => handleSetStatus(prayer.id, 'PRAYED_ON_TIME')}
-                      className={`p-2 rounded-xl font-medium cursor-pointer text-center transition-colors ${
-                        prayer.status === 'PRAYED_ON_TIME' || prayer.status === 'PRAYED'
-                          ? 'bg-emerald-600 text-white font-bold'
-                          : 'bg-slate-100 dark:bg-slate-800 hover:bg-emerald-100 dark:hover:bg-emerald-950/60 text-slate-700 dark:text-slate-300'
-                      }`}
-                    >
-                      {t.dashboard.markPrayedOnTime}
-                    </button>
+                  <div className="mt-3 pt-3 border-t border-slate-200 dark:border-slate-800 space-y-2">
+                    <div className="grid grid-cols-3 gap-2">
+                      {/* 1. Prayed */}
+                      <button
+                        type="button"
+                        onClick={() => handleSetStatus(prayer.id, 'PRAYED_ON_TIME')}
+                        className={`min-h-[44px] px-2 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-colors duration-150 flex items-center justify-center text-center cursor-pointer focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 focus-visible:outline-none ${
+                          prayer.status === 'PRAYED_ON_TIME' || prayer.status === 'PRAYED' || prayer.status === 'PRAYED_LATE'
+                            ? 'bg-emerald-600 text-white font-bold shadow-xs'
+                            : 'bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700 font-medium'
+                        }`}
+                      >
+                        {t.dashboard.markPrayed}
+                      </button>
 
-                    <button
-                      type="button"
-                      onClick={() => handleSetStatus(prayer.id, 'PRAYED_LATE')}
-                      className={`p-2 rounded-xl font-medium cursor-pointer text-center transition-colors ${
-                        prayer.status === 'PRAYED_LATE'
-                          ? 'bg-amber-600 text-white font-bold'
-                          : 'bg-slate-100 dark:bg-slate-800 hover:bg-amber-100 dark:hover:bg-amber-950/60 text-slate-700 dark:text-slate-300'
-                      }`}
-                    >
-                      {t.dashboard.markPrayedLate}
-                    </button>
+                      {/* 2. Made Up */}
+                      <button
+                        type="button"
+                        onClick={() => handleSetStatus(prayer.id, 'MADE_UP')}
+                        className={`min-h-[44px] px-2 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-colors duration-150 flex items-center justify-center text-center cursor-pointer focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 focus-visible:outline-none ${
+                          prayer.status === 'MADE_UP'
+                            ? 'bg-sky-600 text-white font-bold shadow-xs'
+                            : 'bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700 font-medium'
+                        }`}
+                      >
+                        {t.dashboard.markMadeUp}
+                      </button>
 
-                    <button
-                      type="button"
-                      onClick={() => handleSetStatus(prayer.id, 'MISSED')}
-                      className={`p-2 rounded-xl font-medium cursor-pointer text-center transition-colors ${
-                        prayer.status === 'MISSED'
-                          ? 'bg-rose-600 text-white font-bold'
-                          : 'bg-slate-100 dark:bg-slate-800 hover:bg-rose-100 dark:hover:bg-rose-950/60 text-slate-700 dark:text-slate-300'
-                      }`}
-                    >
-                      {t.dashboard.markMissed}
-                    </button>
+                      {/* 3. Qaza */}
+                      <button
+                        type="button"
+                        onClick={() => handleSetStatus(prayer.id, 'MISSED')}
+                        className={`min-h-[44px] px-2 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-colors duration-150 flex items-center justify-center text-center cursor-pointer focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 focus-visible:outline-none ${
+                          prayer.status === 'MISSED'
+                            ? 'bg-rose-600 text-white font-bold shadow-xs'
+                            : 'bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700 font-medium'
+                        }`}
+                      >
+                        {t.dashboard.markMissed}
+                      </button>
+                    </div>
 
-                    <button
-                      type="button"
-                      onClick={() => handleSetStatus(prayer.id, 'MADE_UP')}
-                      className={`p-2 rounded-xl font-medium cursor-pointer text-center transition-colors ${
-                        prayer.status === 'MADE_UP'
-                          ? 'bg-sky-600 text-white font-bold'
-                          : 'bg-slate-100 dark:bg-slate-800 hover:bg-sky-100 dark:hover:bg-sky-950/60 text-slate-700 dark:text-slate-300'
-                      }`}
-                    >
-                      {t.dashboard.markMadeUp}
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => handleSetStatus(prayer.id, 'PENDING')}
-                      className={`p-2 rounded-xl font-medium cursor-pointer text-center transition-colors ${
-                        prayer.status === 'PENDING'
-                          ? 'bg-slate-700 text-white font-bold dark:bg-slate-600'
-                          : 'bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300'
-                      }`}
-                    >
-                      {t.dashboard.resetToPending}
-                    </button>
+                    {/* Reset / Clear to Pending */}
+                    {prayer.status !== 'PENDING' && (
+                      <div className="flex justify-end pt-1">
+                        <button
+                          type="button"
+                          onClick={() => handleSetStatus(prayer.id, 'PENDING')}
+                          className="min-h-[44px] px-3 py-1 text-xs text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 underline cursor-pointer flex items-center gap-1 focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 focus-visible:outline-none rounded-lg font-medium"
+                        >
+                          {t.dashboard.resetToPending}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

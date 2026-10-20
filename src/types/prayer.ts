@@ -1,6 +1,7 @@
 export type PrayerStatus = 
   | 'PENDING' 
   | 'PRAYED_ON_TIME'
+  /** @deprecated Legacy status; retained for backwards compatibility with existing documents */
   | 'PRAYED_LATE'
   | 'MISSED' 
   | 'MADE_UP'
@@ -57,6 +58,7 @@ export interface AccountabilityBreakdownItem {
   totalAmount: number;
   isOverdue: boolean;
   daysPassed: number;
+  status?: PrayerStatus;
 }
 
 export interface AccountabilitySummary {

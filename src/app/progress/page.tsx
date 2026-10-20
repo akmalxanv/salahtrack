@@ -20,6 +20,7 @@ import {
   Check,
   X,
   Info,
+  RotateCcw,
 } from 'lucide-react';
 import { useLanguage } from '@/context/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
@@ -424,12 +425,12 @@ function ProgressContent() {
 
   // Analytical stats breakdown computed across historical records
   const prayerBreakdown = useMemo(() => {
-    const counts: Record<PrayerId, { onTime: number; late: number; missed: number; total: number }> = {
-      fajr: { onTime: 0, late: 0, missed: 0, total: 0 },
-      dhuhr: { onTime: 0, late: 0, missed: 0, total: 0 },
-      asr: { onTime: 0, late: 0, missed: 0, total: 0 },
-      maghrib: { onTime: 0, late: 0, missed: 0, total: 0 },
-      isha: { onTime: 0, late: 0, missed: 0, total: 0 },
+    const counts: Record<PrayerId, { onTime: number; missed: number; total: number }> = {
+      fajr: { onTime: 0, missed: 0, total: 0 },
+      dhuhr: { onTime: 0, missed: 0, total: 0 },
+      asr: { onTime: 0, missed: 0, total: 0 },
+      maghrib: { onTime: 0, missed: 0, total: 0 },
+      isha: { onTime: 0, missed: 0, total: 0 },
     };
 
     for (const record of sortedHistoryRecords) {
@@ -438,9 +439,11 @@ function ProgressContent() {
         const item = record.prayers[p];
         if (!item) continue;
         counts[p].total += 1;
-        if (item.status === 'PRAYED_ON_TIME' || item.status === 'PRAYED') counts[p].onTime += 1;
-        else if (item.status === 'PRAYED_LATE') counts[p].late += 1;
-        else if (item.status === 'MISSED') counts[p].missed += 1;
+        if (item.status === 'PRAYED_ON_TIME' || item.status === 'PRAYED' || item.status === 'PRAYED_LATE') {
+          counts[p].onTime += 1;
+        } else if (item.status === 'MISSED') {
+          counts[p].missed += 1;
+        }
       }
     }
     return counts;
@@ -620,18 +623,16 @@ function ProgressContent() {
                 </span>
               </div>
 
-              {/* On-Time vs Late */}
+              {/* On-Time Rate */}
               <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs">
                 <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 block mb-1">
                   {t.progress.summary.onTimeRate}
                 </span>
                 <div className="flex items-baseline gap-2">
                   <span className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">
-                    {stats?.counts30d.onTime || 0}
+                    {(stats?.counts30d.onTime || 0) + (stats?.counts30d.late || 0)}
                   </span>
-                  <span className="text-xs text-amber-500 font-medium">
-                    +{stats?.counts30d.late || 0} {t.stats.lateCount.toLowerCase()}
-                  </span>
+                  <span className="text-xs text-slate-400 font-medium">/ 150</span>
                 </div>
                 <span className="text-[10px] text-slate-400 mt-2 block">{t.progress.indicator30d}</span>
               </div>
@@ -727,10 +728,10 @@ function ProgressContent() {
                               key={p}
                               title={`${p}: ${status}`}
                               className={`w-2.5 h-2.5 rounded-full ${
-                                status === 'PRAYED_ON_TIME' || status === 'PRAYED'
+                                status === 'PRAYED_ON_TIME' || status === 'PRAYED' || status === 'PRAYED_LATE'
                                   ? 'bg-emerald-500'
-                                  : status === 'PRAYED_LATE'
-                                  ? 'bg-amber-500'
+                                  : status === 'MADE_UP'
+                                  ? 'bg-sky-500'
                                   : status === 'MISSED'
                                   ? 'bg-rose-500'
                                   : 'bg-slate-300 dark:bg-slate-700'
@@ -818,37 +819,29 @@ function ProgressContent() {
           </div>
 
           {/* 30-Day Metric Breakdown */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="p-4 rounded-2xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-100 dark:border-emerald-900/40">
               <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 block mb-1">
-                {t.stats.onTimeCount}
+                {t.statuses.PRAYED}
               </span>
               <span className="text-2xl font-bold text-emerald-800 dark:text-emerald-200">
-                {stats?.counts30d.onTime || 0}
-              </span>
-            </div>
-            <div className="p-4 rounded-2xl bg-amber-50/50 dark:bg-amber-950/20 border border-amber-100 dark:border-amber-900/40">
-              <span className="text-xs font-semibold text-amber-700 dark:text-amber-400 block mb-1">
-                {t.stats.lateCount}
-              </span>
-              <span className="text-2xl font-bold text-amber-800 dark:text-amber-200">
-                {stats?.counts30d.late || 0}
-              </span>
-            </div>
-            <div className="p-4 rounded-2xl bg-rose-50/50 dark:bg-rose-950/20 border border-rose-100 dark:border-rose-900/40">
-              <span className="text-xs font-semibold text-rose-700 dark:text-rose-400 block mb-1">
-                {t.stats.missedCount}
-              </span>
-              <span className="text-2xl font-bold text-rose-800 dark:text-rose-200">
-                {stats?.counts30d.missed || 0}
+                {(stats?.counts30d.onTime || 0) + (stats?.counts30d.late || 0)}
               </span>
             </div>
             <div className="p-4 rounded-2xl bg-sky-50/50 dark:bg-sky-950/20 border border-sky-100 dark:border-sky-900/40">
               <span className="text-xs font-semibold text-sky-700 dark:text-sky-400 block mb-1">
-                {t.stats.madeUpCount}
+                {t.statuses.MADE_UP}
               </span>
               <span className="text-2xl font-bold text-sky-800 dark:text-sky-200">
                 {stats?.counts30d.madeUp || 0}
+              </span>
+            </div>
+            <div className="p-4 rounded-2xl bg-rose-50/50 dark:bg-rose-950/20 border border-rose-100 dark:border-rose-900/40">
+              <span className="text-xs font-semibold text-rose-700 dark:text-rose-400 block mb-1">
+                {t.statuses.MISSED}
+              </span>
+              <span className="text-2xl font-bold text-rose-800 dark:text-rose-200">
+                {stats?.counts30d.missed || 0}
               </span>
             </div>
           </div>
@@ -948,45 +941,65 @@ function ProgressContent() {
               </div>
             ) : (
               <div className="divide-y divide-slate-100 dark:divide-slate-800">
-                {fineItems.map((item, idx) => (
-                  <div
-                    key={`${item.date}-${item.prayerId}-${idx}`}
-                    className="py-3.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3"
-                  >
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-bold text-xs text-slate-900 dark:text-slate-100">
-                          {item.date}
+                {fineItems.map((item, idx) => {
+                  const isMadeUp = item.status === 'MADE_UP';
+                  return (
+                    <div
+                      key={`${item.date}-${item.prayerId}-${idx}`}
+                      className="py-3.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3"
+                    >
+                      <div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-bold text-xs text-slate-900 dark:text-slate-100">
+                            {item.date}
+                          </span>
+                          <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 capitalize">
+                            {t.prayers[item.prayerId]}
+                          </span>
+                          {isMadeUp ? (
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-sky-50 dark:bg-sky-950/80 text-sky-800 dark:text-sky-300 border border-sky-200 dark:border-sky-800">
+                              {t.statuses.MADE_UP}
+                            </span>
+                          ) : (
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-rose-50 dark:bg-rose-950/80 text-rose-800 dark:text-rose-300 border border-rose-200 dark:border-rose-800">
+                              {t.statuses.MISSED}
+                            </span>
+                          )}
+                          {!isMadeUp && item.isOverdue && (
+                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-rose-100 dark:bg-rose-950/80 text-rose-700 dark:text-rose-300">
+                              {t.progress.overdueBadge.replace('{days}', String(item.daysPassed))}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-slate-400 mt-1">
+                          {formatCurrency(item.baseAmount, lang)} {t.progress.baseFineLabel}
+                          {item.overdueAmount > 0 && ` + ${formatCurrency(item.overdueAmount, lang)} ${t.progress.overdueFineLabel}`}
+                        </p>
+                      </div>
+
+                      <div className="flex items-center justify-between sm:justify-end gap-3 w-full sm:w-auto">
+                        <span className={`text-sm font-black ${isMadeUp ? 'text-sky-600 dark:text-sky-400' : 'text-rose-600 dark:text-rose-400'}`}>
+                          {formatCurrency(item.totalAmount, lang)}
                         </span>
-                        <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 capitalize">
-                          {t.prayers[item.prayerId]}
-                        </span>
-                        {item.isOverdue && (
-                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-rose-100 dark:bg-rose-950/80 text-rose-700 dark:text-rose-300">
-                            {t.progress.overdueBadge.replace('{days}', String(item.daysPassed))}
+                        {!isMadeUp ? (
+                          <button
+                            type="button"
+                            onClick={() => handleHistoricalCorrection(item.date, item.prayerId, 'MADE_UP')}
+                            className="min-h-[44px] px-3 py-2 rounded-xl bg-sky-50 dark:bg-sky-950/60 hover:bg-sky-100 dark:hover:bg-sky-900 text-sky-700 dark:text-sky-300 text-xs font-semibold cursor-pointer transition-colors duration-150 flex items-center gap-1.5 focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 focus-visible:outline-none shadow-xs"
+                          >
+                            <RotateCcw className="w-3.5 h-3.5 shrink-0" />
+                            <span>{t.dashboard.markMadeUp}</span>
+                          </button>
+                        ) : (
+                          <span className="min-h-[44px] px-3 py-2 rounded-xl bg-sky-50/50 dark:bg-sky-950/40 text-sky-700 dark:text-sky-300 text-xs font-semibold flex items-center gap-1.5 border border-sky-200/50 dark:border-sky-800/50">
+                            <Check className="w-3.5 h-3.5 shrink-0 text-sky-600 dark:text-sky-400" />
+                            <span>{t.statuses.MADE_UP}</span>
                           </span>
                         )}
                       </div>
-                      <p className="text-[11px] text-slate-400 mt-1">
-                        {formatCurrency(item.baseAmount, lang)} {t.progress.baseFineLabel}
-                        {item.overdueAmount > 0 && ` + ${formatCurrency(item.overdueAmount, lang)} ${t.progress.overdueFineLabel}`}
-                      </p>
                     </div>
-
-                    <div className="flex items-center gap-3 self-end sm:self-auto">
-                      <span className="text-sm font-black text-rose-600 dark:text-rose-400">
-                        {formatCurrency(item.totalAmount, lang)}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => handleHistoricalCorrection(item.date, item.prayerId, 'MADE_UP')}
-                        className="px-2.5 py-1.5 rounded-xl bg-sky-50 dark:bg-sky-950/60 hover:bg-sky-100 dark:hover:bg-sky-900 text-sky-700 dark:text-sky-300 text-xs font-semibold cursor-pointer transition-colors"
-                      >
-                        {t.dashboard.markMadeUp}
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>

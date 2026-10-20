@@ -57,14 +57,14 @@ export function sanitizeNotes(notes: unknown): string | undefined {
 }
 
 /**
- * Calculates accountability fine for a daily prayer record based on Phase 8 rules:
- * - Base fine: 15,000 UZS per missed prayer
- * - Overdue penalty: +15,000 UZS (total 30,000 UZS) if unperformed after 7 days
- * - Made up: fine cleared upon fulfillment
+ * Calculates accountability fine for a daily prayer record based on the canonical 3-choice model:
+ * - MISSED (Qaza): Base fine 15,000 UZS. If older than 7 days (> 7 days from recordDate), add +15,000 UZS overdue penalty (total 30,000 UZS).
+ * - MADE_UP (Made Up): Base fine 15,000 UZS remains, but NO overdue penalty is assessed even after 7 days (capped at 15,000 UZS).
+ * - PRAYED_ON_TIME / PRAYED / PRAYED_LATE / PENDING: 0 UZS.
  */
 export function calculateFines(
   recordDateStr: string,
-  prayers?: Partial<Record<PrayerId, { status: PrayerStatus; missedAt?: Date }>> | null
+  prayers?: Partial<Record<PrayerId, { status: PrayerStatus; missedAt?: Date; madeUpAt?: Date }>> | null
 ): number {
   if (!prayers || typeof prayers !== 'object') return 0;
   let totalFine = 0;
@@ -76,11 +76,15 @@ export function calculateFines(
 
   for (const prayerId of VALID_PRAYER_IDS) {
     const prayer = prayers[prayerId];
-    if (prayer && prayer.status === 'MISSED') {
+    if (!prayer) continue;
+
+    if (prayer.status === 'MISSED') {
       totalFine += 15000;
       if (isOverdue) {
         totalFine += 15000;
       }
+    } else if (prayer.status === 'MADE_UP') {
+      totalFine += 15000;
     }
   }
 
@@ -135,6 +139,24 @@ export async function GET(request: NextRequest) {
         },
         { status: 200 }
       );
+    }
+
+    // Deterministically recalculate fines accrued in case overdue threshold was crossed since last write
+    const currentFines = calculateFines(record.date, record.prayers);
+    if (record.finesAccrued !== currentFines) {
+      record.finesAccrued = currentFines;
+      if (typeof record.save === 'function') {
+        if (typeof record.markModified === 'function') {
+          record.markModified('finesAccrued');
+        }
+        await record.save();
+      }
+      if (typeof PrayerRecord.updateOne === 'function') {
+        await PrayerRecord.updateOne(
+          { _id: record._id, userId: auth.user.id },
+          { $set: { finesAccrued: currentFines } }
+        );
+      }
     }
 
     return NextResponse.json(
@@ -368,8 +390,12 @@ export async function POST(request: NextRequest) {
       if (record.finesAccrued !== calculatedFines) {
         record.finesAccrued = calculatedFines;
         if (typeof record.save === 'function') {
+          if (typeof record.markModified === 'function') {
+            record.markModified('finesAccrued');
+          }
           await record.save();
-        } else if (typeof PrayerRecord.updateOne === 'function') {
+        }
+        if (typeof PrayerRecord.updateOne === 'function') {
           await PrayerRecord.updateOne(
             { _id: record._id, userId: auth.user.id },
             { $set: { finesAccrued: calculatedFines } }

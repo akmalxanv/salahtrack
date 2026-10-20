@@ -238,11 +238,15 @@ describe('History Calendar, Date Generation & Progress Regression Suite', () => 
       prayers.asr.status = 'MISSED';
       assert.equal(calculateFines(recordDate, prayers), 30000, 'Overdue MISSED prayer incurs 30,000 UZS fine');
 
-      // 5. Make up Asr: status MADE_UP -> clears fine to 0
+      // 5. Make up Asr: status MADE_UP -> fine drops from 30,000 to 15,000 UZS (overdue fee removed, base 15k remains)
       prayers.asr.status = 'MADE_UP';
-      assert.equal(calculateFines(recordDate, prayers), 0, 'MADE_UP status absolves accrued fine to 0');
+      assert.equal(calculateFines(recordDate, prayers), 15000, 'MADE_UP status caps fine at 15,000 UZS base fine');
 
-      // 6. Reset Fajr back to PENDING: fine remains 0
+      // 6. Historical correction to PRAYED_ON_TIME: clears fine to 0
+      prayers.asr.status = 'PRAYED_ON_TIME';
+      assert.equal(calculateFines(recordDate, prayers), 0, 'PRAYED_ON_TIME status clears fine to 0');
+
+      // 7. Reset Fajr back to PENDING: fine remains 0
       prayers.fajr.status = 'PENDING';
       assert.equal(calculateFines(recordDate, prayers), 0);
     });

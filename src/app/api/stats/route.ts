@@ -4,7 +4,7 @@ import { PrayerRecord } from '../../../models/Prayer.ts';
 import { authenticateRequest } from '../../../lib/auth/index.ts';
 import { calculateStreakFromHistory } from '../../../lib/streak.ts';
 import { getLiturgicalDate } from '../../../lib/prayer-cycle.ts';
-import type { PrayerId } from '../../../types/prayer.ts';
+import type { PrayerId, AccountabilityBreakdownItem } from '../../../types/prayer.ts';
 
 const PRAYER_KEYS: PrayerId[] = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
 
@@ -126,18 +126,11 @@ export async function GET(request: NextRequest) {
     const streakData = calculateStreakFromHistory(recordMap, todayStr);
 
     // 4. Accountability balance & detailed breakdown
-    const fineBreakdown: Array<{
-      date: string;
-      prayerId: PrayerId;
-      baseAmount: number;
-      overdueAmount: number;
-      totalAmount: number;
-      isOverdue: boolean;
-      daysPassed: number;
-    }> = [];
+    const fineBreakdown: AccountabilityBreakdownItem[] = [];
 
     let totalMissedCount = 0;
     let totalOverdueCount = 0;
+    let totalMadeUpCount = 0;
     let totalOutstandingAmount = 0;
     const nowTime = Date.now();
     const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
@@ -149,7 +142,8 @@ export async function GET(request: NextRequest) {
       const isOverdue = diffMs > sevenDaysMs;
 
       for (const p of PRAYER_KEYS) {
-        if (rec.prayers?.[p]?.status === 'MISSED') {
+        const prayerStatus = rec.prayers?.[p]?.status;
+        if (prayerStatus === 'MISSED') {
           totalMissedCount++;
           const base = 15000;
           const overdue = isOverdue ? 15000 : 0;
@@ -165,6 +159,24 @@ export async function GET(request: NextRequest) {
             totalAmount: total,
             isOverdue,
             daysPassed,
+            status: 'MISSED',
+          });
+        } else if (prayerStatus === 'MADE_UP') {
+          totalMadeUpCount++;
+          const base = 15000;
+          const overdue = 0;
+          const total = 15000;
+          totalOutstandingAmount += total;
+
+          fineBreakdown.push({
+            date: rec.date,
+            prayerId: p,
+            baseAmount: base,
+            overdueAmount: overdue,
+            totalAmount: total,
+            isOverdue: false,
+            daysPassed,
+            status: 'MADE_UP',
           });
         }
       }
@@ -208,6 +220,7 @@ export async function GET(request: NextRequest) {
             totalAmount: totalOutstandingAmount,
             totalMissed: totalMissedCount,
             totalOverdue: totalOverdueCount,
+            totalMadeUp: totalMadeUpCount,
             currency: 'UZS',
             baseRatePerPrayer: 15000,
             overdueRatePerPrayer: 15000,

@@ -23,6 +23,8 @@ const SinglePrayerSchema = new Schema<ISinglePrayerRecord>(
   {
     status: {
       type: String,
+      // Canonical user choices: 'PRAYED_ON_TIME', 'MADE_UP', 'MISSED' (plus default 'PENDING').
+      // 'PRAYED_LATE' and 'PRAYED' retained for backwards compatibility with existing documents.
       enum: ['PENDING', 'PRAYED_ON_TIME', 'PRAYED_LATE', 'MISSED', 'MADE_UP', 'PRAYED'],
       default: 'PENDING',
       required: true,

@@ -244,7 +244,7 @@ describe('Prayer Tracking, Historical Corrections & Accountability Engine', () =
       assert.equal(fine, 30000);
     });
 
-    it('clears fine when status changes from MISSED to MADE_UP or PRAYED_ON_TIME', () => {
+    it('assesses exactly 15,000 UZS base fine for MADE_UP prayer even after 7 days (overdue fine is 0 UZS)', () => {
       const overdueDate = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
       const prayers = {
         fajr: { status: 'MADE_UP' as PrayerStatus },
@@ -255,7 +255,122 @@ describe('Prayer Tracking, Historical Corrections & Accountability Engine', () =
       };
 
       const fine = calculateFines(overdueDate, prayers);
-      assert.equal(fine, 0);
+      assert.equal(fine, 15000, 'MADE_UP prayer incurs exactly 15,000 UZS base fine with zero overdue penalty');
+    });
+
+    it('reduces fine from 30,000 UZS to 15,000 UZS when overdue MISSED prayer transitions to MADE_UP', () => {
+      const overdueDate = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+      const prayers = {
+        fajr: { status: 'MISSED' as PrayerStatus },
+        dhuhr: { status: 'PRAYED_ON_TIME' as PrayerStatus },
+        asr: { status: 'PRAYED_ON_TIME' as PrayerStatus },
+        maghrib: { status: 'PRAYED_ON_TIME' as PrayerStatus },
+        isha: { status: 'PRAYED_ON_TIME' as PrayerStatus },
+      };
+
+      // 1. Initial overdue MISSED state -> 30,000 UZS
+      const initialFine = calculateFines(overdueDate, prayers);
+      assert.equal(initialFine, 30000, 'Overdue MISSED prayer has 30,000 UZS fine');
+
+      // 2. Transition from MISSED to MADE_UP -> overdue penalty (15,000 UZS) is removed, base 15,000 UZS remains
+      prayers.fajr.status = 'MADE_UP';
+      const madeUpFine = calculateFines(overdueDate, prayers);
+      assert.equal(madeUpFine, 15000, 'Transition to MADE_UP drops fine from 30,000 to 15,000 UZS');
+    });
+
+    it('clears fine to 0 UZS when status transitions from MADE_UP to PRAYED_ON_TIME', () => {
+      const pastDate = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+      const prayers = {
+        fajr: { status: 'MADE_UP' as PrayerStatus },
+        dhuhr: { status: 'PRAYED_ON_TIME' as PrayerStatus },
+        asr: { status: 'PRAYED_ON_TIME' as PrayerStatus },
+        maghrib: { status: 'PRAYED_ON_TIME' as PrayerStatus },
+        isha: { status: 'PRAYED_ON_TIME' as PrayerStatus },
+      };
+
+      assert.equal(calculateFines(pastDate, prayers), 15000, 'MADE_UP fine begins at 15,000 UZS');
+
+      // Transition from MADE_UP to PRAYED_ON_TIME clears all fines
+      prayers.fajr.status = 'PRAYED_ON_TIME';
+      assert.equal(calculateFines(pastDate, prayers), 0, 'Transition from MADE_UP to PRAYED_ON_TIME clears fine to 0 UZS');
+    });
+
+    it('increases fine from 15,000 UZS to 30,000 UZS when overdue MADE_UP reverts to MISSED', () => {
+      const overdueDate = new Date(Date.now() - 12 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+      const prayers = {
+        fajr: { status: 'MADE_UP' as PrayerStatus },
+        dhuhr: { status: 'PRAYED_ON_TIME' as PrayerStatus },
+        asr: { status: 'PRAYED_ON_TIME' as PrayerStatus },
+        maghrib: { status: 'PRAYED_ON_TIME' as PrayerStatus },
+        isha: { status: 'PRAYED_ON_TIME' as PrayerStatus },
+      };
+
+      assert.equal(calculateFines(overdueDate, prayers), 15000, 'Overdue MADE_UP is capped at 15,000 UZS base');
+
+      // Reverting from MADE_UP to MISSED unfreezes the overdue penalty
+      prayers.fajr.status = 'MISSED';
+      assert.equal(calculateFines(overdueDate, prayers), 30000, 'Reverting to MISSED assesses base (15k) + overdue (15k) = 30,000 UZS');
+    });
+
+    it('strictly evaluates the 7-day overdue threshold boundary', () => {
+      const now = Date.now();
+      const sixDaysAgoStr = new Date(now - 6 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+      const eightDaysAgoStr = new Date(now - 8 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+      // 6 days ago (< 7 days): MISSED is 15,000 UZS (not overdue)
+      const prayers6d = {
+        fajr: { status: 'MISSED' as PrayerStatus },
+        dhuhr: { status: 'PRAYED_ON_TIME' as PrayerStatus },
+        asr: { status: 'PRAYED_ON_TIME' as PrayerStatus },
+        maghrib: { status: 'PRAYED_ON_TIME' as PrayerStatus },
+        isha: { status: 'PRAYED_ON_TIME' as PrayerStatus },
+      };
+      assert.equal(calculateFines(sixDaysAgoStr, prayers6d), 15000, '6 days old MISSED prayer has no overdue fee');
+
+      // 8 days ago (> 7 days): MISSED is 30,000 UZS (overdue)
+      const prayers8d = {
+        fajr: { status: 'MISSED' as PrayerStatus },
+        dhuhr: { status: 'PRAYED_ON_TIME' as PrayerStatus },
+        asr: { status: 'PRAYED_ON_TIME' as PrayerStatus },
+        maghrib: { status: 'PRAYED_ON_TIME' as PrayerStatus },
+        isha: { status: 'PRAYED_ON_TIME' as PrayerStatus },
+      };
+      assert.equal(calculateFines(eightDaysAgoStr, prayers8d), 30000, '8 days old MISSED prayer incurs 15k base + 15k overdue');
+
+      // 8 days ago (> 7 days): MADE_UP is capped at 15,000 UZS
+      prayers8d.fajr.status = 'MADE_UP';
+      assert.equal(calculateFines(eightDaysAgoStr, prayers8d), 15000, '8 days old MADE_UP prayer is strictly capped at 15,000 UZS');
+    });
+
+    it('clears fine to 0 UZS when status transitions to PRAYED_ON_TIME', () => {
+      const overdueDate = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+      const prayers = {
+        fajr: { status: 'MISSED' as PrayerStatus },
+        dhuhr: { status: 'PRAYED_ON_TIME' as PrayerStatus },
+        asr: { status: 'PRAYED_ON_TIME' as PrayerStatus },
+        maghrib: { status: 'PRAYED_ON_TIME' as PrayerStatus },
+        isha: { status: 'PRAYED_ON_TIME' as PrayerStatus },
+      };
+
+      assert.equal(calculateFines(overdueDate, prayers), 30000);
+
+      // Transition to PRAYED_ON_TIME clears all fines for this prayer
+      prayers.fajr.status = 'PRAYED_ON_TIME';
+      assert.equal(calculateFines(overdueDate, prayers), 0, 'PRAYED_ON_TIME status clears fine to 0 UZS');
+    });
+
+    it('verifies legacy PRAYED_LATE incurs 0 UZS fine and counts as completed towards streak/day', () => {
+      const pastDate = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+      const prayers = {
+        fajr: { status: 'PRAYED_LATE' as PrayerStatus },
+        dhuhr: { status: 'PRAYED_ON_TIME' as PrayerStatus },
+        asr: { status: 'PRAYED_ON_TIME' as PrayerStatus },
+        maghrib: { status: 'PRAYED_ON_TIME' as PrayerStatus },
+        isha: { status: 'PRAYED_ON_TIME' as PrayerStatus },
+      };
+
+      const fine = calculateFines(pastDate, prayers);
+      assert.equal(fine, 0, 'Legacy PRAYED_LATE must incur 0 UZS fine');
     });
 
     it('does not accumulate duplicate fines on repeated status edits', () => {
@@ -347,6 +462,116 @@ describe('Prayer Tracking, Historical Corrections & Accountability Engine', () =
       const json = await res.json();
       assert.equal(json.success, false);
       assert.match(json.error, /Forbidden/i);
+    });
+
+    it('rejects non-owner UPDATE with 403 Forbidden', async () => {
+      const userAId = new mongoose.Types.ObjectId();
+      const userBId = new mongoose.Types.ObjectId();
+      const recordId = new mongoose.Types.ObjectId();
+      const tokenUserB = createAuthSession(userBId, 'userb_attacker');
+
+      mockRecords.push({
+        _id: recordId,
+        userId: userAId, // Owned by User A
+        date: '2026-10-01',
+        prayers: {
+          fajr: { status: 'PRAYED_ON_TIME' },
+          dhuhr: { status: 'PENDING' },
+          asr: { status: 'PENDING' },
+          maghrib: { status: 'PENDING' },
+          isha: { status: 'PENDING' },
+        },
+        finesAccrued: 0,
+        save: async function () { return this; },
+      });
+
+      const req = new NextRequest(`http://localhost:3000/api/prayers/${recordId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `salahtrack_session=${tokenUserB}`,
+        },
+        body: JSON.stringify({
+          prayerId: 'fajr',
+          status: 'MISSED',
+        }),
+      });
+
+      const res = await updateSinglePrayerHandler(req, {
+        params: Promise.resolve({ id: recordId.toString() }),
+      });
+
+      assert.equal(res.status, 403);
+      const json = await res.json();
+      assert.equal(json.success, false);
+      assert.match(json.error, /Forbidden/i);
+    });
+
+    it('rejects non-owner DELETE with 403 Forbidden', async () => {
+      const userAId = new mongoose.Types.ObjectId();
+      const userBId = new mongoose.Types.ObjectId();
+      const recordId = new mongoose.Types.ObjectId();
+      const tokenUserB = createAuthSession(userBId, 'userb_attacker');
+
+      mockRecords.push({
+        _id: recordId,
+        userId: userAId, // Owned by User A
+        date: '2026-10-01',
+        prayers: {
+          fajr: { status: 'PRAYED_ON_TIME' },
+          dhuhr: { status: 'PENDING' },
+          asr: { status: 'PENDING' },
+          maghrib: { status: 'PENDING' },
+          isha: { status: 'PENDING' },
+        },
+        finesAccrued: 0,
+        save: async function () { return this; },
+      });
+
+      const req = new NextRequest(`http://localhost:3000/api/prayers/${recordId}`, {
+        method: 'DELETE',
+        headers: {
+          Cookie: `salahtrack_session=${tokenUserB}`,
+        },
+      });
+
+      const res = await deleteSinglePrayerHandler(req, {
+        params: Promise.resolve({ id: recordId.toString() }),
+      });
+
+      assert.equal(res.status, 403);
+      const json = await res.json();
+      assert.equal(json.success, false);
+      assert.match(json.error, /Forbidden/i);
+      // Ensure User A's record was not deleted
+      assert.equal(mockRecords.some((r) => r._id.toString() === recordId.toString()), true);
+    });
+
+    it('strictly ignores client-supplied finesAccrued tampering and recalculates server-side', async () => {
+      const userId = new mongoose.Types.ObjectId();
+      const token = createAuthSession(userId, 'tamperer');
+
+      // Attempt to tamper finesAccrued in POST /api/prayers
+      const reqPost = new NextRequest('http://localhost:3000/api/prayers', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `salahtrack_session=${token}`,
+        },
+        body: JSON.stringify({
+          date: '2026-10-01',
+          prayerId: 'fajr',
+          status: 'MISSED',
+          finesAccrued: 0, // Malicious client attempt to set fine to 0
+        }),
+      });
+
+      const resPost = await createPrayerHandler(reqPost);
+      assert.equal(resPost.status, 200);
+      const jsonPost = await resPost.json();
+      assert.equal(jsonPost.success, true);
+      // Fines must NOT be 0; server calculation must prevail
+      assert.ok(jsonPost.data.finesAccrued >= 15000, 'Server must enforce calculated fines over client payload');
     });
 
     it('allows owner to GET their own prayer record', async () => {
