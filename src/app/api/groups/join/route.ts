@@ -9,7 +9,7 @@ export async function POST(request: NextRequest) {
     const auth = await authenticateRequest(request);
     if (!auth) {
       return NextResponse.json(
-        { success: false, error: 'Unauthorized: Session required' },
+        { success: false, error: 'Unauthorized: Session required', code: 'AUTH_UNAUTHORIZED' },
         { status: 401 }
       );
     }
@@ -19,7 +19,7 @@ export async function POST(request: NextRequest) {
 
     if (!inviteCode || typeof inviteCode !== 'string' || !inviteCode.trim()) {
       return NextResponse.json(
-        { success: false, error: 'Invite code is required' },
+        { success: false, error: 'Invite code is required', code: 'INVALID_INVITE_CODE' },
         { status: 400 }
       );
     }
@@ -31,7 +31,7 @@ export async function POST(request: NextRequest) {
     const group = await Group.findOne({ inviteCode: normalizedCode });
     if (!group) {
       return NextResponse.json(
-        { success: false, error: 'No circle found with this invite code' },
+        { success: false, error: 'No circle found with this invite code', code: 'CIRCLE_NOT_FOUND' },
         { status: 404 }
       );
     }
@@ -43,7 +43,7 @@ export async function POST(request: NextRequest) {
 
     if (isAlreadyMember) {
       return NextResponse.json(
-        { success: false, error: 'You are already a member of this circle' },
+        { success: false, error: 'You are already a member of this circle', code: 'CIRCLE_ALREADY_MEMBER' },
         { status: 400 }
       );
     }
@@ -74,7 +74,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error('POST /api/groups/join error:', error);
     return NextResponse.json(
-      { success: false, error: 'Internal server error' },
+      { success: false, error: 'Internal server error', code: 'INTERNAL_SERVER_ERROR' },
       { status: 500 }
     );
   }

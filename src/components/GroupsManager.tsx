@@ -159,7 +159,7 @@ export default function GroupsManager() {
       });
       const json = await res.json();
       if (!res.ok || !json.success) {
-        setActionError(json.error || 'Failed to create group');
+        setActionError(json.error || t.groups.failedCreate);
         setActionLoading(false);
         return;
       }
@@ -170,7 +170,7 @@ export default function GroupsManager() {
       await fetchGroups();
       setSelectedGroupId(json.data.id);
     } catch {
-      setActionError('Network error while creating group');
+      setActionError(t.groups.networkError);
     } finally {
       setActionLoading(false);
     }
@@ -194,7 +194,7 @@ export default function GroupsManager() {
       });
       const json = await res.json();
       if (!res.ok || !json.success) {
-        setActionError(json.error || 'Failed to join group');
+        setActionError(json.error || t.groups.failedJoin);
         setActionLoading(false);
         return;
       }
@@ -204,7 +204,7 @@ export default function GroupsManager() {
       await fetchGroups();
       setSelectedGroupId(json.data.id);
     } catch {
-      setActionError('Network error while joining group');
+      setActionError(t.groups.networkError);
     } finally {
       setActionLoading(false);
     }
@@ -212,7 +212,7 @@ export default function GroupsManager() {
 
   // Handle Leave Circle
   const handleLeaveGroup = async (groupId: string) => {
-    if (!window.confirm('Are you sure you want to leave this circle?')) return;
+    if (!window.confirm(t.groups.confirmLeave)) return;
 
     try {
       const res = await fetch(`/api/groups/${groupId}`, {
@@ -273,7 +273,7 @@ export default function GroupsManager() {
                 setSelectedGroupDetails(null);
               }}
               className="p-2 rounded-xl text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
-              title="Back to my circles"
+              title={t.groups.backToCircles}
             >
               <ArrowLeft className="w-5 h-5" />
             </button>

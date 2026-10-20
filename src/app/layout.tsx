@@ -4,7 +4,7 @@ import { Inter } from 'next/font/google';
 import './globals.css';
 import { LanguageProvider } from '@/context/LanguageContext';
 import { AuthProvider } from '@/context/AuthContext';
-import { Language } from '@/locales/translations';
+import { Language, isValidLanguage, STORAGE_KEY, FALLBACK_STORAGE_KEY } from '@/locales/translations';
 import AppShell from '@/components/AppShell';
 import { getCurrentSession } from '@/lib/auth/guard';
 
@@ -45,12 +45,8 @@ export default async function RootLayout({
   children: React.ReactNode;
 }) {
   const cookieStore = await cookies();
-  const rawLang = cookieStore.get('namozlarim_lang')?.value || cookieStore.get('salahtrack_lang')?.value;
-  const langCookie = rawLang as Language | undefined;
-  const initialLang: Language =
-    langCookie && (langCookie === 'en' || langCookie === 'ru' || langCookie === 'uz')
-      ? langCookie
-      : 'uz';
+  const rawLang = cookieStore.get(STORAGE_KEY)?.value || cookieStore.get(FALLBACK_STORAGE_KEY)?.value;
+  const initialLang: Language = isValidLanguage(rawLang) ? rawLang : 'uz';
 
   const session = await getCurrentSession();
   const initialUser = session?.user || null;

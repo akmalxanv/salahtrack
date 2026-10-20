@@ -289,7 +289,7 @@ function AccountContent() {
       <div className="border-b border-slate-200 dark:border-slate-800">
         <nav
           className="flex space-x-2 sm:space-x-4 overflow-x-auto no-scrollbar"
-          aria-label="Account Tabs"
+          aria-label={t.account.title}
           role="tablist"
         >
           <button

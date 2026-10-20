@@ -20,12 +20,12 @@ export default function AuthLayout({
         <Link
           href="/"
           className="flex items-center gap-2.5 group transition-transform active:scale-95"
-          aria-label="Namozlarim Home"
+          aria-label={t.appTitle}
         >
           <BrandLogo size={40} priority />
           <div className="flex flex-col">
             <span className="font-bold text-lg leading-tight tracking-tight text-slate-900 dark:text-slate-100">
-              Namozlarim
+              {t.appTitle}
             </span>
             <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
               {t.appSubtitle}

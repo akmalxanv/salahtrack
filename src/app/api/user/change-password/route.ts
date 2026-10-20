@@ -23,7 +23,7 @@ export async function POST(request: NextRequest) {
     const auth = await authenticateRequest(request);
     if (!auth) {
       return NextResponse.json(
-        { success: false, error: 'Unauthorized: Authentication required' },
+        { success: false, error: 'Unauthorized: Authentication required', code: 'AUTH_UNAUTHORIZED' },
         { status: 401 }
       );
     }
@@ -31,7 +31,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json().catch(() => null);
     if (!body || typeof body !== 'object') {
       return NextResponse.json(
-        { success: false, error: 'Invalid request body' },
+        { success: false, error: 'Invalid request body', code: 'VALIDATION_FAILED' },
         { status: 400 }
       );
     }
@@ -40,14 +40,14 @@ export async function POST(request: NextRequest) {
 
     if (!currentPassword || !newPassword || !confirmPassword) {
       return NextResponse.json(
-        { success: false, error: 'Current password, new password, and confirmation are required' },
+        { success: false, error: 'Current password, new password, and confirmation are required', code: 'VALIDATION_FAILED' },
         { status: 400 }
       );
     }
 
     if (newPassword !== confirmPassword) {
       return NextResponse.json(
-        { success: false, error: 'New passwords do not match' },
+        { success: false, error: 'New passwords do not match', code: 'PASSWORDS_DO_NOT_MATCH' },
         { status: 400 }
       );
     }
@@ -56,7 +56,7 @@ export async function POST(request: NextRequest) {
     const passwordValidation = validatePassword(newPassword);
     if (!passwordValidation.isValid) {
       return NextResponse.json(
-        { success: false, error: passwordValidation.errors[0] },
+        { success: false, error: passwordValidation.errors[0], code: 'PASSWORD_TOO_WEAK' },
         { status: 400 }
       );
     }
@@ -67,7 +67,7 @@ export async function POST(request: NextRequest) {
     const user = await User.findById(auth.user.id).select('+passwordHash');
     if (!user) {
       return NextResponse.json(
-        { success: false, error: 'User not found' },
+        { success: false, error: 'User not found', code: 'USER_NOT_FOUND' },
         { status: 404 }
       );
     }
@@ -76,7 +76,7 @@ export async function POST(request: NextRequest) {
     const isCurrentValid = await verifyPassword(currentPassword, user.passwordHash);
     if (!isCurrentValid) {
       return NextResponse.json(
-        { success: false, error: 'Current password does not match' },
+        { success: false, error: 'Current password does not match', code: 'INVALID_CURRENT_PASSWORD' },
         { status: 401 }
       );
     }
@@ -101,7 +101,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error('Error in POST /api/user/change-password:', error);
     return NextResponse.json(
-      { success: false, error: 'An unexpected error occurred while changing password' },
+      { success: false, error: 'An unexpected error occurred while changing password', code: 'INTERNAL_SERVER_ERROR' },
       { status: 500 }
     );
   }

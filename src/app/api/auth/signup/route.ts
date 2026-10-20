@@ -25,6 +25,7 @@ export async function POST(request: NextRequest) {
         {
           success: false,
           error: 'Validation failed',
+          code: 'VALIDATION_FAILED',
           errors: validation.errors,
         },
         { status: 400 }
@@ -47,6 +48,7 @@ export async function POST(request: NextRequest) {
         {
           success: false,
           error: isEmail ? 'Email is already registered' : 'Username is already taken',
+          code: isEmail ? 'DUPLICATE_EMAIL' : 'DUPLICATE_USERNAME',
           field: isEmail ? 'email' : 'username',
         },
         { status: 409 }
@@ -110,6 +112,7 @@ export async function POST(request: NextRequest) {
       {
         success: false,
         error: 'An unexpected error occurred during registration',
+        code: 'INTERNAL_SERVER_ERROR',
       },
       { status: 500 }
     );

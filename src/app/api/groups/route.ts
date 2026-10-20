@@ -10,7 +10,7 @@ export async function GET(request: NextRequest) {
     const auth = await authenticateRequest(request);
     if (!auth) {
       return NextResponse.json(
-        { success: false, error: 'Unauthorized: Session required' },
+        { success: false, error: 'Unauthorized: Session required', code: 'AUTH_UNAUTHORIZED' },
         { status: 401 }
       );
     }
@@ -50,7 +50,7 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     console.error('GET /api/groups error:', error);
     return NextResponse.json(
-      { success: false, error: 'Internal server error' },
+      { success: false, error: 'Internal server error', code: 'INTERNAL_SERVER_ERROR' },
       { status: 500 }
     );
   }
@@ -61,7 +61,7 @@ export async function POST(request: NextRequest) {
     const auth = await authenticateRequest(request);
     if (!auth) {
       return NextResponse.json(
-        { success: false, error: 'Unauthorized: Session required' },
+        { success: false, error: 'Unauthorized: Session required', code: 'AUTH_UNAUTHORIZED' },
         { status: 401 }
       );
     }
@@ -71,7 +71,7 @@ export async function POST(request: NextRequest) {
 
     if (!name || typeof name !== 'string' || name.trim().length < 2 || name.trim().length > 60) {
       return NextResponse.json(
-        { success: false, error: 'Group name must be between 2 and 60 characters' },
+        { success: false, error: 'Group name must be between 2 and 60 characters', code: 'VALIDATION_FAILED' },
         { status: 400 }
       );
     }
@@ -122,7 +122,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error('POST /api/groups error:', error);
     return NextResponse.json(
-      { success: false, error: 'Internal server error' },
+      { success: false, error: 'Internal server error', code: 'INTERNAL_SERVER_ERROR' },
       { status: 500 }
     );
   }

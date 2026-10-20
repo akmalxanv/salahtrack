@@ -419,6 +419,37 @@ export function getCompassDirection(bearing: number): string {
   return directions[index];
 }
 
+const LOCALIZED_DIRECTIONS: Record<'ru' | 'uz' | 'en', string[]> = {
+  en: [
+    'N', 'NNE', 'NE', 'ENE',
+    'E', 'ESE', 'SE', 'SSE',
+    'S', 'SSW', 'SW', 'WSW',
+    'W', 'WNW', 'NW', 'NNW',
+  ],
+  ru: [
+    'С', 'ССВ', 'СВ', 'ВСВ',
+    'В', 'ВЮВ', 'ЮВ', 'ЮЮВ',
+    'Ю', 'ЮЮЗ', 'ЮЗ', 'ЗЮЗ',
+    'З', 'ЗСЗ', 'СЗ', 'ССЗ',
+  ],
+  uz: [
+    'Sh', 'Sh-Shq', 'Sh-Shq', 'Shq-Sh',
+    'Shq', 'Shq-J', 'J-Shq', 'J-Shq',
+    'J', 'J-G‘', 'J-G‘', 'G‘-J-G‘',
+    'G‘', 'G‘-Sh', 'Sh-G‘', 'Sh-G‘',
+  ],
+};
+
+/**
+ * Returns localized 16-point cardinal compass direction abbreviation for uz, ru, and en.
+ */
+export function getLocalizedCompassDirection(bearing: number, lang: 'ru' | 'uz' | 'en' = 'en'): string {
+  const normalized = normalizeAngle(bearing);
+  const list = LOCALIZED_DIRECTIONS[lang] || LOCALIZED_DIRECTIONS.en;
+  const index = Math.round(normalized / 22.5) % 16;
+  return list[index];
+}
+
 /**
  * Convenience helper compiling full geodesic data for a given observer location.
  */

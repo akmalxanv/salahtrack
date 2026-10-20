@@ -25,6 +25,7 @@ import LanguageSelector from '@/components/LanguageSelector';
 import { PrayerItem, PrayerStatus, PrayerId, StreakData, DEFAULT_STREAK } from '@/types/prayer';
 import { calculateStreakTransition, evaluateRolloverStreak } from '@/lib/streak';
 import { validateCoordinates } from '@/lib/qibla';
+import { formatLocalizedDate, formatLocalizedHijriDate } from '@/lib/formatters';
 
 export const DEFAULT_PRAYERS: PrayerItem[] = [
   { id: 'fajr', name: 'Fajr', time: '04:47', endTime: '06:19', status: 'PENDING' },
@@ -240,7 +241,7 @@ export default function HomeDashboard({
         const permission = await Notification.requestPermission();
         setNotificationPermission(permission as 'default' | 'granted' | 'denied');
         if (permission === 'granted') {
-          new Notification('Namozlarim', {
+          new Notification(t.appTitle, {
             body: t.dashboard.notificationsEnabled,
             icon: '/favicon.ico',
           });
@@ -311,24 +312,7 @@ export default function HomeDashboard({
   }, [isMounted, lastSavedDate, prayers, setPrayers, setLastSavedDate, setQazaCount, setStreak]);
 
   // Gregorian date display
-  const gregorianDate = useMemo(() => {
-    if (lang === 'uz') {
-      const uzMonths = [
-        'yanvar', 'fevral', 'mart', 'aprel', 'may', 'iyun',
-        'iyul', 'avgust', 'sentabr', 'oktabr', 'noyabr', 'dekabr'
-      ];
-      const day = now.getDate();
-      const month = uzMonths[now.getMonth()];
-      const year = now.getFullYear();
-      return `${day}-${month}, ${year}-yil`;
-    }
-    const localeMap: Record<string, string> = { ru: 'ru-RU', en: 'en-US' };
-    return new Intl.DateTimeFormat(localeMap[lang] || 'en-US', {
-      day: 'numeric',
-      month: 'long',
-      year: 'numeric',
-    }).format(now);
-  }, [lang, now]);
+  const gregorianDate = useMemo(() => formatLocalizedDate(now, lang), [now, lang]);
 
   // Sync authentic prayer times (location-aware & user calculation method)
   useEffect(() => {
@@ -410,34 +394,7 @@ export default function HomeDashboard({
   }, [isMounted, setPrayers, user?.preferences?.calculationMethod]);
 
   // Hijri Islamic calendar date
-  const hijriDate = useMemo(() => {
-    try {
-      const localeMap: Record<string, string> = {
-        ru: 'ru-RU-u-ca-islamic-civil',
-        en: 'en-US-u-ca-islamic-civil',
-        uz: 'uz-UZ-u-ca-islamic-civil',
-      };
-      const formatted = new Intl.DateTimeFormat(localeMap[lang] || 'en-US-u-ca-islamic-civil', {
-        day: 'numeric',
-        month: 'long',
-        year: 'numeric',
-      }).format(now);
-
-      let cleaned = formatted.trim();
-      if (lang === 'ru') {
-        cleaned = cleaned.replace(/\s*г\.\s*AH\b/i, ' г. хиджры').replace(/\s*AH\b/i, ' г. хиджры');
-      } else if (lang === 'uz') {
-        cleaned = cleaned.replace(/\s*AH\b/i, ' hijriy');
-      } else {
-        cleaned = cleaned.replace(/\s*AH\b/i, ' Hijri');
-      }
-      return cleaned;
-    } catch {
-      if (lang === 'en') return '18 Rabi al-Thani 1448 Hijri';
-      if (lang === 'uz') return '18-Rabiʼus soniy 1448 hijriy';
-      return '18 Раби аль-ахир 1448 г. хиджры';
-    }
-  }, [lang, now]);
+  const hijriDate = useMemo(() => formatLocalizedHijriDate(now, lang), [now, lang]);
 
   // Live Next Prayer Countdown (calculated dynamically from current ticking time)
   const nextPrayer = useMemo(() => calculateNextPrayerCountdown(prayers, now), [prayers, now]);

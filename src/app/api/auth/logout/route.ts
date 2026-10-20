@@ -45,6 +45,7 @@ export async function POST(request: NextRequest) {
       {
         success: false,
         error: 'An unexpected error occurred during logout',
+        code: 'INTERNAL_SERVER_ERROR',
       },
       { status: 500 }
     );

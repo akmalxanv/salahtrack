@@ -17,7 +17,7 @@ import { useLanguage } from '@/context/LanguageContext';
 import {
   calculateQiblaBearing,
   calculateDistanceToKaaba,
-  getCompassDirection,
+  getLocalizedCompassDirection,
   DEFAULT_OBSERVER,
   KAABA_COORDS,
   validateCoordinates,
@@ -70,8 +70,8 @@ export default function QiblaPage() {
   );
 
   const cardinalDir = useMemo(
-    () => getCompassDirection(qiblaBearing),
-    [qiblaBearing]
+    () => getLocalizedCompassDirection(qiblaBearing, lang),
+    [qiblaBearing, lang]
   );
 
   // Decoupled 60fps Device Orientation Hook
@@ -212,7 +212,7 @@ export default function QiblaPage() {
   const handleSelectCustomCoords = useCallback((lat: number, lng: number, label: string) => {
     const validation = validateCoordinates(lat, lng);
     if (!validation.valid || validation.lat === undefined || validation.lng === undefined) {
-      setGeoError(validation.error || t.qibla.invalidCoordinates);
+      setGeoError(t.qibla.invalidCoordinates);
       return;
     }
 
@@ -290,7 +290,7 @@ export default function QiblaPage() {
           <div>
             <p className="font-semibold">{t.qibla.sensorNotSupported}</p>
             <p className="mt-0.5 text-[11px] text-amber-700 dark:text-amber-400">
-              Browser security policies restrict hardware compass orientation and GPS access to secure contexts (HTTPS). Manual rotation slider and city presets are enabled.
+              {t.qibla.insecureContextWarning}
             </p>
           </div>
         </div>

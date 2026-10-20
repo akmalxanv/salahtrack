@@ -26,7 +26,7 @@ export default function Sidebar() {
         </div>
       </div>
 
-      <nav className="space-y-1.5 flex-1" aria-label="Desktop Sidebar Navigation">
+      <nav className="space-y-1.5 flex-1" aria-label={t.appTitle}>
         {NAV_ITEMS.map((item) => {
           const Icon = item.icon;
           const isActive = item.href === '/' ? pathname === '/' : pathname.startsWith(item.href);

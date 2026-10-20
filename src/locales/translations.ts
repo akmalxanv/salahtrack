@@ -1,5 +1,107 @@
 export type Language = 'ru' | 'en' | 'uz';
 
+export const ALLOWED_LANGUAGES = ['uz', 'ru', 'en'] as const;
+
+export const STORAGE_KEY = 'namozlarim_lang';
+export const FALLBACK_STORAGE_KEY = 'salahtrack_lang';
+
+export function isValidLanguage(val: unknown): val is Language {
+  return val === 'en' || val === 'ru' || val === 'uz';
+}
+
+/**
+ * Normalizes and sanitizes untrusted language input.
+ * Rejects prototype pollution attempts, directory traversal, null bytes,
+ * and returns a safe allowlisted Language code.
+ */
+export function sanitizeLanguage(val: unknown, fallback: Language = 'uz'): Language {
+  if (typeof val === 'string') {
+    // Strip null bytes, control characters, and leading/trailing whitespace
+    const clean = val.replace(/[\x00-\x1F\x7F]/g, '').trim().toLowerCase();
+    if (isValidLanguage(clean)) {
+      return clean;
+    }
+    // Safe sub-tag resolution (e.g. 'uz-UZ' -> 'uz', 'ru-RU' -> 'ru', 'en-US' -> 'en')
+    const prefix = clean.split(/[-_]/)[0];
+    if (isValidLanguage(prefix)) {
+      return prefix;
+    }
+  }
+  return isValidLanguage(fallback) ? fallback : 'uz';
+}
+
+/**
+ * Retrieves translation dictionary safely with guaranteed fallback to 'uz'.
+ * Completely prevents prototype pollution (e.g. __proto__, constructor, toString)
+ * and ensures the returned object is valid.
+ */
+export function getTranslations(lang: unknown): TranslationContent {
+  if (isValidLanguage(lang)) {
+    return translations[lang];
+  }
+  return translations.uz;
+}
+
+/**
+ * Safe string template interpolation for translation dictionaries.
+ * Replaces placeholder tokens like {count}, {name}, {days} safely.
+ *
+ * Security Features:
+ * - Strictly verifies own properties via Object.prototype.hasOwnProperty (blocks prototype property lookup)
+ * - Defeats ReDoS using non-backtracking identifier token matching: /\{([a-zA-Z0-9_]+)\}/g
+ * - Strips ASCII control characters from injected values
+ * - Returns sanitized plain string, safe for React Virtual DOM rendering (no dangerouslySetInnerHTML)
+ */
+export function interpolate(
+  template: string,
+  params?: Record<string, string | number | boolean>,
+  printfArg?: string | number
+): string {
+  if (typeof template !== 'string') return '';
+  let result = template;
+  if (params && typeof params === 'object') {
+    result = result.replace(/\{([a-zA-Z0-9_]+)\}/g, (match, key: string) => {
+      if (Object.prototype.hasOwnProperty.call(params, key)) {
+        const val = params[key];
+        if (val === undefined || val === null) return '';
+        return String(val).replace(/[\x00-\x1F\x7F]/g, '');
+      }
+      return match;
+    });
+  }
+  if (printfArg !== undefined && printfArg !== null) {
+    const cleanArg = String(printfArg).replace(/[\x00-\x1F\x7F]/g, '');
+    result = result.replace(/%s/g, cleanArg);
+  }
+  return result;
+}
+
+/**
+ * Strips ASCII control characters and null bytes from dynamic strings.
+ */
+export function safeString(val: unknown): string {
+  if (typeof val !== 'string') return '';
+  return val.replace(/[\x00-\x1F\x7F]/g, '').trim();
+}
+
+export function getStoredLanguage(storage?: { getItem(key: string): string | null }): Language | null {
+  const store = storage || (typeof window !== 'undefined' ? window.localStorage : null);
+  if (!store) return null;
+  try {
+    const primary = store.getItem(STORAGE_KEY);
+    if (isValidLanguage(primary)) {
+      return primary;
+    }
+    const fallback = store.getItem(FALLBACK_STORAGE_KEY);
+    if (isValidLanguage(fallback)) {
+      return fallback;
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
 export interface TranslationContent {
   appTitle: string;
   appSubtitle: string;
@@ -176,7 +278,9 @@ export interface TranslationContent {
     optInStatusOn: string;
     optInStatusOff: string;
     emptyLeaderboard: string;
+    emptyLeaderboardDesc: string;
     youBadge: string;
+    participantsCount: string;
   };
   profile: {
     title: string;
@@ -288,6 +392,9 @@ export interface TranslationContent {
     invalidCoordinates: string;
     destinationKaaba: string;
     resetSensor: string;
+    insecureContextWarning: string;
+    compassQiblaLabel: string;
+    accuracyOptimalTip: string;
   };
   settings: {
     title: string;
@@ -313,6 +420,30 @@ export interface TranslationContent {
     title: string;
     subtitle: string;
     desc: string;
+    prevMonth: string;
+    nextMonth: string;
+    today: string;
+    jumpToToday: string;
+    weekdaysShort: [string, string, string, string, string, string, string];
+    months: [
+      string, string, string, string, string, string,
+      string, string, string, string, string, string
+    ];
+    selectedDateTitle: string;
+    dayCompletion: string;
+    editDayPrayers: string;
+    futureDateDisabled: string;
+    legend: {
+      title: string;
+      perfect: string;
+      partial: string;
+      missed: string;
+      pending: string;
+    };
+    summary: {
+      prayersCompleted: string;
+      onTimeRate: string;
+    };
   };
   groups: {
     title: string;
@@ -335,6 +466,11 @@ export interface TranslationContent {
     tabGroups: string;
     viewCircle: string;
     descriptionPlaceholder: string;
+    confirmLeave: string;
+    backToCircles: string;
+    failedCreate: string;
+    failedJoin: string;
+    networkError: string;
   };
   progress: {
     title: string;
@@ -427,6 +563,32 @@ export interface TranslationContent {
       security: string;
       securityDesc: string;
     };
+  };
+  apiErrors: {
+    AUTH_UNAUTHORIZED: string;
+    AUTH_FORBIDDEN: string;
+    AUTH_SESSION_EXPIRED: string;
+    AUTH_INVALID_CREDENTIALS: string;
+    AUTH_RATE_LIMITED: string;
+    AUTH_INVALID_TOKEN: string;
+    VALIDATION_FAILED: string;
+    DUPLICATE_EMAIL: string;
+    DUPLICATE_USERNAME: string;
+    USER_NOT_FOUND: string;
+    INVALID_CURRENT_PASSWORD: string;
+    PASSWORDS_DO_NOT_MATCH: string;
+    PASSWORD_TOO_WEAK: string;
+    INVALID_LANGUAGE: string;
+    INVALID_DATE: string;
+    FUTURE_DATE_NOT_ALLOWED: string;
+    INVALID_PRAYER_ID: string;
+    INVALID_PRAYER_STATUS: string;
+    CIRCLE_NOT_FOUND: string;
+    CIRCLE_ALREADY_MEMBER: string;
+    CIRCLE_NOT_MEMBER: string;
+    INVALID_INVITE_CODE: string;
+    INTERNAL_SERVER_ERROR: string;
+    RESOURCE_NOT_FOUND: string;
   };
 }
 
@@ -620,7 +782,9 @@ export const translations: Record<Language, TranslationContent> = {
       optInStatusOn: 'Вы участвуете в рейтинге',
       optInStatusOff: 'Вы скрыты из рейтинга',
       emptyLeaderboard: 'В выбранном периоде пока нет данных участников.',
+      emptyLeaderboardDesc: 'Станьте первым участником, включившим отображение в рейтинге за этот период!',
       youBadge: 'Вы',
+      participantsCount: 'участников',
     },
     profile: {
       title: 'Профиль',
@@ -732,6 +896,9 @@ export const translations: Record<Language, TranslationContent> = {
       invalidCoordinates: 'Некорректные координаты (широта: -90..90, долгота: -180..180)',
       destinationKaaba: 'Священная Кааба',
       resetSensor: 'Вернуться к датчику',
+      insecureContextWarning: 'Политики безопасности браузера ограничивают доступ к аппаратному компасу и GPS через незащищенное соединение (только по HTTPS). Включены ручной ползунок вращения и выбор городов.',
+      compassQiblaLabel: 'Кибла',
+      accuracyOptimalTip: '3–5 движений восьмеркой',
     },
     settings: {
       title: 'Настройки',
@@ -754,9 +921,33 @@ export const translations: Record<Language, TranslationContent> = {
       desc: 'Визуализация данных.',
     },
     calendar: {
-      title: 'Календарь',
-      subtitle: 'Сетка намазов по месяцам',
-      desc: 'Календарный вид.',
+      title: 'Календарь намазов',
+      subtitle: 'Ежемесячная история и статус молитв',
+      desc: 'Просмотр и редактирование истории молитв по дням месяца.',
+      prevMonth: 'Предыдущий месяц',
+      nextMonth: 'Следующий месяц',
+      today: 'Сегодня',
+      jumpToToday: 'Вернуться к сегодняшнему дню',
+      weekdaysShort: ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'],
+      months: [
+        'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
+        'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь',
+      ],
+      selectedDateTitle: 'Выбранная дата',
+      dayCompletion: 'Выполнено {completed} из {total}',
+      editDayPrayers: 'Изменить статус молитв',
+      futureDateDisabled: 'Нельзя отмечать молитвы на будущие даты',
+      legend: {
+        title: 'Обозначения',
+        perfect: '5/5 прочитано',
+        partial: 'Частично',
+        missed: 'Есть пропущенные',
+        pending: 'Не заполнено',
+      },
+      summary: {
+        prayersCompleted: 'Прочитано молитв',
+        onTimeRate: 'Вовремя',
+      },
     },
     groups: {
       title: 'Группы подотчетности',
@@ -779,6 +970,11 @@ export const translations: Record<Language, TranslationContent> = {
       tabGroups: 'Мои группы',
       viewCircle: 'Открыть',
       descriptionPlaceholder: 'Например: Семейный круг совместной ответственности',
+      confirmLeave: 'Вы действительно хотите покинуть этот круг?',
+      backToCircles: 'Назад к моим группам',
+      failedCreate: 'Не удалось создать группу',
+      failedJoin: 'Не удалось присоединиться к группе',
+      networkError: 'Ошибка сети при отправке запроса',
     },
     progress: {
       title: 'Личный прогресс',
@@ -871,6 +1067,32 @@ export const translations: Record<Language, TranslationContent> = {
         security: 'Безопасность и сессии',
         securityDesc: 'Смена пароля и управление защищенной серверной сессией',
       },
+    },
+    apiErrors: {
+      AUTH_UNAUTHORIZED: 'Требуется авторизация',
+      AUTH_FORBIDDEN: 'Доступ к данному действию запрещен',
+      AUTH_SESSION_EXPIRED: 'Сессия истекла, пожалуйста, войдите снова',
+      AUTH_INVALID_CREDENTIALS: 'Неверный логин или пароль',
+      AUTH_RATE_LIMITED: 'Слишком много попыток. Пожалуйста, повторите позже',
+      AUTH_INVALID_TOKEN: 'Недействительный или просроченный токен безопасности',
+      VALIDATION_FAILED: 'Введенные данные не прошли проверку',
+      DUPLICATE_EMAIL: 'Этот адрес электронной почты уже зарегистрирован',
+      DUPLICATE_USERNAME: 'Это имя пользователя уже занято',
+      USER_NOT_FOUND: 'Пользователь не найден',
+      INVALID_CURRENT_PASSWORD: 'Текущий пароль указан неверно',
+      PASSWORDS_DO_NOT_MATCH: 'Пароли не совпадают',
+      PASSWORD_TOO_WEAK: 'Пароль слишком простой. Требуется минимум 8 символов, заглавная буква и цифра',
+      INVALID_LANGUAGE: 'Выбран неподдерживаемый язык',
+      INVALID_DATE: 'Неверный формат даты',
+      FUTURE_DATE_NOT_ALLOWED: 'Нельзя отмечать намазы на будущие даты',
+      INVALID_PRAYER_ID: 'Неизвестный намаз',
+      INVALID_PRAYER_STATUS: 'Неверный статус намаза',
+      CIRCLE_NOT_FOUND: 'Круг не найден',
+      CIRCLE_ALREADY_MEMBER: 'Вы уже состоите в этом круге',
+      CIRCLE_NOT_MEMBER: 'Вы не являетесь участником этого круга',
+      INVALID_INVITE_CODE: 'Недействительный код приглашения',
+      INTERNAL_SERVER_ERROR: 'Внутренняя ошибка сервера. Пожалуйста, повторите попытку',
+      RESOURCE_NOT_FOUND: 'Запрашиваемый ресурс не найден',
     },
   },
 
@@ -1063,7 +1285,9 @@ export const translations: Record<Language, TranslationContent> = {
       optInStatusOn: 'You are visible on the leaderboard',
       optInStatusOff: 'You are hidden from the leaderboard',
       emptyLeaderboard: 'No worshipper entries for the selected time period.',
+      emptyLeaderboardDesc: 'Be the first worshipper to opt in and establish consistent prayers for this period.',
       youBadge: 'You',
+      participantsCount: 'worshippers',
     },
     profile: {
       title: 'Profile',
@@ -1175,6 +1399,9 @@ export const translations: Record<Language, TranslationContent> = {
       invalidCoordinates: 'Invalid coordinates (latitude: -90..90, longitude: -180..180)',
       destinationKaaba: 'Holy Kaaba',
       resetSensor: 'Reset to sensor',
+      insecureContextWarning: 'Browser security policies restrict hardware compass orientation and GPS access to secure contexts (HTTPS). Manual rotation slider and city presets are enabled.',
+      compassQiblaLabel: 'Qibla',
+      accuracyOptimalTip: '3–5 figure-8 rotations',
     },
     settings: {
       title: 'Settings',
@@ -1197,9 +1424,33 @@ export const translations: Record<Language, TranslationContent> = {
       desc: 'Analytical views.',
     },
     calendar: {
-      title: 'Calendar',
-      subtitle: 'Monthly prayer grid and status logs',
-      desc: 'Calendar schedule.',
+      title: 'Prayer Calendar',
+      subtitle: 'Monthly prayer history and completion',
+      desc: 'View and update prayer records across the monthly calendar.',
+      prevMonth: 'Previous month',
+      nextMonth: 'Next month',
+      today: 'Today',
+      jumpToToday: 'Jump to today',
+      weekdaysShort: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+      months: [
+        'January', 'February', 'March', 'April', 'May', 'June',
+        'July', 'August', 'September', 'October', 'November', 'December',
+      ],
+      selectedDateTitle: 'Selected Date',
+      dayCompletion: '{completed} of {total} completed',
+      editDayPrayers: 'Update prayer status',
+      futureDateDisabled: 'Cannot log prayers for future dates',
+      legend: {
+        title: 'Legend',
+        perfect: '5/5 completed',
+        partial: 'Partially completed',
+        missed: 'Has missed',
+        pending: 'No data',
+      },
+      summary: {
+        prayersCompleted: 'Prayers completed',
+        onTimeRate: 'On-time rate',
+      },
     },
     groups: {
       title: 'Accountability Circles',
@@ -1222,6 +1473,11 @@ export const translations: Record<Language, TranslationContent> = {
       tabGroups: 'My Circles',
       viewCircle: 'View',
       descriptionPlaceholder: 'e.g. Monthly prayer accountability circle',
+      confirmLeave: 'Are you sure you want to leave this circle?',
+      backToCircles: 'Back to my circles',
+      failedCreate: 'Failed to create group',
+      failedJoin: 'Failed to join group',
+      networkError: 'Network error while sending request',
     },
     progress: {
       title: 'Personal Progress',
@@ -1314,6 +1570,32 @@ export const translations: Record<Language, TranslationContent> = {
         security: 'Security & Sessions',
         securityDesc: 'Change your password and manage secure server sessions',
       },
+    },
+    apiErrors: {
+      AUTH_UNAUTHORIZED: 'Authentication required',
+      AUTH_FORBIDDEN: 'You do not have permission to perform this action',
+      AUTH_SESSION_EXPIRED: 'Session expired, please sign in again',
+      AUTH_INVALID_CREDENTIALS: 'Invalid email/username or password',
+      AUTH_RATE_LIMITED: 'Too many attempts. Please try again later',
+      AUTH_INVALID_TOKEN: 'Invalid or expired security token',
+      VALIDATION_FAILED: 'Input validation failed',
+      DUPLICATE_EMAIL: 'This email is already registered',
+      DUPLICATE_USERNAME: 'This username is already taken',
+      USER_NOT_FOUND: 'User not found',
+      INVALID_CURRENT_PASSWORD: 'Current password is incorrect',
+      PASSWORDS_DO_NOT_MATCH: 'Passwords do not match',
+      PASSWORD_TOO_WEAK: 'Password is too weak. Must be at least 8 chars with mixed case and numbers',
+      INVALID_LANGUAGE: 'Invalid language selection',
+      INVALID_DATE: 'Invalid date format',
+      FUTURE_DATE_NOT_ALLOWED: 'Cannot record prayers for future dates',
+      INVALID_PRAYER_ID: 'Invalid prayer identifier',
+      INVALID_PRAYER_STATUS: 'Invalid prayer status',
+      CIRCLE_NOT_FOUND: 'Circle not found',
+      CIRCLE_ALREADY_MEMBER: 'You are already a member of this circle',
+      CIRCLE_NOT_MEMBER: 'You are not a member of this circle',
+      INVALID_INVITE_CODE: 'Invalid invitation code',
+      INTERNAL_SERVER_ERROR: 'Internal server error. Please try again later',
+      RESOURCE_NOT_FOUND: 'Requested resource not found',
     },
   },
 
@@ -1506,7 +1788,9 @@ export const translations: Record<Language, TranslationContent> = {
       optInStatusOn: 'Siz reytingda qatnashyapsiz',
       optInStatusOff: 'Siz reytingda yashirilgansiz',
       emptyLeaderboard: 'Tanlangan davrda qatnashuvchilar ma’lumoti mavjud emas.',
+      emptyLeaderboardDesc: 'Ushbu davrda reytingda birinchi bo‘lib ishtirok eting va namozlaringizni muntazam ado eting.',
       youBadge: 'Siz',
+      participantsCount: 'qatnashuvchi',
     },
     profile: {
       title: 'Profil',
@@ -1618,6 +1902,9 @@ export const translations: Record<Language, TranslationContent> = {
       invalidCoordinates: 'Noto\'g\'ri koordinatalar (kenglik: -90..90, uzunlik: -180..180)',
       destinationKaaba: 'Muqaddas Ka\'ba',
       resetSensor: 'Sensorga qaytish',
+      insecureContextWarning: 'Brauzer xavfsizlik siyosati apparat kompas datchigi va GPS-dan faqat xavfsiz ulanishda (HTTPS) foydalanishga ruxsat beradi. Qo‘lda burish slayderi va shaharlar ro‘yxati yoqilgan.',
+      compassQiblaLabel: 'Qibla',
+      accuracyOptimalTip: '3–5 marta 8 shaklida aylantirish',
     },
     settings: {
       title: 'Sozlamalar',
@@ -1640,9 +1927,33 @@ export const translations: Record<Language, TranslationContent> = {
       desc: 'Tahliliy ma’lumotlar.',
     },
     calendar: {
-      title: 'Taqvim',
-      subtitle: 'Oylik namoz taqvimi',
-      desc: 'Taqvim ko‘rinishi.',
+      title: 'Namoz taqvimi',
+      subtitle: 'Oylik namozlar tarixi va holati',
+      desc: 'Har bir kun bo‘yicha o‘qilgan namozlarni ko‘rish va belgilash.',
+      prevMonth: 'Oldingi oy',
+      nextMonth: 'Keyingi oy',
+      today: 'Bugun',
+      jumpToToday: 'Bugunga qaytish',
+      weekdaysShort: ['Du', 'Se', 'Chor', 'Pay', 'Ju', 'Sha', 'Yak'],
+      months: [
+        'Yanvar', 'Fevral', 'Mart', 'Aprel', 'May', 'Iyun',
+        'Iyul', 'Avgust', 'Sentabr', 'Oktabr', 'Noyabr', 'Dekabr',
+      ],
+      selectedDateTitle: 'Tanlangan sana',
+      dayCompletion: '{completed} / {total} o‘qildi',
+      editDayPrayers: 'Namoz holatini o‘zgartirish',
+      futureDateDisabled: 'Kelgusi sanalar uchun namoz belgilab bo‘lmaydi',
+      legend: {
+        title: 'Holatlar',
+        perfect: '5/5 to‘liq',
+        partial: 'Qisman',
+        missed: 'Qazo bor',
+        pending: 'Kiritilmagan',
+      },
+      summary: {
+        prayersCompleted: 'O‘qilgan namozlar',
+        onTimeRate: 'O‘z vaqtida',
+      },
     },
     groups: {
       title: 'Mas’uliyat guruhlari',
@@ -1665,6 +1976,11 @@ export const translations: Record<Language, TranslationContent> = {
       tabGroups: 'Mening guruhlarim',
       viewCircle: 'Ko‘rish',
       descriptionPlaceholder: 'masalan, Oylik oilaviy namoz mas’uliyati guruhi',
+      confirmLeave: 'Ushbu guruhdan chiqishni xohlaysizmi?',
+      backToCircles: 'Mening guruhlarimga qaytish',
+      failedCreate: 'Guruh yaratishda xatolik yuz berdi',
+      failedJoin: 'Guruhga qo‘shilishda xatolik yuz berdi',
+      networkError: 'So‘rov yuborishda tarmoq xatoligi yuz berdi',
     },
     progress: {
       title: 'Shaxsiy rivojlanish',
@@ -1758,7 +2074,51 @@ export const translations: Record<Language, TranslationContent> = {
         securityDesc: 'Parolni yangilash va himoyalangan server seanslarini boshqarish',
       },
     },
+    apiErrors: {
+      AUTH_UNAUTHORIZED: 'Avtorizatsiyadan o‘tish talab qilinadi',
+      AUTH_FORBIDDEN: 'Bu amalni bajarish uchun ruxsat yo‘q',
+      AUTH_SESSION_EXPIRED: 'Sessiya muddati tugadi, qaytadan kiring',
+      AUTH_INVALID_CREDENTIALS: 'Login yoki parol noto‘g‘ri',
+      AUTH_RATE_LIMITED: 'Urinishlar soni oshib ketdi. Birozdan so‘ng qayta urinib ko‘ring',
+      AUTH_INVALID_TOKEN: 'Noto‘g‘ri yoki muddati o‘tgan xavfsizlik tokeni',
+      VALIDATION_FAILED: 'Kiritilgan ma’lumotlar tekshiruvdan o‘tmadi',
+      DUPLICATE_EMAIL: 'Bu elektron pochta allaqachon ro‘yxatdan o‘tgan',
+      DUPLICATE_USERNAME: 'Bu foydalanuvchi nomi band',
+      USER_NOT_FOUND: 'Foydalanuvchi topilmadi',
+      INVALID_CURRENT_PASSWORD: 'Joriy parol noto‘g‘ri kiritildi',
+      PASSWORDS_DO_NOT_MATCH: 'Parollar bir-biriga mos kelmadi',
+      PASSWORD_TOO_WEAK: 'Parol juda oddiy. Kamida 8 ta belgi, bosh va kichik harf hamda raqam kiriting',
+      INVALID_LANGUAGE: 'Noto‘g‘ri til kodi tanlandi',
+      INVALID_DATE: 'Sana formati noto‘g‘ri',
+      FUTURE_DATE_NOT_ALLOWED: 'Kelajakdagi sanalarga namoz holatini kiritib bo‘lmaydi',
+      INVALID_PRAYER_ID: 'Noma’lum namoz turi',
+      INVALID_PRAYER_STATUS: 'Noto‘g‘ri namoz holati',
+      CIRCLE_NOT_FOUND: 'Guruh topilmadi',
+      CIRCLE_ALREADY_MEMBER: 'Siz allaqachon bu guruh a’zosisiz',
+      CIRCLE_NOT_MEMBER: 'Siz bu guruh a’zosi emassiz',
+      INVALID_INVITE_CODE: 'Guruhga taklif kodi yaroqsiz',
+      INTERNAL_SERVER_ERROR: 'Serverda ichki xatolik yuz berdi. Qaytadan urinib ko‘ring',
+      RESOURCE_NOT_FOUND: 'So‘ralgan ma’lumot topilmadi',
+    },
   },
 };
 
+// Freeze translations dictionaries to guarantee dictionary immutability and prevent prototype tampering
+Object.freeze(translations.uz);
+Object.freeze(translations.ru);
+Object.freeze(translations.en);
+Object.freeze(translations);
+
 export type TranslationKey = TranslationContent;
+
+/**
+ * Resolves a machine-readable error code or fallback error message to a localized string
+ */
+export function getLocalizedApiError(codeOrMessage: string | undefined, t: TranslationContent): string {
+  if (!codeOrMessage) return t.common.error;
+  if (codeOrMessage in t.apiErrors) {
+    return t.apiErrors[codeOrMessage as keyof typeof t.apiErrors];
+  }
+  return codeOrMessage;
+}
+

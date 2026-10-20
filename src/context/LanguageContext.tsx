@@ -1,36 +1,52 @@
 'use client';
 
 import React, { createContext, useContext, useCallback, useSyncExternalStore, useEffect } from 'react';
-import { translations, TranslationKey, Language } from '@/locales/translations';
+import {
+  translations,
+  TranslationKey,
+  Language,
+  STORAGE_KEY,
+  FALLBACK_STORAGE_KEY,
+  isValidLanguage,
+  getStoredLanguage,
+  getTranslations,
+} from '@/locales/translations';
+
+export { STORAGE_KEY, FALLBACK_STORAGE_KEY, isValidLanguage, getStoredLanguage };
+
+/**
+ * Safely writes language selection to both primary and fallback cookies
+ * with secure flags: Path=/, max-age=1 year, SameSite=Lax, and Secure on HTTPS.
+ */
+export function writeLanguageCookies(lang: Language): void {
+  if (!isValidLanguage(lang) || typeof document === 'undefined') return;
+  try {
+    const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
+    const cookieAttributes = `path=/; max-age=31536000; SameSite=Lax${isHttps ? '; Secure' : ''}`;
+    document.cookie = `${STORAGE_KEY}=${lang}; ${cookieAttributes}`;
+    document.cookie = `${FALLBACK_STORAGE_KEY}=${lang}; ${cookieAttributes}`;
+  } catch {
+    // Sandbox or restricted cookie storage access
+  }
+}
+
+/**
+ * Safely writes language selection to localStorage
+ */
+export function writeLanguageStorage(lang: Language): void {
+  if (!isValidLanguage(lang) || typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(STORAGE_KEY, lang);
+    window.localStorage.setItem(FALLBACK_STORAGE_KEY, lang);
+  } catch {
+    // Private browsing or restricted localStorage quota
+  }
+}
 
 interface LanguageContextType {
   lang: Language;
   setLang: (lang: Language) => void;
   t: TranslationKey;
-}
-
-const STORAGE_KEY = 'namozlarim_lang';
-const FALLBACK_STORAGE_KEY = 'salahtrack_lang';
-
-function isValidLanguage(val: unknown): val is Language {
-  return val === 'en' || val === 'ru' || val === 'uz';
-}
-
-function getStoredLanguage(): Language | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    const primary = window.localStorage.getItem(STORAGE_KEY);
-    if (isValidLanguage(primary)) {
-      return primary;
-    }
-    const fallback = window.localStorage.getItem(FALLBACK_STORAGE_KEY);
-    if (isValidLanguage(fallback)) {
-      return fallback;
-    }
-  } catch {
-    // ignore
-  }
-  return null;
 }
 
 function subscribe(callback: () => void) {
@@ -58,11 +74,14 @@ export const LanguageProvider = ({
 }) => {
   const getSnapshot = useCallback((): Language => {
     const saved = getStoredLanguage();
-    return saved || initialLang;
+    if (saved && isValidLanguage(saved)) {
+      return saved;
+    }
+    return isValidLanguage(initialLang) ? initialLang : 'uz';
   }, [initialLang]);
 
   const getServerSnapshot = useCallback((): Language => {
-    return initialLang;
+    return isValidLanguage(initialLang) ? initialLang : 'uz';
   }, [initialLang]);
 
   const lang = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
@@ -71,25 +90,35 @@ export const LanguageProvider = ({
   useEffect(() => {
     try {
       const saved = getStoredLanguage();
-      const targetLang = saved || initialLang;
-      document.cookie = `${STORAGE_KEY}=${targetLang}; path=/; max-age=31536000; SameSite=Lax`;
-      window.localStorage.setItem(STORAGE_KEY, targetLang);
+      const targetLang: Language =
+        saved && isValidLanguage(saved)
+          ? saved
+          : isValidLanguage(initialLang)
+            ? initialLang
+            : 'uz';
+      writeLanguageCookies(targetLang);
+      writeLanguageStorage(targetLang);
     } catch {
       // ignore
     }
   }, [initialLang]);
 
   const setLang = useCallback((newLang: Language) => {
+    // Strict allowlist validation against prototype pollution & parameter injection
+    if (!isValidLanguage(newLang)) {
+      console.warn(`[Security] Invalid language rejected: ${String(newLang)}`);
+      return;
+    }
     try {
-      window.localStorage.setItem(STORAGE_KEY, newLang);
-      document.cookie = `${STORAGE_KEY}=${newLang}; path=/; max-age=31536000; SameSite=Lax`;
+      writeLanguageStorage(newLang);
+      writeLanguageCookies(newLang);
       window.dispatchEvent(new Event('language-change'));
     } catch (error) {
       console.error('Error saving language:', error);
     }
   }, []);
 
-  const t: TranslationKey = translations[lang] || translations[initialLang] || translations.uz;
+  const t: TranslationKey = getTranslations(lang);
 
   return (
     <LanguageContext.Provider value={{ lang, setLang, t }}>

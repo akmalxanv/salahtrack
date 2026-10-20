@@ -30,6 +30,7 @@ export async function POST(request: NextRequest) {
         {
           success: false,
           error: 'Validation failed',
+          code: 'VALIDATION_FAILED',
           errors: validation.errors,
         },
         { status: 400 }
@@ -46,6 +47,7 @@ export async function POST(request: NextRequest) {
         {
           success: false,
           error: 'Too many password reset requests. Please try again later.',
+          code: 'AUTH_RATE_LIMITED',
           retryAfterSeconds: rateCheck.retryAfterSeconds,
         },
         {
@@ -99,6 +101,7 @@ export async function POST(request: NextRequest) {
       {
         success: false,
         error: 'An unexpected error occurred while processing password reset request',
+        code: 'INTERNAL_SERVER_ERROR',
       },
       { status: 500 }
     );

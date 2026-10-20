@@ -99,7 +99,7 @@ export function CalibrationModal({ isOpen, onClose }: CalibrationModalProps) {
         <div className="w-full text-left bg-slate-50 dark:bg-slate-800/40 rounded-xl p-3 mb-6 text-xs text-slate-500 dark:text-slate-400 space-y-1.5 border border-slate-100 dark:border-slate-800">
           <div className="flex items-center gap-2">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
-            <span>{t.qibla.accuracyOptimal}: 3–5 {t.qibla.calibrateFigure8.toLowerCase()}</span>
+            <span>{t.qibla.accuracyOptimalTip}</span>
           </div>
           <div className="flex items-center gap-2">
             <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import type { SafeUser } from '@/lib/auth/guard';
 
@@ -79,72 +79,78 @@ export function AuthProvider({
     };
   }, [initialUser]);
 
-  const login = async (data: {
-    identifier: string;
-    password: string;
-    rememberMe?: boolean;
-  }): Promise<{ success: boolean; error?: string }> => {
-    try {
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
-        body: JSON.stringify(data),
-      });
+  const login = useCallback(
+    async (data: {
+      identifier: string;
+      password: string;
+      rememberMe?: boolean;
+    }): Promise<{ success: boolean; error?: string }> => {
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify(data),
+        });
 
-      const json = await res.json();
-      if (!res.ok || !json.success) {
+        const json = await res.json();
+        if (!res.ok || !json.success) {
+          return {
+            success: false,
+            error: json.error || 'Authentication failed. Please check your credentials.',
+          };
+        }
+
+        setUser(json.data.user);
+        return { success: true };
+      } catch {
         return {
           success: false,
-          error: json.error || 'Authentication failed. Please check your credentials.',
+          error: 'Network error occurred. Please check your connection.',
         };
       }
+    },
+    []
+  );
 
-      setUser(json.data.user);
-      return { success: true };
-    } catch {
-      return {
-        success: false,
-        error: 'Network error occurred. Please check your connection.',
-      };
-    }
-  };
+  const signup = useCallback(
+    async (data: {
+      name: string;
+      username: string;
+      email: string;
+      password: string;
+      confirmPassword?: string;
+    }): Promise<{ success: boolean; error?: string; errors?: Record<string, string> }> => {
+      try {
+        const res = await fetch('/api/auth/signup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify(data),
+        });
 
-  const signup = async (data: {
-    name: string;
-    username: string;
-    email: string;
-    password: string;
-    confirmPassword?: string;
-  }): Promise<{ success: boolean; error?: string; errors?: Record<string, string> }> => {
-    try {
-      const res = await fetch('/api/auth/signup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
-        body: JSON.stringify(data),
-      });
+        const json = await res.json();
+        if (!res.ok || !json.success) {
+          return {
+            success: false,
+            error: json.error || 'Registration failed.',
+            errors: json.errors,
+          };
+        }
 
-      const json = await res.json();
-      if (!res.ok || !json.success) {
+        setUser(json.data.user);
+        return { success: true };
+      } catch {
         return {
           success: false,
-          error: json.error || 'Registration failed.',
-          errors: json.errors,
+          error: 'Network error occurred. Please check your connection.',
         };
       }
+    },
+    []
+  );
 
-      setUser(json.data.user);
-      return { success: true };
-    } catch {
-      return {
-        success: false,
-        error: 'Network error occurred. Please check your connection.',
-      };
-    }
-  };
-
-  const logout = async () => {
+  const logout = useCallback(async () => {
     try {
       await fetch('/api/auth/logout', {
         method: 'POST',
@@ -157,20 +163,23 @@ export function AuthProvider({
       router.push('/login');
       router.refresh();
     }
-  };
+  }, [router]);
+
+  const contextValue = useMemo(
+    () => ({
+      user,
+      loading,
+      login,
+      signup,
+      logout,
+      refreshUser,
+      setUser,
+    }),
+    [user, loading, login, signup, logout, refreshUser]
+  );
 
   return (
-    <AuthContext.Provider
-      value={{
-        user,
-        loading,
-        login,
-        signup,
-        logout,
-        refreshUser,
-        setUser,
-      }}
-    >
+    <AuthContext.Provider value={contextValue}>
       {children}
     </AuthContext.Provider>
   );

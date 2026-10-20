@@ -104,7 +104,7 @@ export function CityPickerModal({
 
     const validation = validateCoordinates(trimmedLat, trimmedLng);
     if (!validation.valid || validation.lat === undefined || validation.lng === undefined) {
-      setCustomError(validation.error ?? t.qibla.invalidCoordinates);
+      setCustomError(t.qibla.invalidCoordinates);
       return;
     }
 
@@ -269,7 +269,7 @@ export function CityPickerModal({
                           </span>
                         </div>
                         <p className="text-xs text-slate-500 dark:text-slate-400">
-                          {city.country} • Qibla: {city.qiblaBearing}° •{' '}
+                          {city.country} • {t.qibla.compassQiblaLabel}: {city.qiblaBearing}° •{' '}
                           {city.distanceKm.toLocaleString()} {t.qibla.kmUnit}
                         </p>
                       </div>
@@ -319,7 +319,7 @@ export function CityPickerModal({
                         )}
                       </div>
                       <p className="text-xs text-slate-500 dark:text-slate-400">
-                        Qibla: {city.qiblaBearing}° • {city.distanceKm.toLocaleString()}{' '}
+                        {t.qibla.compassQiblaLabel}: {city.qiblaBearing}° • {city.distanceKm.toLocaleString()}{' '}
                         {t.qibla.kmUnit}
                       </p>
                     </div>
@@ -362,7 +362,7 @@ export function CityPickerModal({
                         </span>
                       </div>
                       <p className="text-xs text-slate-500 dark:text-slate-400">
-                        Qibla: {city.qiblaBearing}° • {city.distanceKm.toLocaleString()}{' '}
+                        {t.qibla.compassQiblaLabel}: {city.qiblaBearing}° • {city.distanceKm.toLocaleString()}{' '}
                         {t.qibla.kmUnit}
                       </p>
                     </div>

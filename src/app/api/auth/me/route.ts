@@ -10,6 +10,7 @@ export async function GET(request: NextRequest) {
         {
           success: false,
           error: 'Unauthorized: No active session found',
+          code: 'AUTH_UNAUTHORIZED',
         },
         { status: 401 }
       );
@@ -35,6 +36,7 @@ export async function GET(request: NextRequest) {
       {
         success: false,
         error: 'An unexpected error occurred while fetching session',
+        code: 'INTERNAL_SERVER_ERROR',
       },
       { status: 500 }
     );

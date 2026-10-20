@@ -8,11 +8,8 @@ import {
   History as HistoryIcon,
   BarChart3,
   Scale,
-  Calendar as CalendarIcon,
   CheckCircle2,
-  Clock,
   AlertCircle,
-  RotateCcw,
   Flame,
   Plus,
   Minus,
@@ -20,18 +17,27 @@ import {
   LogIn,
   ChevronRight,
   Award,
-  Pencil,
   Check,
   X,
-  AlertTriangle,
   Info,
 } from 'lucide-react';
 import { useLanguage } from '@/context/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
 import { useLocalStorage, getTodayString } from '@/hooks/useLocalStorage';
-import type { PrayerId, PrayerStatus, AccountabilityBreakdownItem } from '@/types/prayer';
+import type { PrayerId, PrayerStatus, AccountabilityBreakdownItem, PrayerHistoryRecord, PrayerItem } from '@/types/prayer';
+import MonthlyHistoryCalendar from '@/components/calendar/MonthlyHistoryCalendar';
+import { formatCurrency } from '@/lib/formatters';
 
 const PRAYER_IDS: PrayerId[] = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
+
+// Frozen constant object to prevent React hook reference churn & infinite re-render loops
+const DEFAULT_QAZA_BY_PRAYER: Readonly<Record<PrayerId, number>> = Object.freeze({
+  fajr: 0,
+  dhuhr: 0,
+  asr: 0,
+  maghrib: 0,
+  isha: 0,
+});
 
 interface StatsData {
   today: {
@@ -76,204 +82,325 @@ interface StatsData {
   };
 }
 
-interface PrayerHistoryRecord {
-  _id?: string;
-  date: string;
-  prayers: Record<PrayerId, { status: PrayerStatus; prayedAt?: string }>;
-  finesAccrued: number;
-}
-
 type TabType = 'overview' | 'history' | 'analytics' | 'qaza';
 
 function ProgressContent() {
-  const { t } = useLanguage();
+  const { t, lang } = useLanguage();
   const { user } = useAuth();
   const searchParams = useSearchParams();
   const router = useRouter();
 
   const todayStr = useMemo(() => getTodayString(), []);
+  const todayDate = useMemo(() => new Date(), []);
 
-  // Tab State with URL query sync
-  const initialTab = (searchParams.get('tab') as TabType) || 'overview';
-  const [activeTab, setActiveTab] = useState<TabType>(initialTab);
+  // Single Source of Truth for Tab Navigation (derived from searchParams to eliminate state update depth loops)
+  const tabParam = searchParams.get('tab') as TabType | null;
+  const activeTab: TabType =
+    tabParam && ['overview', 'history', 'analytics', 'qaza'].includes(tabParam)
+      ? tabParam
+      : 'overview';
 
-  // Period state for overview/history
-  const [period, setPeriod] = useState<'7d' | '30d' | 'custom'>('7d');
+  const handleTabChange = useCallback(
+    (tab: TabType) => {
+      const params = new URLSearchParams(searchParams.toString());
+      params.set('tab', tab);
+      router.replace(`/progress?${params.toString()}`, { scroll: false });
+    },
+    [router, searchParams]
+  );
+
+  // Calendar View State
+  const [viewYear, setViewYear] = useState(() => todayDate.getFullYear());
+  const [viewMonth, setViewMonth] = useState(() => todayDate.getMonth());
   const [selectedDate, setSelectedDate] = useState(() => getTodayString());
-  const [futureDateError, setFutureDateError] = useState<string | null>(null);
 
-  // Historical editing state
-  const [editingDate, setEditingDate] = useState<string | null>(null);
+  // Historical updating indicators
   const [updatingPrayerKey, setUpdatingPrayerKey] = useState<string | null>(null);
 
   // Data states
   const [stats, setStats] = useState<StatsData | null>(null);
-  const [historyRecords, setHistoryRecords] = useState<PrayerHistoryRecord[]>([]);
+  const [recordsByDate, setRecordsByDate] = useState<Record<string, PrayerHistoryRecord>>({});
   const [loadingStats, setLoadingStats] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
 
-  // Local fallback Qaza state & settled donations
+  // Local fallback Qaza state & settled donations with stable defaults
   const [localQaza, setLocalQaza] = useLocalStorage<number>('salahtrack_qaza_count', 0);
   const [settledDonations, setSettledDonations] = useLocalStorage<number>('salahtrack_settled_donations', 0);
   const [isAddingSettlement, setIsAddingSettlement] = useState(false);
   const [settlementInput, setSettlementInput] = useState('');
 
-  const [qazaByPrayer, setQazaByPrayer] = useLocalStorage<Record<PrayerId, number>>('salahtrack_qaza_prayers', {
-    fajr: 0,
-    dhuhr: 0,
-    asr: 0,
-    maghrib: 0,
-    isha: 0,
-  });
+  const [qazaByPrayer, setQazaByPrayer] = useLocalStorage<Record<PrayerId, number>>(
+    'salahtrack_qaza_prayers',
+    DEFAULT_QAZA_BY_PRAYER
+  );
 
-  const handleTabChange = (tab: TabType) => {
-    setActiveTab(tab);
-    const params = new URLSearchParams(window.location.search);
-    params.set('tab', tab);
-    router.replace(`/progress?${params.toString()}`);
-  };
+  const userId = user?.id;
 
-  // Fetch Stats from API
+  // 1. Fetch Stats from API (re-runs only when userId changes)
   const fetchStats = useCallback(async () => {
-    if (!user) return;
+    if (!userId) return;
     setLoadingStats(true);
     try {
       const res = await fetch('/api/stats');
-      const json = await res.json();
-      if (res.ok && json.success) {
-        setStats(json.data);
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success) {
+          setStats(json.data);
+        }
       }
     } catch (err) {
       console.error('Failed to fetch progress stats:', err);
     } finally {
       setLoadingStats(false);
     }
-  }, [user]);
-
-  // Fetch History from API
-  const fetchHistory = useCallback(async () => {
-    if (!user) return;
-    setLoadingHistory(true);
-    try {
-      const now = new Date(selectedDate);
-      let startDateStr = selectedDate;
-      const endDateStr = selectedDate > todayStr ? todayStr : selectedDate;
-
-      if (period === '7d') {
-        const past = new Date(now.getTime() - 6 * 24 * 60 * 60 * 1000);
-        startDateStr = past.toISOString().split('T')[0];
-      } else if (period === '30d') {
-        const past = new Date(now.getTime() - 29 * 24 * 60 * 60 * 1000);
-        startDateStr = past.toISOString().split('T')[0];
-      }
-
-      const res = await fetch(`/api/prayers/history?startDate=${startDateStr}&endDate=${endDateStr}`);
-      const json = await res.json();
-      if (res.ok && json.success) {
-        setHistoryRecords(json.data.records || []);
-      }
-    } catch (err) {
-      console.error('Failed to fetch history:', err);
-    } finally {
-      setLoadingHistory(false);
-    }
-  }, [user, selectedDate, period, todayStr]);
+  }, [userId]);
 
   useEffect(() => {
-    let ignore = false;
-    async function load() {
-      if (!ignore) {
-        await fetchStats();
-      }
-    }
-    load();
-    return () => {
-      ignore = true;
-    };
-  }, [fetchStats]);
+    if (!userId) return;
+    const abortController = new AbortController();
 
-  useEffect(() => {
-    let ignore = false;
-    async function load() {
-      if (!ignore) {
-        await fetchHistory();
-      }
-    }
-    load();
-    return () => {
-      ignore = true;
-    };
-  }, [fetchHistory]);
-
-  // Handle Date Filter Change with strict Future Date Rejection
-  const handleDateChange = (newDate: string) => {
-    if (newDate > todayStr) {
-      setFutureDateError(t.progress.futureDateError);
-      return;
-    }
-    setFutureDateError(null);
-    setSelectedDate(newDate);
-  };
-
-  // Historical Prayer Correction mutation
-  const handleHistoricalCorrection = async (
-    recordDate: string,
-    prayerId: PrayerId,
-    newStatus: PrayerStatus
-  ) => {
-    if (recordDate > todayStr) {
-      alert(t.progress.futureDateError);
-      return;
-    }
-
-    const key = `${recordDate}-${prayerId}`;
-    setUpdatingPrayerKey(key);
-
-    const normalizedStatus: PrayerStatus = newStatus === 'PRAYED' ? 'PRAYED_ON_TIME' : newStatus;
-
-    // 1. Optimistic update in historyRecords state
-    setHistoryRecords((prev) =>
-      prev.map((rec) => {
-        if (rec.date === recordDate) {
-          return {
-            ...rec,
-            prayers: {
-              ...rec.prayers,
-              [prayerId]: { status: normalizedStatus },
-            },
-          };
+    async function loadStats() {
+      try {
+        const res = await fetch('/api/stats', { signal: abortController.signal });
+        if (res.ok) {
+          const json = await res.json();
+          if (json.success) {
+            setStats(json.data);
+          }
         }
-        return rec;
-      })
-    );
+      } catch (err: unknown) {
+        if ((err as Error)?.name !== 'AbortError') {
+          console.error('Failed to fetch stats:', err);
+        }
+      } finally {
+        setLoadingStats(false);
+      }
+    }
 
-    // 2. Persist to API
-    try {
-      const res = await fetch('/api/prayers', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+    loadStats();
+    return () => {
+      abortController.abort();
+    };
+  }, [userId]);
+
+  // 2. Fetch Monthly History (Dual-Tier: LocalStorage offline/guest fallback + MongoDB Atlas when authenticated)
+  useEffect(() => {
+    const abortController = new AbortController();
+
+    async function loadMonthHistory() {
+      // Step A: Load cached records from localStorage first (0ms instantaneous offline UI)
+      try {
+        const rawHistory = window.localStorage.getItem('salahtrack_history_records');
+        if (rawHistory) {
+          const parsed = JSON.parse(rawHistory);
+          if (parsed && typeof parsed === 'object') {
+            setRecordsByDate((prev) => ({ ...parsed, ...prev }));
+          }
+        }
+
+        // Also check if today's prayers exist in salahtrack_daily_prayers and seed today if missing
+        const rawDaily = window.localStorage.getItem('salahtrack_daily_prayers');
+        if (rawDaily) {
+          const dailyPrayers: PrayerItem[] = JSON.parse(rawDaily);
+          if (Array.isArray(dailyPrayers)) {
+            const todayRecordPr: Record<PrayerId, { status: PrayerStatus }> = {
+              fajr: { status: 'PENDING' },
+              dhuhr: { status: 'PENDING' },
+              asr: { status: 'PENDING' },
+              maghrib: { status: 'PENDING' },
+              isha: { status: 'PENDING' },
+            };
+            dailyPrayers.forEach((p) => {
+              if (p.id && todayRecordPr[p.id]) {
+                todayRecordPr[p.id] = { status: p.status || 'PENDING' };
+              }
+            });
+
+            setRecordsByDate((prev) => {
+              if (!prev[todayStr]) {
+                return {
+                  ...prev,
+                  [todayStr]: {
+                    date: todayStr,
+                    prayers: todayRecordPr,
+                    finesAccrued: 0,
+                  },
+                };
+              }
+              return prev;
+            });
+          }
+        }
+      } catch {
+        // ignore parse errors
+      }
+
+      // Step B: If authenticated, fetch server truth for the selected month
+      if (!userId) return;
+
+      setLoadingHistory(true);
+      try {
+        const monthStr = String(viewMonth + 1).padStart(2, '0');
+        const startOfMonthStr = `${viewYear}-${monthStr}-01`;
+        const lastDay = new Date(viewYear, viewMonth + 1, 0).getDate();
+        const endOfMonthStr = `${viewYear}-${monthStr}-${String(lastDay).padStart(2, '0')}`;
+
+        const res = await fetch(
+          `/api/prayers/history?startDate=${startOfMonthStr}&endDate=${endOfMonthStr}`,
+          { signal: abortController.signal }
+        );
+
+        if (res.ok) {
+          const json = await res.json();
+          if (json.success && Array.isArray(json.data?.records)) {
+            const mappedRecords: Record<string, PrayerHistoryRecord> = {};
+            for (const rec of json.data.records) {
+              if (rec.date) {
+                mappedRecords[rec.date] = rec;
+              }
+            }
+
+            setRecordsByDate((prev) => {
+              const updated = { ...prev, ...mappedRecords };
+              try {
+                window.localStorage.setItem('salahtrack_history_records', JSON.stringify(updated));
+              } catch {
+                // ignore storage limits
+              }
+              return updated;
+            });
+          }
+        }
+      } catch (err: unknown) {
+        if ((err as Error)?.name !== 'AbortError') {
+          console.error('Failed to fetch monthly history:', err);
+        }
+      } finally {
+        setLoadingHistory(false);
+      }
+    }
+
+    loadMonthHistory();
+
+    return () => {
+      abortController.abort();
+    };
+  }, [userId, viewYear, viewMonth, todayStr]);
+
+  // Handle month view change from calendar controls
+  const handleChangeMonth = useCallback((year: number, month: number) => {
+    setViewYear(year);
+    setViewMonth(month);
+  }, []);
+
+  // Handle date selection with future date check
+  const handleSelectDate = useCallback((date: string) => {
+    setSelectedDate(date);
+  }, []);
+
+  // Historical Prayer Correction mutation (Dual-Tier optimistic update + API sync)
+  const handleHistoricalCorrection = useCallback(
+    async (recordDate: string, prayerId: PrayerId, newStatus: PrayerStatus) => {
+      if (recordDate > todayStr) {
+        alert(t.progress.futureDateError);
+        return;
+      }
+
+      const key = `${recordDate}-${prayerId}`;
+      setUpdatingPrayerKey(key);
+
+      const normalizedStatus: PrayerStatus = newStatus === 'PRAYED' ? 'PRAYED_ON_TIME' : newStatus;
+
+      // 1. Optimistic update in recordsByDate state
+      setRecordsByDate((prev) => {
+        const existing = prev[recordDate] || {
           date: recordDate,
-          prayerId,
-          status: normalizedStatus,
-        }),
+          prayers: {
+            fajr: { status: 'PENDING' },
+            dhuhr: { status: 'PENDING' },
+            asr: { status: 'PENDING' },
+            maghrib: { status: 'PENDING' },
+            isha: { status: 'PENDING' },
+          },
+          finesAccrued: 0,
+        };
+
+        const updated: Record<string, PrayerHistoryRecord> = {
+          ...prev,
+          [recordDate]: {
+            ...existing,
+            prayers: {
+              ...existing.prayers,
+              [prayerId]: {
+                ...existing.prayers?.[prayerId],
+                status: normalizedStatus,
+                prayedAt:
+                  normalizedStatus === 'PRAYED_ON_TIME' || normalizedStatus === 'PRAYED_LATE'
+                    ? new Date().toISOString()
+                    : undefined,
+              },
+            },
+          },
+        };
+
+        // Cache update to LocalStorage
+        try {
+          window.localStorage.setItem('salahtrack_history_records', JSON.stringify(updated));
+        } catch {
+          // ignore
+        }
+
+        return updated;
       });
 
-      if (res.ok) {
-        // Refresh stats, streaks, and fines
-        await fetchStats();
-      } else {
-        const data = await res.json().catch(() => null);
-        console.warn('Historical edit failed:', data?.error);
-        await fetchHistory(); // Rollback to server truth
+      // 2. If editing today's date, synchronize with HomeDashboard's salahtrack_daily_prayers
+      if (recordDate === todayStr) {
+        try {
+          const rawDaily = window.localStorage.getItem('salahtrack_daily_prayers');
+          if (rawDaily) {
+            const parsedDaily: PrayerItem[] = JSON.parse(rawDaily);
+            if (Array.isArray(parsedDaily)) {
+              const updatedDaily = parsedDaily.map((item) =>
+                item.id === prayerId ? { ...item, status: normalizedStatus } : item
+              );
+              window.localStorage.setItem('salahtrack_daily_prayers', JSON.stringify(updatedDaily));
+              window.dispatchEvent(new Event('local-storage-update'));
+            }
+          }
+        } catch (err) {
+          console.error('Failed to sync today prayers with daily store:', err);
+        }
       }
-    } catch (err) {
-      console.error('Error updating historical record:', err);
-      await fetchHistory(); // Rollback
-    } finally {
-      setUpdatingPrayerKey(null);
-    }
-  };
+
+      // 3. Persist to MongoDB Atlas if authenticated
+      if (user) {
+        try {
+          const res = await fetch('/api/prayers', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              date: recordDate,
+              prayerId,
+              status: normalizedStatus,
+            }),
+          });
+
+          if (res.ok) {
+            await fetchStats();
+          } else {
+            console.warn('Historical edit persistence warning: server did not confirm 200');
+          }
+        } catch (err) {
+          console.error('Error updating historical record to server:', err);
+        } finally {
+          setUpdatingPrayerKey(null);
+        }
+      } else {
+        setUpdatingPrayerKey(null);
+      }
+    },
+    [todayStr, t.progress.futureDateError, user, fetchStats]
+  );
 
   // Qaza adjustment helpers
   const adjustQaza = (prayer: PrayerId, delta: number) => {
@@ -298,49 +425,12 @@ function ProgressContent() {
     setIsAddingSettlement(false);
   };
 
-  // Status Badge Component
-  const getStatusBadge = (status: PrayerStatus) => {
-    switch (status) {
-      case 'PRAYED_ON_TIME':
-      case 'PRAYED':
-        return (
-          <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
-            <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-            <span>{t.statuses.PRAYED_ON_TIME}</span>
-          </span>
-        );
-      case 'PRAYED_LATE':
-        return (
-          <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950/70 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
-            <Clock className="w-3 h-3 text-amber-600" />
-            <span>{t.statuses.PRAYED_LATE}</span>
-          </span>
-        );
-      case 'MISSED':
-        return (
-          <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-rose-50 dark:bg-rose-950/70 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800">
-            <AlertCircle className="w-3 h-3 text-rose-600" />
-            <span>{t.statuses.MISSED}</span>
-          </span>
-        );
-      case 'MADE_UP':
-        return (
-          <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-sky-50 dark:bg-sky-950/70 text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-800">
-            <RotateCcw className="w-3 h-3 text-sky-600" />
-            <span>{t.statuses.MADE_UP}</span>
-          </span>
-        );
-      case 'PENDING':
-      default:
-        return (
-          <span className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400">
-            <span>{t.statuses.PENDING}</span>
-          </span>
-        );
-    }
-  };
+  // Sorted list of historical records (descending date)
+  const sortedHistoryRecords = useMemo(() => {
+    return Object.values(recordsByDate).sort((a, b) => b.date.localeCompare(a.date));
+  }, [recordsByDate]);
 
-  // Analytical stats breakdown
+  // Analytical stats breakdown computed across historical records
   const prayerBreakdown = useMemo(() => {
     const counts: Record<PrayerId, { onTime: number; late: number; missed: number; total: number }> = {
       fajr: { onTime: 0, late: 0, missed: 0, total: 0 },
@@ -350,7 +440,7 @@ function ProgressContent() {
       isha: { onTime: 0, late: 0, missed: 0, total: 0 },
     };
 
-    for (const record of historyRecords) {
+    for (const record of sortedHistoryRecords) {
       if (!record.prayers) continue;
       for (const p of PRAYER_IDS) {
         const item = record.prayers[p];
@@ -362,7 +452,7 @@ function ProgressContent() {
       }
     }
     return counts;
-  }, [historyRecords]);
+  }, [sortedHistoryRecords]);
 
   // Total Qaza count
   const totalQazaCount = useMemo(() => {
@@ -370,7 +460,7 @@ function ProgressContent() {
   }, [qazaByPrayer, localQaza]);
 
   // Accountability calculations from stats API
-  const accountabilityTotal = stats?.accountability?.totalAmount ?? (totalQazaCount * 15000);
+  const accountabilityTotal = stats?.accountability?.totalAmount ?? totalQazaCount * 15000;
   const accountabilityMissed = stats?.accountability?.totalMissed ?? totalQazaCount;
   const accountabilityOverdue = stats?.accountability?.totalOverdue ?? 0;
   const fineItems = stats?.accountability?.breakdown || [];
@@ -394,7 +484,7 @@ function ProgressContent() {
         {!user && (
           <Link
             href="/login"
-            className="self-start sm:self-auto py-2 px-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-2 shadow-xs transition-colors"
+            className="self-start sm:self-auto py-2 px-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-2 shadow-xs transition-colors cursor-pointer"
           >
             <LogIn className="w-4 h-4" />
             <span>{t.nav.login}</span>
@@ -422,7 +512,7 @@ function ProgressContent() {
       <div className="border-b border-slate-200 dark:border-slate-800">
         <nav
           className="flex space-x-2 sm:space-x-4 overflow-x-auto no-scrollbar"
-          aria-label="Progress Tabs"
+          aria-label={t.progress.title}
           role="tablist"
         >
           <button
@@ -485,7 +575,7 @@ function ProgressContent() {
             <span>{t.progress.tabs.qaza}</span>
             {accountabilityTotal > 0 && (
               <span className="px-1.5 py-0.5 text-[10px] rounded-full bg-rose-100 dark:bg-rose-950/80 text-rose-800 dark:text-rose-300 font-bold">
-                {accountabilityTotal.toLocaleString()} {t.common.currency}
+                {formatCurrency(accountabilityTotal, lang)}
               </span>
             )}
           </button>
@@ -496,7 +586,7 @@ function ProgressContent() {
       {activeTab === 'overview' && (
         loadingStats && !stats ? (
           <div className="py-12 flex justify-center text-slate-400">
-            <Loader2 className="w-8 h-8 animate-spin" />
+            <Loader2 className="w-8 h-8 animate-spin text-emerald-600" />
           </div>
         ) : (
           <div className="space-y-6">
@@ -511,7 +601,7 @@ function ProgressContent() {
                   <span className="text-2xl font-bold text-slate-900 dark:text-slate-100">
                     {stats ? `${stats.weekly.percentage}%` : '0%'}
                   </span>
-                  <span className="text-[11px] text-slate-400">7d</span>
+                  <span className="text-[11px] text-slate-400">{t.progress.periods.d7}</span>
                 </div>
                 <div className="w-full bg-slate-100 dark:bg-slate-800 h-1.5 rounded-full mt-2.5 overflow-hidden">
                   <div
@@ -619,18 +709,14 @@ function ProgressContent() {
                 </button>
               </div>
 
-              {loadingHistory ? (
-                <div className="py-8 flex justify-center text-slate-400">
-                  <Loader2 className="w-6 h-6 animate-spin" />
-                </div>
-              ) : historyRecords.length === 0 ? (
+              {sortedHistoryRecords.length === 0 ? (
                 <p className="text-xs text-slate-400 py-4 text-center">
                   {t.history.noRecords}
                 </p>
               ) : (
                 <div className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {historyRecords.slice(0, 5).map((record) => (
-                    <div key={record._id || record.date} className="py-3 flex items-center justify-between gap-4">
+                  {sortedHistoryRecords.slice(0, 5).map((record) => (
+                    <div key={record.date} className="py-3 flex items-center justify-between gap-4">
                       <div>
                         <p className="text-xs font-semibold text-slate-900 dark:text-slate-100">
                           {record.date}
@@ -670,7 +756,7 @@ function ProgressContent() {
         )
       )}
 
-      {/* ==================== TAB 2: HISTORY & EDITING ==================== */}
+      {/* ==================== TAB 2: INTERACTIVE HISTORY & MONTHLY CALENDAR ==================== */}
       {activeTab === 'history' && (
         <div className="space-y-6">
           {/* Historical notice */}
@@ -681,191 +767,18 @@ function ProgressContent() {
             </div>
           </div>
 
-          {/* Filter Bar */}
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs">
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setPeriod('7d')}
-                className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors cursor-pointer ${
-                  period === '7d'
-                    ? 'bg-emerald-600 text-white shadow-xs'
-                    : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200'
-                }`}
-              >
-                {t.progress.periods.d7}
-              </button>
-              <button
-                type="button"
-                onClick={() => setPeriod('30d')}
-                className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors cursor-pointer ${
-                  period === '30d'
-                    ? 'bg-emerald-600 text-white shadow-xs'
-                    : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200'
-                }`}
-              >
-                {t.progress.periods.d30}
-              </button>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <CalendarIcon className="w-4 h-4 text-slate-400" />
-              <input
-                type="date"
-                max={todayStr}
-                value={selectedDate}
-                onChange={(e) => handleDateChange(e.target.value)}
-                className="px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
-              />
-            </div>
-          </div>
-
-          {futureDateError && (
-            <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 text-rose-700 dark:text-rose-300 text-xs flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 shrink-0" />
-              <span>{futureDateError}</span>
-            </div>
-          )}
-
-          {/* Records View */}
-          {loadingHistory ? (
-            <div className="py-12 flex justify-center text-slate-400">
-              <Loader2 className="w-8 h-8 animate-spin" />
-            </div>
-          ) : historyRecords.length === 0 ? (
-            <div className="p-8 text-center rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
-              <p className="text-sm text-slate-500 dark:text-slate-400">
-                {t.history.noRecords}
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {historyRecords.map((record) => {
-                const isEditing = editingDate === record.date;
-                const completedInRecord = Object.values(record.prayers || {}).filter(
-                  (p) => p.status === 'PRAYED' || p.status === 'PRAYED_ON_TIME'
-                ).length;
-
-                return (
-                  <div
-                    key={record._id || record.date}
-                    className="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900 shadow-xs"
-                  >
-                    <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-100 dark:border-slate-800">
-                      <div>
-                        <span className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                          {record.date} {record.date === todayStr && `(${t.progress.todayBadge})`}
-                        </span>
-                        <span className="text-xs text-slate-400 ml-3">
-                          {completedInRecord} / 5 {t.history.prayersCompleted}
-                        </span>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => setEditingDate(isEditing ? null : record.date)}
-                        className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 cursor-pointer transition-colors"
-                      >
-                        <Pencil className="w-3.5 h-3.5" />
-                        <span>{isEditing ? t.progress.doneEditing : t.progress.editRecord}</span>
-                      </button>
-                    </div>
-
-                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-                      {PRAYER_IDS.map((p) => {
-                        const prayerObj = record.prayers?.[p];
-                        const status: PrayerStatus = prayerObj?.status || 'PENDING';
-                        const updatingKey = `${record.date}-${p}`;
-                        const isUpdating = updatingPrayerKey === updatingKey;
-
-                        return (
-                          <div
-                            key={p}
-                            className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800 space-y-2"
-                          >
-                            <div className="flex items-center justify-between">
-                              <span className="text-xs font-bold text-slate-800 dark:text-slate-200 capitalize block">
-                                {t.prayers[p]}
-                              </span>
-                              {isUpdating && <Loader2 className="w-3 h-3 animate-spin text-emerald-600" />}
-                            </div>
-
-                            <div>{getStatusBadge(status)}</div>
-
-                            {/* Editing buttons when expanded */}
-                            {isEditing && (
-                              <div className="pt-2 border-t border-slate-200/60 dark:border-slate-700/60 grid grid-cols-1 gap-1 text-[10px]">
-                                <button
-                                  type="button"
-                                  disabled={isUpdating}
-                                  onClick={() => handleHistoricalCorrection(record.date, p, 'PRAYED_ON_TIME')}
-                                  className={`p-1 rounded-md text-left font-medium transition-colors cursor-pointer ${
-                                    status === 'PRAYED_ON_TIME' || status === 'PRAYED'
-                                      ? 'bg-emerald-600 text-white'
-                                      : 'hover:bg-emerald-100 dark:hover:bg-emerald-950/50 text-slate-700 dark:text-slate-300'
-                                  }`}
-                                >
-                                  {t.dashboard.markPrayedOnTime}
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={isUpdating}
-                                  onClick={() => handleHistoricalCorrection(record.date, p, 'PRAYED_LATE')}
-                                  className={`p-1 rounded-md text-left font-medium transition-colors cursor-pointer ${
-                                    status === 'PRAYED_LATE'
-                                      ? 'bg-amber-600 text-white'
-                                      : 'hover:bg-amber-100 dark:hover:bg-amber-950/50 text-slate-700 dark:text-slate-300'
-                                  }`}
-                                >
-                                  {t.dashboard.markPrayedLate}
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={isUpdating}
-                                  onClick={() => handleHistoricalCorrection(record.date, p, 'MISSED')}
-                                  className={`p-1 rounded-md text-left font-medium transition-colors cursor-pointer ${
-                                    status === 'MISSED'
-                                      ? 'bg-rose-600 text-white'
-                                      : 'hover:bg-rose-100 dark:hover:bg-rose-950/50 text-slate-700 dark:text-slate-300'
-                                  }`}
-                                >
-                                  {t.dashboard.markMissed}
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={isUpdating}
-                                  onClick={() => handleHistoricalCorrection(record.date, p, 'MADE_UP')}
-                                  className={`p-1 rounded-md text-left font-medium transition-colors cursor-pointer ${
-                                    status === 'MADE_UP'
-                                      ? 'bg-sky-600 text-white'
-                                      : 'hover:bg-sky-100 dark:hover:bg-sky-950/50 text-slate-700 dark:text-slate-300'
-                                  }`}
-                                >
-                                  {t.dashboard.markMadeUp}
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={isUpdating}
-                                  onClick={() => handleHistoricalCorrection(record.date, p, 'PENDING')}
-                                  className={`p-1 rounded-md text-left font-medium transition-colors cursor-pointer ${
-                                    status === 'PENDING'
-                                      ? 'bg-slate-700 text-white dark:bg-slate-600'
-                                      : 'hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300'
-                                  }`}
-                                >
-                                  {t.dashboard.resetToPending}
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+          {/* Interactive Monthly Calendar & Selected Day Inspector */}
+          <MonthlyHistoryCalendar
+            selectedDate={selectedDate}
+            onSelectDate={handleSelectDate}
+            records={recordsByDate}
+            onUpdatePrayerStatus={handleHistoricalCorrection}
+            updatingPrayerKey={updatingPrayerKey}
+            viewYear={viewYear}
+            viewMonth={viewMonth}
+            onChangeMonth={handleChangeMonth}
+            isLoading={loadingHistory}
+          />
         </div>
       )}
 
@@ -960,10 +873,7 @@ function ProgressContent() {
                 {t.accountability.title}
               </span>
               <p className="text-3xl font-black text-white mt-1">
-                {accountabilityTotal.toLocaleString()}{' '}
-                <span className="text-sm font-normal text-slate-400">
-                  {t.common.currency}
-                </span>
+                {formatCurrency(accountabilityTotal, lang)}
               </p>
               <div className="flex items-center gap-4 text-xs text-slate-300 mt-2">
                 <span>{t.progress.missedPrayersCount.replace('{count}', String(accountabilityMissed))}</span>
@@ -989,7 +899,7 @@ function ProgressContent() {
                 {t.progress.settledAmount}
               </span>
               <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-0.5">
-                {(settledDonations || 0).toLocaleString()} <span className="text-xs text-slate-400 font-normal">{t.common.currency}</span>
+                {formatCurrency(settledDonations || 0, lang)}
               </p>
             </div>
 
@@ -1066,14 +976,14 @@ function ProgressContent() {
                         )}
                       </div>
                       <p className="text-[11px] text-slate-400 mt-1">
-                        {item.baseAmount.toLocaleString()} UZS {t.progress.baseFineLabel}
-                        {item.overdueAmount > 0 && ` + ${item.overdueAmount.toLocaleString()} UZS ${t.progress.overdueFineLabel}`}
+                        {formatCurrency(item.baseAmount, lang)} {t.progress.baseFineLabel}
+                        {item.overdueAmount > 0 && ` + ${formatCurrency(item.overdueAmount, lang)} ${t.progress.overdueFineLabel}`}
                       </p>
                     </div>
 
                     <div className="flex items-center gap-3 self-end sm:self-auto">
                       <span className="text-sm font-black text-rose-600 dark:text-rose-400">
-                        {item.totalAmount.toLocaleString()} UZS
+                        {formatCurrency(item.totalAmount, lang)}
                       </span>
                       <button
                         type="button"
@@ -1163,7 +1073,7 @@ export default function ProgressPage() {
     <Suspense
       fallback={
         <div className="py-12 flex justify-center text-slate-400">
-          <Loader2 className="w-8 h-8 animate-spin" />
+          <Loader2 className="w-8 h-8 animate-spin text-emerald-600" />
         </div>
       }
     >

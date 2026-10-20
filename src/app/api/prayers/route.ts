@@ -58,7 +58,7 @@ export async function GET(request: NextRequest) {
     const auth = await authenticateRequest(request);
     if (!auth) {
       return NextResponse.json(
-        { success: false, error: 'Unauthorized: Authentication required' },
+        { success: false, error: 'Unauthorized: Authentication required', code: 'AUTH_UNAUTHORIZED' },
         { status: 401 }
       );
     }
@@ -123,7 +123,7 @@ export async function POST(request: NextRequest) {
     const auth = await authenticateRequest(request);
     if (!auth) {
       return NextResponse.json(
-        { success: false, error: 'Unauthorized: Authentication required' },
+        { success: false, error: 'Unauthorized: Authentication required', code: 'AUTH_UNAUTHORIZED' },
         { status: 401 }
       );
     }
@@ -131,7 +131,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json().catch(() => null);
     if (!body || typeof body !== 'object') {
       return NextResponse.json(
-        { success: false, error: 'Invalid request payload' },
+        { success: false, error: 'Invalid request payload', code: 'VALIDATION_FAILED' },
         { status: 400 }
       );
     }
@@ -141,7 +141,7 @@ export async function POST(request: NextRequest) {
     // Validation
     if (!date || typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       return NextResponse.json(
-        { success: false, error: 'Valid date in YYYY-MM-DD format is required' },
+        { success: false, error: 'Valid date in YYYY-MM-DD format is required', code: 'INVALID_DATE' },
         { status: 400 }
       );
     }
@@ -150,7 +150,7 @@ export async function POST(request: NextRequest) {
     const maxDate = getMaxAllowedDate();
     if (date > maxDate) {
       return NextResponse.json(
-        { success: false, error: 'Cannot log or modify prayer records for future dates' },
+        { success: false, error: 'Cannot log or modify prayer records for future dates', code: 'FUTURE_DATE_NOT_ALLOWED' },
         { status: 400 }
       );
     }
@@ -158,21 +158,21 @@ export async function POST(request: NextRequest) {
     // Check payload type: either single prayer or batch prayers object
     if (!batchPrayers && (!prayerId || !status)) {
       return NextResponse.json(
-        { success: false, error: 'Either (prayerId and status) or prayers map is required' },
+        { success: false, error: 'Either (prayerId and status) or prayers map is required', code: 'VALIDATION_FAILED' },
         { status: 400 }
       );
     }
 
     if (prayerId && !VALID_PRAYER_IDS.includes(prayerId as PrayerId)) {
       return NextResponse.json(
-        { success: false, error: `Invalid prayerId. Must be one of: ${VALID_PRAYER_IDS.join(', ')}` },
+        { success: false, error: `Invalid prayerId. Must be one of: ${VALID_PRAYER_IDS.join(', ')}`, code: 'INVALID_PRAYER_ID' },
         { status: 400 }
       );
     }
 
     if (status && !VALID_STATUSES.includes(status as PrayerStatus)) {
       return NextResponse.json(
-        { success: false, error: `Invalid status. Must be one of: ${VALID_STATUSES.join(', ')}` },
+        { success: false, error: `Invalid status. Must be one of: ${VALID_STATUSES.join(', ')}`, code: 'INVALID_PRAYER_STATUS' },
         { status: 400 }
       );
     }

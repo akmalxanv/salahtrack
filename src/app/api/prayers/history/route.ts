@@ -15,7 +15,7 @@ export async function GET(request: NextRequest) {
     const auth = await authenticateRequest(request);
     if (!auth) {
       return NextResponse.json(
-        { success: false, error: 'Unauthorized: Authentication required' },
+        { success: false, error: 'Unauthorized: Authentication required', code: 'AUTH_UNAUTHORIZED' },
         { status: 401 }
       );
     }
@@ -59,7 +59,7 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     console.error('Error in GET /api/prayers/history:', error);
     return NextResponse.json(
-      { success: false, error: 'Internal Server Error' },
+      { success: false, error: 'Internal Server Error', code: 'INTERNAL_SERVER_ERROR' },
       { status: 500 }
     );
   }

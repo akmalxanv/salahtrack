@@ -69,3 +69,23 @@ export async function verifyPassword(plainText: string, hash: string): Promise<b
     return false;
   }
 }
+
+let cachedDummyHash: string | null = null;
+
+/**
+ * Performs dummy password verification against an in-memory Argon2id hash.
+ * Used during login when a queried user account does not exist in the database,
+ * ensuring constant-time response behavior to defeat side-channel timing attacks.
+ *
+ * @param candidatePassword The plaintext password candidate submitted by caller.
+ */
+export async function verifyDummyPassword(candidatePassword: string): Promise<boolean> {
+  if (!cachedDummyHash) {
+    try {
+      cachedDummyHash = await hashPassword('salahtrack_timing_defense_placeholder');
+    } catch {
+      return false;
+    }
+  }
+  return verifyPassword(candidatePassword, cachedDummyHash);
+}

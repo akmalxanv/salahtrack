@@ -27,6 +27,16 @@ export const DEFAULT_AUTH_RATE_LIMIT: RateLimitConfig = {
   windowMs: 15 * 60 * 1000, // 15 minutes
 };
 
+/**
+ * Standard rate limit for profile & preference updates:
+ * Max 30 updates per 1-minute sliding window.
+ * Prevents automated spamming, connection starvation, and excessive Atlas writes.
+ */
+export const DEFAULT_PROFILE_RATE_LIMIT: RateLimitConfig = {
+  maxAttempts: 30,
+  windowMs: 60 * 1000, // 1 minute
+};
+
 // In-memory store: Map<key, timestamp[]>
 const rateLimitStore = new Map<string, number[]>();
 
@@ -135,6 +145,53 @@ export function recordFailedAttempt(
     allowed,
     remaining,
     retryAfterSeconds,
+  };
+}
+
+/**
+ * Sliding-window rate limiter that records an attempt on every invocation.
+ * Enforces request pacing on write/mutation endpoints (e.g. PUT /api/user/profile).
+ *
+ * @param key Unique identifier key (e.g., ip or ip:userId)
+ * @param config Rate limit configuration (maxAttempts, windowMs)
+ */
+export function consumeRateLimit(
+  key: string,
+  config: RateLimitConfig = DEFAULT_PROFILE_RATE_LIMIT
+): RateLimitResult {
+  const now = Date.now();
+  const rawTimestamps = rateLimitStore.get(key) || [];
+  const activeTimestamps = pruneTimestamps(rawTimestamps, now, config.windowMs);
+
+  const attemptCount = activeTimestamps.length;
+  if (attemptCount >= config.maxAttempts) {
+    const oldestTimestamp = activeTimestamps[0];
+    const expiryTime = oldestTimestamp + config.windowMs;
+    const retryAfterSeconds = Math.max(1, Math.ceil((expiryTime - now) / 1000));
+
+    // Update store with pruned entries to free expired slots
+    rateLimitStore.set(key, activeTimestamps);
+
+    return {
+      allowed: false,
+      remaining: 0,
+      retryAfterSeconds,
+    };
+  }
+
+  // Under limit: record this attempt
+  activeTimestamps.push(now);
+  rateLimitStore.set(key, activeTimestamps);
+
+  if (rateLimitStore.size > MAX_STORE_SIZE) {
+    cleanupExpiredRateLimits(config.windowMs);
+  }
+
+  const newCount = activeTimestamps.length;
+  return {
+    allowed: true,
+    remaining: Math.max(0, config.maxAttempts - newCount),
+    retryAfterSeconds: 0,
   };
 }
 

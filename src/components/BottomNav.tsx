@@ -11,7 +11,7 @@ export default function BottomNav() {
 
   return (
     <div className="md:hidden fixed bottom-0 left-0 right-0 border-t border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md px-2 py-1.5 z-50">
-      <nav className="flex justify-around items-center" aria-label="Mobile Navigation">
+      <nav className="flex justify-around items-center" aria-label={t.appTitle}>
         {NAV_ITEMS.map((item) => {
           const Icon = item.icon;
           const isActive = item.href === '/' ? pathname === '/' : pathname.startsWith(item.href);

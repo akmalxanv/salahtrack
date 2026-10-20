@@ -5,6 +5,7 @@ import { Session } from '../../../../models/Session.ts';
 import {
   validateLoginPayload,
   verifyPassword,
+  verifyDummyPassword,
   checkRateLimit,
   recordFailedAttempt,
   resetRateLimit,
@@ -29,6 +30,7 @@ export async function POST(request: NextRequest) {
         {
           success: false,
           error: 'Validation failed',
+          code: 'VALIDATION_FAILED',
           errors: validation.errors,
         },
         { status: 400 }
@@ -46,6 +48,7 @@ export async function POST(request: NextRequest) {
         {
           success: false,
           error: 'Too many failed login attempts. Please try again later.',
+          code: 'AUTH_RATE_LIMITED',
           retryAfterSeconds: rateCheck.retryAfterSeconds,
         },
         {
@@ -66,12 +69,15 @@ export async function POST(request: NextRequest) {
     }).select('+passwordHash');
 
     if (!user) {
+      // Execute dummy password verification to guarantee constant-time behavior and defeat timing attacks
+      await verifyDummyPassword(password);
       recordFailedAttempt(rateLimitKey);
       // Uniform generic error to prevent account enumeration
       return NextResponse.json(
         {
           success: false,
           error: 'Invalid email/username or password',
+          code: 'AUTH_INVALID_CREDENTIALS',
         },
         { status: 401 }
       );
@@ -87,6 +93,7 @@ export async function POST(request: NextRequest) {
         {
           success: false,
           error: 'Invalid email/username or password',
+          code: 'AUTH_INVALID_CREDENTIALS',
         },
         { status: 401 }
       );
@@ -135,6 +142,7 @@ export async function POST(request: NextRequest) {
       {
         success: false,
         error: 'An unexpected error occurred during authentication',
+        code: 'INTERNAL_SERVER_ERROR',
       },
       { status: 500 }
     );

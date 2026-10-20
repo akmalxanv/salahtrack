@@ -26,6 +26,7 @@ export async function POST(request: NextRequest) {
         {
           success: false,
           error: 'Validation failed',
+          code: 'VALIDATION_FAILED',
           errors: validation.errors,
         },
         { status: 400 }
@@ -51,6 +52,7 @@ export async function POST(request: NextRequest) {
         {
           success: false,
           error: 'Invalid or expired password reset token',
+          code: 'AUTH_INVALID_TOKEN',
         },
         { status: 400 }
       );
@@ -81,6 +83,7 @@ export async function POST(request: NextRequest) {
       {
         success: false,
         error: 'An unexpected error occurred while resetting password',
+        code: 'INTERNAL_SERVER_ERROR',
       },
       { status: 500 }
     );

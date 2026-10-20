@@ -279,7 +279,7 @@ export default function LeaderboardPage() {
 
         <div className="text-xs text-slate-400 flex items-center gap-1">
           <Calendar className="w-3.5 h-3.5" />
-          <span>{totalParticipants} {t.accountability.prayersCount}</span>
+          <span>{totalParticipants} {t.leaderboard.participantsCount}</span>
         </div>
       </div>
 
@@ -296,7 +296,7 @@ export default function LeaderboardPage() {
             {t.leaderboard.emptyLeaderboard}
           </p>
           <p className="text-xs text-slate-400 max-w-sm mx-auto">
-            Be the first worshipper to opt in and establish consistent prayers for this period.
+            {t.leaderboard.emptyLeaderboardDesc}
           </p>
         </div>
       ) : (
