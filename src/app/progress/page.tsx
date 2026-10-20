@@ -985,7 +985,7 @@ function ProgressContent() {
                           <button
                             type="button"
                             onClick={() => handleHistoricalCorrection(item.date, item.prayerId, 'MADE_UP')}
-                            className="min-h-[44px] px-3 py-2 rounded-xl bg-sky-50 dark:bg-sky-950/60 hover:bg-sky-100 dark:hover:bg-sky-900 text-sky-700 dark:text-sky-300 text-xs font-semibold cursor-pointer transition-colors duration-150 flex items-center gap-1.5 focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 focus-visible:outline-none shadow-xs"
+                            className="min-h-[44px] px-3 py-2 rounded-xl bg-sky-50 dark:bg-sky-950/60 hover:bg-sky-100 dark:hover:bg-sky-900 text-sky-800 dark:text-sky-300 border border-sky-200/80 dark:border-sky-800/60 text-xs font-semibold cursor-pointer transition-colors duration-150 flex items-center gap-1.5 focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 focus-visible:outline-none shadow-xs"
                           >
                             <RotateCcw className="w-3.5 h-3.5 shrink-0" />
                             <span>{t.dashboard.markMadeUp}</span>

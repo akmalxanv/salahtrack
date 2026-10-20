@@ -496,13 +496,13 @@ export default function MonthlyHistoryCalendar({
                         disabled={isRowUpdating}
                         onClick={() => onUpdatePrayerStatus(selectedDate, p, 'PRAYED_ON_TIME')}
                         title={t.dashboard.markPrayed}
-                        className={`min-h-[44px] rounded-xl font-semibold flex items-center justify-center gap-1.5 px-2 py-2 text-xs transition-colors duration-150 cursor-pointer focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 focus-visible:outline-none disabled:opacity-50 disabled:cursor-not-allowed ${
+                        className={`min-h-[44px] rounded-xl font-semibold flex items-center justify-center gap-1 sm:gap-1.5 px-1.5 sm:px-2 py-2 text-[11px] sm:text-xs leading-tight transition-colors duration-150 cursor-pointer focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 focus-visible:outline-none disabled:opacity-50 disabled:cursor-not-allowed text-center ${
                           prayerStatus === 'PRAYED_ON_TIME' || prayerStatus === 'PRAYED' || prayerStatus === 'PRAYED_LATE'
-                            ? 'bg-emerald-600 text-white font-bold shadow-xs'
-                            : 'bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700 font-medium'
+                            ? 'bg-emerald-600 text-white font-bold shadow-xs border border-emerald-600 dark:bg-emerald-500 dark:border-emerald-500'
+                            : 'bg-emerald-50 hover:bg-emerald-100/90 text-emerald-800 border border-emerald-200/80 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/60 dark:text-emerald-300 dark:border-emerald-800/60'
                         }`}
                       >
-                        <Check className="w-3.5 h-3.5 shrink-0" />
+                        <Check className="w-3.5 h-3.5 shrink-0 hidden sm:inline" />
                         <span>{t.dashboard.markPrayed}</span>
                       </button>
 
@@ -512,13 +512,13 @@ export default function MonthlyHistoryCalendar({
                         disabled={isRowUpdating}
                         onClick={() => onUpdatePrayerStatus(selectedDate, p, 'MADE_UP')}
                         title={t.dashboard.markMadeUp}
-                        className={`min-h-[44px] rounded-xl font-semibold flex items-center justify-center gap-1.5 px-2 py-2 text-xs transition-colors duration-150 cursor-pointer focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 focus-visible:outline-none disabled:opacity-50 disabled:cursor-not-allowed ${
+                        className={`min-h-[44px] rounded-xl font-semibold flex items-center justify-center gap-1 sm:gap-1.5 px-1.5 sm:px-2 py-2 text-[11px] sm:text-xs leading-tight transition-colors duration-150 cursor-pointer focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 focus-visible:outline-none disabled:opacity-50 disabled:cursor-not-allowed text-center ${
                           prayerStatus === 'MADE_UP'
-                            ? 'bg-sky-600 text-white font-bold shadow-xs'
-                            : 'bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700 font-medium'
+                            ? 'bg-sky-600 text-white font-bold shadow-xs border border-sky-600 dark:bg-sky-500 dark:border-sky-500'
+                            : 'bg-sky-50 hover:bg-sky-100/90 text-sky-800 border border-sky-200/80 dark:bg-sky-950/40 dark:hover:bg-sky-900/60 dark:text-sky-300 dark:border-sky-800/60'
                         }`}
                       >
-                        <RotateCcw className="w-3.5 h-3.5 shrink-0" />
+                        <RotateCcw className="w-3.5 h-3.5 shrink-0 hidden sm:inline" />
                         <span>{t.dashboard.markMadeUp}</span>
                       </button>
 
@@ -528,13 +528,13 @@ export default function MonthlyHistoryCalendar({
                         disabled={isRowUpdating}
                         onClick={() => onUpdatePrayerStatus(selectedDate, p, 'MISSED')}
                         title={t.dashboard.markMissed}
-                        className={`min-h-[44px] rounded-xl font-semibold flex items-center justify-center gap-1.5 px-2 py-2 text-xs transition-colors duration-150 cursor-pointer focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 focus-visible:outline-none disabled:opacity-50 disabled:cursor-not-allowed ${
+                        className={`min-h-[44px] rounded-xl font-semibold flex items-center justify-center gap-1 sm:gap-1.5 px-1.5 sm:px-2 py-2 text-[11px] sm:text-xs leading-tight transition-colors duration-150 cursor-pointer focus-visible:ring-2 focus-visible:ring-rose-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 focus-visible:outline-none disabled:opacity-50 disabled:cursor-not-allowed text-center ${
                           prayerStatus === 'MISSED'
-                            ? 'bg-rose-600 text-white font-bold shadow-xs'
-                            : 'bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700 font-medium'
+                            ? 'bg-rose-600 text-white font-bold shadow-xs border border-rose-600 dark:bg-rose-500 dark:border-rose-500'
+                            : 'bg-rose-50 hover:bg-rose-100/90 text-rose-800 border border-rose-200/80 dark:bg-rose-950/40 dark:hover:bg-rose-900/60 dark:text-rose-300 dark:border-rose-800/60'
                         }`}
                       >
-                        <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                        <AlertCircle className="w-3.5 h-3.5 shrink-0 hidden sm:inline" />
                         <span>{t.dashboard.markMissed}</span>
                       </button>
                     </div>

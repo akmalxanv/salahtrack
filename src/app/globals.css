@@ -1,6 +1,7 @@
 @import "tailwindcss";
 
 @theme {
+  --breakpoint-xs: 380px;
   --color-primary: #059669;
   --color-primary-hover: #047857;
   --color-brand-emerald: #10b981;
