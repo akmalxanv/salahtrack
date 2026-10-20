@@ -22,6 +22,52 @@ function subscribe(callback: () => void) {
   };
 }
 
+const SSR_COOKIE_KEYS = new Set([
+  'salahtrack_daily_prayers',
+  'namozlarim_daily_prayers',
+  'salahtrack_last_active_date',
+  'salahtrack_lang',
+  'salahtrack_theme',
+]);
+const MAX_COOKIE_BYTE_LENGTH = 2048;
+
+function formatCookieValue(key: string, rawSerialized: string): string {
+  if (typeof window === 'undefined') return rawSerialized;
+  if (key === 'salahtrack_daily_prayers' || key === 'namozlarim_daily_prayers') {
+    try {
+      const parsed = JSON.parse(rawSerialized);
+      if (Array.isArray(parsed)) {
+        const rawDate = window.localStorage.getItem('salahtrack_last_active_date');
+        const activeDate = rawDate ? JSON.parse(rawDate) : null;
+        if (activeDate) {
+          return JSON.stringify({ date: activeDate, prayers: parsed });
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return rawSerialized;
+}
+
+function syncCookieIfPermitted(key: string, value: string): void {
+  if (typeof window === 'undefined') return;
+  // Strict SSR cookie whitelist: only small layout/hydration keys may be mirrored to cookies
+  if (!SSR_COOKIE_KEYS.has(key)) return;
+
+  const safeKey = key.replace(/[^a-zA-Z0-9_\-]/g, '');
+  if (!safeKey) return;
+
+  const cookieVal = formatCookieValue(key, value);
+  const encoded = encodeURIComponent(cookieVal);
+  // Protect against HTTP 431 Request Header Fields Too Large
+  if (encoded.length > MAX_COOKIE_BYTE_LENGTH) return;
+
+  const isSecure = window.location.protocol === 'https:';
+  const secureAttr = isSecure ? '; Secure' : '';
+  document.cookie = `${safeKey}=${encoded}; path=/; max-age=31536000; SameSite=Lax${secureAttr}`;
+}
+
 export function useLocalStorage<T>(key: string, initialValue: T) {
   const isMounted = useIsMounted();
 
@@ -49,7 +95,11 @@ export function useLocalStorage<T>(key: string, initialValue: T) {
   const storedValue = useMemo<T>(() => {
     if (rawValue === null) return initialValue;
     try {
-      return JSON.parse(rawValue) as T;
+      const parsed = JSON.parse(rawValue);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && '__proto__' in parsed) {
+        delete (parsed as Record<string, unknown>).__proto__;
+      }
+      return parsed as T;
     } catch {
       return initialValue;
     }
@@ -59,13 +109,10 @@ export function useLocalStorage<T>(key: string, initialValue: T) {
   useEffect(() => {
     if (typeof window === 'undefined') return;
     try {
-      const isSecure = window.location.protocol === 'https:';
-      const secureAttr = isSecure ? '; Secure' : '';
       const item = window.localStorage.getItem(key);
-      if (item !== null) {
-        document.cookie = `${key}=${encodeURIComponent(item)}; path=/; max-age=31536000; SameSite=Lax${secureAttr}`;
-      } else if (initialValue !== undefined && initialValue !== null) {
-        document.cookie = `${key}=${encodeURIComponent(JSON.stringify(initialValue))}; path=/; max-age=31536000; SameSite=Lax${secureAttr}`;
+      const rawVal = item !== null ? item : (initialValue !== undefined && initialValue !== null ? JSON.stringify(initialValue) : null);
+      if (rawVal !== null) {
+        syncCookieIfPermitted(key, rawVal);
       }
     } catch {
       // ignore
@@ -87,9 +134,7 @@ export function useLocalStorage<T>(key: string, initialValue: T) {
         const nextValue = valueOrFn instanceof Function ? valueOrFn(currentParsed) : valueOrFn;
         const serialized = JSON.stringify(nextValue);
         window.localStorage.setItem(key, serialized);
-        const isSecure = typeof window !== 'undefined' && window.location.protocol === 'https:';
-        const secureAttr = isSecure ? '; Secure' : '';
-        document.cookie = `${key}=${encodeURIComponent(serialized)}; path=/; max-age=31536000; SameSite=Lax${secureAttr}`;
+        syncCookieIfPermitted(key, serialized);
         window.dispatchEvent(new Event('local-storage-update'));
       } catch (error) {
         console.error(`Error saving to localStorage key "${key}":`, error);

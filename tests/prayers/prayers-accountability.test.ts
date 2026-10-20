@@ -50,6 +50,77 @@ function setupPrayerMocks() {
     return mockRecords.find((r) => r.userId.toString() === query.userId?.toString() && r.date === query.date) || null;
   };
 
+  prayerModel.findOneAndUpdate = async (
+    filter: { userId?: mongoose.Types.ObjectId | string; date?: string },
+    update: { $set?: Record<string, unknown>; $setOnInsert?: Record<string, unknown> },
+    options?: { upsert?: boolean; new?: boolean }
+  ) => {
+    const userIdStr = filter.userId?.toString();
+    let record = mockRecords.find(
+      (r) => r.userId.toString() === userIdStr && r.date === filter.date
+    );
+
+    if (!record) {
+      if (!options?.upsert) return null;
+      record = {
+        _id: new mongoose.Types.ObjectId(),
+        userId: new mongoose.Types.ObjectId(userIdStr),
+        date: filter.date as string,
+        prayers: {
+          fajr: { status: 'PENDING' },
+          dhuhr: { status: 'PENDING' },
+          asr: { status: 'PENDING' },
+          maghrib: { status: 'PENDING' },
+          isha: { status: 'PENDING' },
+        },
+        finesAccrued: 0,
+        save: async function () { return this; },
+      };
+      if (update.$setOnInsert) {
+        for (const [key, val] of Object.entries(update.$setOnInsert)) {
+          if (key.startsWith('prayers.')) {
+            const pId = key.split('.')[1] as PrayerId;
+            record.prayers[pId] = { ...(val as Record<string, unknown>) } as unknown as MockRecordDoc['prayers'][PrayerId];
+          }
+        }
+      }
+      mockRecords.push(record);
+    }
+
+    if (update.$set) {
+      for (const [key, val] of Object.entries(update.$set)) {
+        if (key.startsWith('prayers.')) {
+          const parts = key.split('.');
+          const pId = parts[1] as PrayerId;
+          const prop = parts[2];
+          if (!record.prayers[pId]) {
+            record.prayers[pId] = { status: 'PENDING' };
+          }
+          if (prop) {
+            (record.prayers[pId] as unknown as Record<string, unknown>)[prop] = val;
+          } else {
+            record.prayers[pId] = val as unknown as MockRecordDoc['prayers'][PrayerId];
+          }
+        } else if (key === 'finesAccrued') {
+          record.finesAccrued = val as number;
+        }
+      }
+    }
+
+    return record;
+  };
+
+  prayerModel.updateOne = async (
+    filter: { _id?: mongoose.Types.ObjectId },
+    update: { $set?: Record<string, unknown> }
+  ) => {
+    const record = mockRecords.find((r) => r._id.toString() === filter._id?.toString());
+    if (record && update.$set) {
+      Object.assign(record, update.$set);
+    }
+    return { matchedCount: record ? 1 : 0, modifiedCount: record ? 1 : 0 };
+  };
+
   prayerModel.findById = async (id: mongoose.Types.ObjectId | string) => {
     return mockRecords.find((r) => r._id.toString() === id.toString()) || null;
   };
@@ -427,4 +498,156 @@ describe('Prayer Tracking, Historical Corrections & Accountability Engine', () =
       assert.equal(mockRecords.length, 0);
     });
   });
+
+  describe('5. Atomic Upsert, Concurrency & Field Preservation', () => {
+    it('atomically upserts prayer and preserves notes when omitted in subsequent update', async () => {
+      const userId = new mongoose.Types.ObjectId();
+      const token = createAuthSession(userId);
+
+      // 1. Initial prayer log with notes
+      const req1 = new NextRequest('http://localhost:3000/api/prayers', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `salahtrack_session=${token}`,
+        },
+        body: JSON.stringify({
+          date: '2026-10-05',
+          prayerId: 'fajr',
+          status: 'PRAYED_ON_TIME',
+          notes: 'Prayed at Central Mosque',
+        }),
+      });
+
+      const res1 = await createPrayerHandler(req1);
+      assert.equal(res1.status, 200);
+      const json1 = await res1.json();
+      assert.equal(json1.data.prayers.fajr.notes, 'Prayed at Central Mosque');
+
+      // 2. Subsequent status toggle WITHOUT sending notes field
+      const req2 = new NextRequest('http://localhost:3000/api/prayers', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `salahtrack_session=${token}`,
+        },
+        body: JSON.stringify({
+          date: '2026-10-05',
+          prayerId: 'fajr',
+          status: 'PRAYED_LATE',
+          // notes is undefined!
+        }),
+      });
+
+      const res2 = await createPrayerHandler(req2);
+      assert.equal(res2.status, 200);
+      const json2 = await res2.json();
+      assert.equal(json2.data.prayers.fajr.status, 'PRAYED_LATE');
+      // Notes must NOT be wiped out
+      assert.equal(json2.data.prayers.fajr.notes, 'Prayed at Central Mosque');
+    });
+
+    it('PUT /api/prayers/[id] preserves existing notes when not provided in request body', async () => {
+      const userId = new mongoose.Types.ObjectId();
+      const recordId = new mongoose.Types.ObjectId();
+      const token = createAuthSession(userId);
+
+      mockRecords.push({
+        _id: recordId,
+        userId,
+        date: '2026-10-06',
+        prayers: {
+          fajr: { status: 'PRAYED_ON_TIME', notes: 'Keep this note' },
+          dhuhr: { status: 'PENDING' },
+          asr: { status: 'PENDING' },
+          maghrib: { status: 'PENDING' },
+          isha: { status: 'PENDING' },
+        },
+        finesAccrued: 0,
+        save: async function () { return this; },
+      });
+
+      const req = new NextRequest(`http://localhost:3000/api/prayers/${recordId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `salahtrack_session=${token}`,
+        },
+        body: JSON.stringify({
+          prayerId: 'fajr',
+          status: 'PRAYED_LATE',
+          // notes omitted
+        }),
+      });
+
+      const res = await updateSinglePrayerHandler(req, {
+        params: Promise.resolve({ id: recordId.toString() }),
+      });
+
+      assert.equal(res.status, 200);
+      const json = await res.json();
+      assert.equal(json.data.prayers.fajr.notes, 'Keep this note');
+    });
+
+    it('handles concurrency duplicate key code 11000 retry gracefully', async () => {
+      const userId = new mongoose.Types.ObjectId();
+      const token = createAuthSession(userId);
+
+      let callCount = 0;
+      const prayerModel = PrayerRecord as unknown as Record<string, unknown>;
+      const originalFindOneAndUpdate = prayerModel.findOneAndUpdate as (
+        ...args: unknown[]
+      ) => Promise<unknown>;
+
+      // Simulate first call failing with E11000 duplicate key race
+      prayerModel.findOneAndUpdate = async (...args: unknown[]) => {
+        callCount++;
+        if (callCount === 1) {
+          // Simulate concurrent request having created the document
+          mockRecords.push({
+            _id: new mongoose.Types.ObjectId(),
+            userId,
+            date: '2026-10-07',
+            prayers: {
+              fajr: { status: 'PENDING' },
+              dhuhr: { status: 'PENDING' },
+              asr: { status: 'PENDING' },
+              maghrib: { status: 'PENDING' },
+              isha: { status: 'PENDING' },
+            },
+            finesAccrued: 0,
+            save: async function () { return this; },
+          });
+          const err = new Error('E11000 duplicate key error collection') as Error & { code: number };
+          err.code = 11000;
+          throw err;
+        }
+        return originalFindOneAndUpdate.apply(prayerModel, args);
+      };
+
+      const req = new NextRequest('http://localhost:3000/api/prayers', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `salahtrack_session=${token}`,
+        },
+        body: JSON.stringify({
+          date: '2026-10-07',
+          prayerId: 'asr',
+          status: 'PRAYED_ON_TIME',
+        }),
+      });
+
+      const res = await createPrayerHandler(req);
+      assert.equal(res.status, 200);
+      const json = await res.json();
+      assert.equal(json.success, true);
+      assert.equal(json.data.prayers.asr.status, 'PRAYED_ON_TIME');
+      assert.equal(callCount, 2, 'Must have retried on E11000');
+
+      // Restore mock
+      prayerModel.findOneAndUpdate = originalFindOneAndUpdate;
+    });
+  });
 });
+

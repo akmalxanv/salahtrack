@@ -39,6 +39,46 @@ const CANONICAL_PRAYER_NAMES: Record<Language, Record<PrayerId, string>> = {
   },
 };
 
+interface ParsedDateParts {
+  year: number;
+  monthIndex: number;
+  day: number;
+}
+
+function parseDateInput(dateInput: Date | string | unknown): ParsedDateParts | null {
+  if (!dateInput) return null;
+
+  if (typeof dateInput === 'string') {
+    const trimmed = dateInput.trim();
+    const match = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (match) {
+      const year = parseInt(match[1], 10);
+      const monthIndex = parseInt(match[2], 10) - 1;
+      const day = parseInt(match[3], 10);
+      if (!isNaN(year) && !isNaN(monthIndex) && !isNaN(day) && monthIndex >= 0 && monthIndex <= 11 && day >= 1 && day <= 31) {
+        return { year, monthIndex, day };
+      }
+    }
+    const d = new Date(trimmed);
+    if (isNaN(d.getTime())) return null;
+    return {
+      year: d.getFullYear(),
+      monthIndex: d.getMonth(),
+      day: d.getDate(),
+    };
+  }
+
+  if (dateInput instanceof Date && !isNaN(dateInput.getTime())) {
+    return {
+      year: dateInput.getFullYear(),
+      monthIndex: dateInput.getMonth(),
+      day: dateInput.getDate(),
+    };
+  }
+
+  return null;
+}
+
 /**
  * Format Gregorian date into localized string
  * - uz: "20-oktabr, 2026-yil"
@@ -46,13 +86,13 @@ const CANONICAL_PRAYER_NAMES: Record<Language, Record<PrayerId, string>> = {
  * - en: "October 20, 2026"
  */
 export function formatLocalizedDate(dateInput: Date | string, lang: Language = 'uz'): string {
-  const date = typeof dateInput === 'string' ? new Date(dateInput) : dateInput;
-  if (isNaN(date.getTime())) return '';
+  const parts = parseDateInput(dateInput);
+  if (!parts) return '';
+
+  const { year, monthIndex, day } = parts;
 
   if (lang === 'uz') {
-    const day = date.getDate();
-    const month = UZ_MONTHS[date.getMonth()];
-    const year = date.getFullYear();
+    const month = UZ_MONTHS[monthIndex] || '';
     return `${day}-${month}, ${year}-yil`;
   }
 
@@ -62,11 +102,18 @@ export function formatLocalizedDate(dateInput: Date | string, lang: Language = '
     uz: 'uz-UZ',
   };
 
-  return new Intl.DateTimeFormat(localeMap[lang] || 'en-US', {
+  const safeLocale = (lang in localeMap && Object.prototype.hasOwnProperty.call(localeMap, lang))
+    ? localeMap[lang]
+    : 'en-US';
+
+  // Constructing a Date at local noon (12:00:00) prevents any timezone offset from shifting the calendar day
+  const safeDate = new Date(year, monthIndex, day, 12, 0, 0);
+
+  return new Intl.DateTimeFormat(safeLocale, {
     day: 'numeric',
     month: 'long',
     year: 'numeric',
-  }).format(date);
+  }).format(safeDate);
 }
 
 /**
@@ -76,21 +123,27 @@ export function formatLocalizedDate(dateInput: Date | string, lang: Language = '
  * - en: "18 Rabi al-Thani 1448 Hijri"
  */
 export function formatLocalizedHijriDate(dateInput: Date | string = new Date(), lang: Language = 'uz'): string {
-  const date = typeof dateInput === 'string' ? new Date(dateInput) : dateInput;
-  if (isNaN(date.getTime())) return '';
+  const parts = parseDateInput(dateInput);
+  if (!parts) return '';
 
   try {
+    const safeDate = new Date(parts.year, parts.monthIndex, parts.day, 12, 0, 0);
+
     const localeMap: Record<Language, string> = {
       ru: 'ru-RU-u-ca-islamic-civil',
       en: 'en-US-u-ca-islamic-civil',
       uz: 'uz-UZ-u-ca-islamic-civil',
     };
 
-    const formatted = new Intl.DateTimeFormat(localeMap[lang] || 'en-US-u-ca-islamic-civil', {
+    const safeLocale = (lang in localeMap && Object.prototype.hasOwnProperty.call(localeMap, lang))
+      ? localeMap[lang]
+      : 'en-US-u-ca-islamic-civil';
+
+    const formatted = new Intl.DateTimeFormat(safeLocale, {
       day: 'numeric',
       month: 'long',
       year: 'numeric',
-    }).format(date);
+    }).format(safeDate);
 
     let cleaned = formatted.trim();
     if (lang === 'ru') {
@@ -136,12 +189,18 @@ export function formatNumber(value: number, lang: Language = 'uz'): string {
     ru: 'ru-RU',
     en: 'en-US',
   };
-  return value.toLocaleString(localeMap[lang] || 'en-US');
+  const safeLocale = (lang in localeMap && Object.prototype.hasOwnProperty.call(localeMap, lang))
+    ? localeMap[lang]
+    : 'en-US';
+  return value.toLocaleString(safeLocale);
 }
 
 /**
  * Get canonical prayer name
  */
 export function formatPrayerName(prayerId: PrayerId, lang: Language = 'uz'): string {
-  return CANONICAL_PRAYER_NAMES[lang]?.[prayerId] || CANONICAL_PRAYER_NAMES.uz[prayerId] || prayerId;
+  const safeLang = (lang in CANONICAL_PRAYER_NAMES && Object.prototype.hasOwnProperty.call(CANONICAL_PRAYER_NAMES, lang))
+    ? lang
+    : 'uz';
+  return CANONICAL_PRAYER_NAMES[safeLang]?.[prayerId] || CANONICAL_PRAYER_NAMES.uz[prayerId] || prayerId;
 }

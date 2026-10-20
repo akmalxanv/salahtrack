@@ -23,10 +23,17 @@ import {
 } from 'lucide-react';
 import { useLanguage } from '@/context/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
-import { useLocalStorage, getTodayString } from '@/hooks/useLocalStorage';
+import { useLocalStorage } from '@/hooks/useLocalStorage';
 import type { PrayerId, PrayerStatus, AccountabilityBreakdownItem, PrayerHistoryRecord, PrayerItem } from '@/types/prayer';
 import MonthlyHistoryCalendar from '@/components/calendar/MonthlyHistoryCalendar';
 import { formatCurrency } from '@/lib/formatters';
+import { getCalendarDate, getLiturgicalDate } from '@/lib/prayer-cycle';
+import {
+  getStoredHistoryRecords,
+  saveStoredHistoryRecords,
+  mirrorDailyPrayersToHistory,
+  saveDailyPrayersSync,
+} from '@/lib/storage-sync';
 
 const PRAYER_IDS: PrayerId[] = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
 
@@ -90,7 +97,8 @@ function ProgressContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
 
-  const todayStr = useMemo(() => getTodayString(), []);
+  const calendarTodayStr = useMemo(() => getCalendarDate(), []);
+  const liturgicalTodayStr = useMemo(() => getLiturgicalDate(), []);
   const todayDate = useMemo(() => new Date(), []);
 
   // Single Source of Truth for Tab Navigation (derived from searchParams to eliminate state update depth loops)
@@ -112,7 +120,7 @@ function ProgressContent() {
   // Calendar View State
   const [viewYear, setViewYear] = useState(() => todayDate.getFullYear());
   const [viewMonth, setViewMonth] = useState(() => todayDate.getMonth());
-  const [selectedDate, setSelectedDate] = useState(() => getTodayString());
+  const [selectedDate, setSelectedDate] = useState(() => getLiturgicalDate());
 
   // Historical updating indicators
   const [updatingPrayerKey, setUpdatingPrayerKey] = useState<string | null>(null);
@@ -190,45 +198,19 @@ function ProgressContent() {
     async function loadMonthHistory() {
       // Step A: Load cached records from localStorage first (0ms instantaneous offline UI)
       try {
-        const rawHistory = window.localStorage.getItem('salahtrack_history_records');
-        if (rawHistory) {
-          const parsed = JSON.parse(rawHistory);
-          if (parsed && typeof parsed === 'object') {
-            setRecordsByDate((prev) => ({ ...parsed, ...prev }));
-          }
+        const storedHistory = getStoredHistoryRecords();
+        if (storedHistory && Object.keys(storedHistory).length > 0) {
+          setRecordsByDate((prev) => ({ ...prev, ...storedHistory }));
         }
 
-        // Also check if today's prayers exist in salahtrack_daily_prayers and seed today if missing
+        // Also check if daily store has prayers for active liturgical date and mirror if missing
         const rawDaily = window.localStorage.getItem('salahtrack_daily_prayers');
         if (rawDaily) {
           const dailyPrayers: PrayerItem[] = JSON.parse(rawDaily);
-          if (Array.isArray(dailyPrayers)) {
-            const todayRecordPr: Record<PrayerId, { status: PrayerStatus }> = {
-              fajr: { status: 'PENDING' },
-              dhuhr: { status: 'PENDING' },
-              asr: { status: 'PENDING' },
-              maghrib: { status: 'PENDING' },
-              isha: { status: 'PENDING' },
-            };
-            dailyPrayers.forEach((p) => {
-              if (p.id && todayRecordPr[p.id]) {
-                todayRecordPr[p.id] = { status: p.status || 'PENDING' };
-              }
-            });
-
-            setRecordsByDate((prev) => {
-              if (!prev[todayStr]) {
-                return {
-                  ...prev,
-                  [todayStr]: {
-                    date: todayStr,
-                    prayers: todayRecordPr,
-                    finesAccrued: 0,
-                  },
-                };
-              }
-              return prev;
-            });
+          if (Array.isArray(dailyPrayers) && dailyPrayers.length > 0) {
+            mirrorDailyPrayersToHistory(liturgicalTodayStr, dailyPrayers);
+            const updated = getStoredHistoryRecords();
+            setRecordsByDate((prev) => ({ ...prev, ...updated }));
           }
         }
       } catch {
@@ -262,11 +244,7 @@ function ProgressContent() {
 
             setRecordsByDate((prev) => {
               const updated = { ...prev, ...mappedRecords };
-              try {
-                window.localStorage.setItem('salahtrack_history_records', JSON.stringify(updated));
-              } catch {
-                // ignore storage limits
-              }
+              saveStoredHistoryRecords(updated);
               return updated;
             });
           }
@@ -285,7 +263,26 @@ function ProgressContent() {
     return () => {
       abortController.abort();
     };
-  }, [userId, viewYear, viewMonth, todayStr]);
+  }, [userId, viewYear, viewMonth, liturgicalTodayStr]);
+
+  // Reactive synchronization with HomeDashboard and other tabs via local-storage-update
+  useEffect(() => {
+    function handleStorageUpdate() {
+      try {
+        const stored = getStoredHistoryRecords();
+        if (stored && Object.keys(stored).length > 0) {
+          setRecordsByDate((prev) => ({ ...prev, ...stored }));
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('local-storage-update', handleStorageUpdate);
+      return () => window.removeEventListener('local-storage-update', handleStorageUpdate);
+    }
+  }, []);
 
   // Handle month view change from calendar controls
   const handleChangeMonth = useCallback((year: number, month: number) => {
@@ -301,7 +298,7 @@ function ProgressContent() {
   // Historical Prayer Correction mutation (Dual-Tier optimistic update + API sync)
   const handleHistoricalCorrection = useCallback(
     async (recordDate: string, prayerId: PrayerId, newStatus: PrayerStatus) => {
-      if (recordDate > todayStr) {
+      if (recordDate > calendarTodayStr) {
         alert(t.progress.futureDateError);
         return;
       }
@@ -344,17 +341,13 @@ function ProgressContent() {
         };
 
         // Cache update to LocalStorage
-        try {
-          window.localStorage.setItem('salahtrack_history_records', JSON.stringify(updated));
-        } catch {
-          // ignore
-        }
+        saveStoredHistoryRecords(updated);
 
         return updated;
       });
 
-      // 2. If editing today's date, synchronize with HomeDashboard's salahtrack_daily_prayers
-      if (recordDate === todayStr) {
+      // 2. If editing today's active liturgical date, synchronize with HomeDashboard's salahtrack_daily_prayers
+      if (recordDate === liturgicalTodayStr) {
         try {
           const rawDaily = window.localStorage.getItem('salahtrack_daily_prayers');
           if (rawDaily) {
@@ -363,8 +356,7 @@ function ProgressContent() {
               const updatedDaily = parsedDaily.map((item) =>
                 item.id === prayerId ? { ...item, status: normalizedStatus } : item
               );
-              window.localStorage.setItem('salahtrack_daily_prayers', JSON.stringify(updatedDaily));
-              window.dispatchEvent(new Event('local-storage-update'));
+              saveDailyPrayersSync(recordDate, updatedDaily);
             }
           }
         } catch (err) {
@@ -399,7 +391,7 @@ function ProgressContent() {
         setUpdatingPrayerKey(null);
       }
     },
-    [todayStr, t.progress.futureDateError, user, fetchStats]
+    [calendarTodayStr, liturgicalTodayStr, t.progress.futureDateError, user, fetchStats]
   );
 
   // Qaza adjustment helpers

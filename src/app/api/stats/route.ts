@@ -3,6 +3,7 @@ import { connectDB } from '../../../lib/mongodb.ts';
 import { PrayerRecord } from '../../../models/Prayer.ts';
 import { authenticateRequest } from '../../../lib/auth/index.ts';
 import { calculateStreakFromHistory } from '../../../lib/streak.ts';
+import { getLiturgicalDate } from '../../../lib/prayer-cycle.ts';
 import type { PrayerId } from '../../../types/prayer.ts';
 
 const PRAYER_KEYS: PrayerId[] = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
@@ -25,10 +26,10 @@ export async function GET(request: NextRequest) {
 
     const { searchParams } = new URL(request.url);
     const clientToday = searchParams.get('today');
+    const timezone = searchParams.get('timezone') || undefined;
     const todayRegex = /^\d{4}-\d{2}-\d{2}$/;
-    const serverToday = new Date().toISOString().split('T')[0];
     const maxAllowedDate = new Date(Date.now() + 14 * 60 * 60 * 1000).toISOString().split('T')[0];
-    let todayStr = serverToday;
+    let todayStr = getLiturgicalDate(new Date(), undefined, timezone);
 
     if (clientToday && todayRegex.test(clientToday)) {
       const [y, m, d] = clientToday.split('-').map(Number);

@@ -15,6 +15,7 @@ export interface PrayerItem {
   endTime: string;
   status: PrayerStatus;
   updatedAt?: string;
+  isOvernight?: boolean;
 }
 
 export interface AccountabilitySettings {

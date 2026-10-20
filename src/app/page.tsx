@@ -2,6 +2,7 @@ import { cookies } from 'next/headers';
 import HomeDashboard from '@/components/HomeDashboard';
 import { PrayerItem, StreakData } from '@/types/prayer';
 import { validateStreakData } from '@/lib/streak';
+import { getLiturgicalDate } from '@/lib/prayer-cycle';
 
 function validatePrayersData(data: unknown): PrayerItem[] | null {
   if (!Array.isArray(data) || data.length === 0) return null;
@@ -39,15 +40,35 @@ export default async function HomePage() {
     }
   }
 
+  // Active liturgical date on the server at this moment
+  const currentLiturgicalDate = getLiturgicalDate(new Date());
+
   // Read saved prayers from cookies for immediate SSR rendering
   const prayersCookie =
     cookieStore.get('namozlarim_daily_prayers')?.value ||
     cookieStore.get('salahtrack_daily_prayers')?.value;
+  const activeDateCookie =
+    cookieStore.get('salahtrack_last_active_date')?.value ||
+    cookieStore.get('namozlarim_last_active_date')?.value;
+
   let initialPrayers: PrayerItem[] | null = null;
   if (prayersCookie) {
     try {
       const raw = JSON.parse(decodeURIComponent(prayersCookie));
-      initialPrayers = validatePrayersData(raw);
+      // Check if cookie contains wrapped payload { date, prayers }
+      if (raw && typeof raw === 'object' && !Array.isArray(raw) && 'prayers' in raw) {
+        if (raw.date === currentLiturgicalDate) {
+          initialPrayers = validatePrayersData(raw.prayers);
+        }
+      } else {
+        // Legacy array: check if activeDateCookie matches current liturgical date
+        const decodedDate = activeDateCookie
+          ? decodeURIComponent(activeDateCookie).replace(/^"|"$/g, '')
+          : null;
+        if (decodedDate === currentLiturgicalDate) {
+          initialPrayers = validatePrayersData(raw);
+        }
+      }
     } catch {
       // ignore
     }

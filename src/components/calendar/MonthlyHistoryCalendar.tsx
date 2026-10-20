@@ -17,7 +17,7 @@ import {
   Moon,
 } from 'lucide-react';
 import { useLanguage } from '@/context/LanguageContext';
-import { getTodayString } from '@/hooks/useLocalStorage';
+import { getCalendarDate, getLiturgicalDate } from '@/lib/prayer-cycle';
 import { formatLocalizedDate } from '@/lib/formatters';
 import type { PrayerId, PrayerStatus, PrayerHistoryRecord } from '@/types/prayer';
 
@@ -55,7 +55,8 @@ export default function MonthlyHistoryCalendar({
   isLoading = false,
 }: MonthlyHistoryCalendarProps) {
   const { t, lang } = useLanguage();
-  const todayStr = useMemo(() => getTodayString(), []);
+  const calendarDate = useMemo(() => getCalendarDate(), []);
+  const liturgicalDate = useMemo(() => getLiturgicalDate(), []);
 
   // Determine current calendar boundary
   const todayDate = useMemo(() => new Date(), []);
@@ -86,7 +87,7 @@ export default function MonthlyHistoryCalendar({
 
   const handleJumpToToday = () => {
     onChangeMonth(currentYear, currentMonth);
-    onSelectDate(todayStr);
+    onSelectDate(liturgicalDate);
   };
 
   // Calendar matrix calculations: Monday-based week (0 = Monday, 6 = Sunday)
@@ -113,8 +114,8 @@ export default function MonthlyHistoryCalendar({
       const monthStr = String(viewMonth + 1).padStart(2, '0');
       const dayStr = String(day).padStart(2, '0');
       const dateStr = `${viewYear}-${monthStr}-${dayStr}`;
-      const isFuture = dateStr > todayStr;
-      const isToday = dateStr === todayStr;
+      const isFuture = dateStr > calendarDate;
+      const isToday = dateStr === liturgicalDate || dateStr === calendarDate;
 
       cells.push({
         dayNumber: day,
@@ -125,7 +126,7 @@ export default function MonthlyHistoryCalendar({
     }
 
     return cells;
-  }, [viewYear, viewMonth, daysInMonth, todayStr]);
+  }, [viewYear, viewMonth, daysInMonth, calendarDate, liturgicalDate]);
 
   // Selected date record & prayers breakdown
   const selectedRecord = records[selectedDate];
@@ -437,7 +438,7 @@ export default function MonthlyHistoryCalendar({
               </h3>
             </div>
 
-            {selectedDate === todayStr && (
+            {(selectedDate === liturgicalDate || selectedDate === calendarDate) && (
               <span className="px-2.5 py-1 rounded-full bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 text-xs font-bold shrink-0">
                 {t.calendar.today}
               </span>

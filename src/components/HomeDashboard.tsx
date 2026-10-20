@@ -17,8 +17,9 @@ import {
   BellOff,
   AlertTriangle,
   Loader2,
+  Moon,
 } from 'lucide-react';
-import { useLocalStorage, getTodayString, useIsMounted } from '@/hooks/useLocalStorage';
+import { useLocalStorage, useIsMounted } from '@/hooks/useLocalStorage';
 import { useLanguage } from '@/context/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
 import LanguageSelector from '@/components/LanguageSelector';
@@ -26,6 +27,18 @@ import { PrayerItem, PrayerStatus, PrayerId, StreakData, DEFAULT_STREAK } from '
 import { calculateStreakTransition, evaluateRolloverStreak } from '@/lib/streak';
 import { validateCoordinates } from '@/lib/qibla';
 import { formatLocalizedDate, formatLocalizedHijriDate } from '@/lib/formatters';
+import {
+  getLiturgicalDate,
+  resolvePrayerCycle,
+  DEFAULT_FAJR_TIME,
+  DEFAULT_ISHA_TIME,
+} from '@/lib/prayer-cycle';
+import {
+  saveDailyPrayersSync,
+  loadPrayersForLiturgicalDate,
+  archiveLiturgicalDay,
+  mirrorDailyPrayersToHistory,
+} from '@/lib/storage-sync';
 
 export const DEFAULT_PRAYERS: PrayerItem[] = [
   { id: 'fajr', name: 'Fajr', time: '04:47', endTime: '06:19', status: 'PENDING' },
@@ -179,7 +192,7 @@ export default function HomeDashboard({
 
   const [lastSavedDate, setLastSavedDate] = useLocalStorage<string>(
     'salahtrack_last_active_date',
-    getTodayString()
+    getLiturgicalDate(new Date())
   );
 
   const [qazaCount, setQazaCount] = useLocalStorage<number>(
@@ -252,67 +265,127 @@ export default function HomeDashboard({
     }
   };
 
+  // Derive liturgical prayer cycle state dynamically
+  const fajrTime = prayers.find((p) => p.id === 'fajr')?.time || DEFAULT_FAJR_TIME;
+  const ishaTime = prayers.find((p) => p.id === 'isha')?.time || DEFAULT_ISHA_TIME;
+
+  const prayerTimings = useMemo(() => {
+    const map: Record<string, { time: string; endTime?: string }> = {};
+    for (const p of prayers) {
+      map[p.id] = { time: p.time, endTime: p.endTime };
+    }
+    return map;
+  }, [prayers]);
+
+  const cycle = useMemo(() => {
+    return resolvePrayerCycle({
+      now,
+      fajrTimeStr: fajrTime,
+      ishaTimeStr: ishaTime,
+      timings: prayerTimings,
+    });
+  }, [now, fajrTime, ishaTime, prayerTimings]);
+
+  const activeLiturgicalDate = cycle.liturgicalDate;
+  const isPostMidnight = cycle.isPostMidnight;
+
+  // Seed history on initial mount so /progress and /calendar reflect the current liturgical state
+  useEffect(() => {
+    if (!isMounted) return;
+    mirrorDailyPrayersToHistory(activeLiturgicalDate, prayers);
+  }, [isMounted, activeLiturgicalDate, prayers]);
+
+  // Day rollover logic: triggers strictly when active liturgical date advances at Fajr adhan
+  useEffect(() => {
+    if (!isMounted) return;
+
+    if (lastSavedDate && lastSavedDate !== activeLiturgicalDate) {
+      // 1. Archive the completed liturgical day into salahtrack_history_records
+      const { uncompletedCount } = archiveLiturgicalDay(lastSavedDate, prayers);
+
+      // 2. Add uncompleted prayers from the completed cycle to Qaza
+      if (uncompletedCount > 0) {
+        setQazaCount((prev) => prev + uncompletedCount);
+      }
+
+      // 3. Update consistency streak based on rollover evaluation
+      setStreak((prevStreak) => evaluateRolloverStreak(prevStreak, activeLiturgicalDate));
+
+      // 4. Load or initialize fresh prayers for the new active liturgical date
+      const freshPrayers = loadPrayersForLiturgicalDate(activeLiturgicalDate, DEFAULT_PRAYERS);
+      setPrayers(freshPrayers);
+
+      // 5. Update lastSavedDate
+      setLastSavedDate(activeLiturgicalDate);
+
+      // 6. Save new liturgical day state to storage & sync cookie
+      saveDailyPrayersSync(activeLiturgicalDate, freshPrayers);
+    }
+  }, [
+    isMounted,
+    lastSavedDate,
+    activeLiturgicalDate,
+    prayers,
+    setPrayers,
+    setLastSavedDate,
+    setQazaCount,
+    setStreak,
+  ]);
+
   // Initial cloud synchronization from MongoDB Atlas if authenticated
   useEffect(() => {
-    if (!user) return;
-    const todayStr = getTodayString();
-    fetch(`/api/prayers?date=${todayStr}`)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((json) => {
+    if (!user || !isMounted) return;
+    // Prevent race condition: wait until rollover completes if dates differ
+    if (lastSavedDate !== activeLiturgicalDate) return;
+
+    let isCancelled = false;
+
+    async function syncCloudData() {
+      try {
+        const res = await fetch(`/api/prayers?date=${activeLiturgicalDate}`);
+        if (!res.ok) return;
+        const json = await res.json();
+        if (isCancelled) return;
+
         if (json?.success && json?.data?.prayers && !json.data.isNewRecord) {
-          setPrayers((prev) =>
-            prev.map((item) => {
+          setPrayers((prev) => {
+            const updated = prev.map((item) => {
               const serverPrayer = json.data.prayers[item.id];
               if (serverPrayer && serverPrayer.status) {
                 return { ...item, status: serverPrayer.status };
               }
               return item;
-            })
-          );
+            });
+            saveDailyPrayersSync(activeLiturgicalDate, updated);
+            return updated;
+          });
         }
-      })
-      .catch((err) => console.warn('Could not sync initial prayers:', err));
-
-    // Fetch /api/stats?today=${todayStr} to ensure streak is reconciled with MongoDB Atlas
-    fetch(`/api/stats?today=${todayStr}`)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((json) => {
-        if (json?.success && json?.data?.streaks) {
-          setStreak(json.data.streaks);
-        }
-      })
-      .catch((err) => console.warn('Could not sync initial streak stats:', err));
-  }, [user, setPrayers, setStreak]);
-
-  // Day rollover logic
-  useEffect(() => {
-    if (!isMounted) return;
-    const today = getTodayString();
-
-    if (lastSavedDate !== today) {
-      const uncompletedCount = prayers.filter(
-        (p) => p.status === 'PENDING' || p.status === 'MISSED'
-      ).length;
-
-      if (uncompletedCount > 0) {
-        setQazaCount((prev) => prev + uncompletedCount);
+      } catch (err) {
+        console.warn('Could not sync initial prayers from cloud:', err);
       }
 
-      const resetPrayers = DEFAULT_PRAYERS.map((p) => ({
-        ...p,
-        status: 'PENDING' as PrayerStatus,
-      }));
-
-      // Update streak via evaluateRolloverStreak so active streaks are preserved while today is pending, or reset if >1 day was skipped
-      setStreak((prevStreak) => evaluateRolloverStreak(prevStreak, today));
-
-      setPrayers(resetPrayers);
-      setLastSavedDate(today);
+      try {
+        const statsRes = await fetch(`/api/stats?today=${activeLiturgicalDate}`);
+        if (!statsRes.ok) return;
+        const statsJson = await statsRes.json();
+        if (!isCancelled && statsJson?.success && statsJson?.data?.streaks) {
+          setStreak(statsJson.data.streaks);
+        }
+      } catch (err) {
+        console.warn('Could not sync initial streak stats:', err);
+      }
     }
-  }, [isMounted, lastSavedDate, prayers, setPrayers, setLastSavedDate, setQazaCount, setStreak]);
 
-  // Gregorian date display
-  const gregorianDate = useMemo(() => formatLocalizedDate(now, lang), [now, lang]);
+    syncCloudData();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [user, isMounted, lastSavedDate, activeLiturgicalDate, setPrayers, setStreak]);
+
+  // Gregorian & Hijri date displays (reflecting the active liturgical date)
+  const gregorianDate = useMemo(() => formatLocalizedDate(activeLiturgicalDate, lang), [activeLiturgicalDate, lang]);
+  const hijriDate = useMemo(() => formatLocalizedHijriDate(activeLiturgicalDate, lang), [activeLiturgicalDate, lang]);
 
   // Sync authentic prayer times (location-aware & user calculation method)
   useEffect(() => {
@@ -393,9 +466,6 @@ export default function HomeDashboard({
     };
   }, [isMounted, setPrayers, user?.preferences?.calculationMethod]);
 
-  // Hijri Islamic calendar date
-  const hijriDate = useMemo(() => formatLocalizedHijriDate(now, lang), [now, lang]);
-
   // Live Next Prayer Countdown (calculated dynamically from current ticking time)
   const nextPrayer = useMemo(() => calculateNextPrayerCountdown(prayers, now), [prayers, now]);
 
@@ -403,7 +473,7 @@ export default function HomeDashboard({
   const handleSetStatus = useCallback(
     async (id: PrayerId, status: PrayerStatus) => {
       const normalizedStatus: PrayerStatus = status === 'PRAYED' ? 'PRAYED_ON_TIME' : status;
-      const todayStr = getTodayString();
+      const targetDate = activeLiturgicalDate;
 
       // 1. Instant 0ms optimistic UI update
       const updatedPrayers = prayers.map((item) =>
@@ -412,23 +482,26 @@ export default function HomeDashboard({
       setPrayers(updatedPrayers);
       setActiveMenuPrayerId(null);
 
-      // 2. Optimistic streak transition calculation
+      // 2. Synchronize to localStorage, cookie, and mirror to salahtrack_history_records[targetDate]
+      saveDailyPrayersSync(targetDate, updatedPrayers);
+
+      // 3. Optimistic streak transition calculation
       const hasCompletedPrayer = updatedPrayers.some(
         (p) => p.status === 'PRAYED' || p.status === 'PRAYED_ON_TIME' || p.status === 'PRAYED_LATE'
       );
-      setStreak((prevStreak) => calculateStreakTransition(prevStreak, todayStr, hasCompletedPrayer));
+      setStreak((prevStreak) => calculateStreakTransition(prevStreak, targetDate, hasCompletedPrayer));
 
-      // 3. Set saving status feedback
+      // 4. Set saving status feedback
       setSavingStatus((prev) => ({ ...prev, [id]: 'saving' }));
 
-      // 4. Background sync to MongoDB Atlas if authenticated
+      // 5. Background sync to MongoDB Atlas if authenticated
       if (user) {
         try {
           const res = await fetch('/api/prayers', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              date: todayStr,
+              date: targetDate,
               prayerId: id,
               status: normalizedStatus,
             }),
@@ -442,7 +515,7 @@ export default function HomeDashboard({
 
             // Background sync stats to reconcile streak with MongoDB Atlas
             try {
-              const statsRes = await fetch(`/api/stats?today=${todayStr}`);
+              const statsRes = await fetch(`/api/stats?today=${targetDate}`);
               if (statsRes.ok) {
                 const statsJson = await statsRes.json();
                 if (statsJson?.success && statsJson?.data?.streaks) {
@@ -473,7 +546,7 @@ export default function HomeDashboard({
         }, 1500);
       }
     },
-    [user, prayers, setPrayers, setStreak]
+    [user, activeLiturgicalDate, prayers, setPrayers, setStreak]
   );
 
   // Quick toggle (done / pending)
@@ -549,9 +622,15 @@ export default function HomeDashboard({
       {/* Top Header Bar: Date & Streak & Mobile Language Selector */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-2 border-b border-slate-200/80 dark:border-slate-800/80">
         <div>
-          <div className="flex items-center gap-2 text-slate-900 dark:text-slate-100 font-bold text-lg">
+          <div className="flex items-center gap-2 text-slate-900 dark:text-slate-100 font-bold text-lg flex-wrap">
             <CalendarIcon className="w-5 h-5 text-emerald-600 shrink-0" />
             <span suppressHydrationWarning>{gregorianDate}</span>
+            {isPostMidnight && (
+              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200/80 dark:border-indigo-800/80 shadow-xs">
+                <Moon className="w-3 h-3 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                <span>{t.dashboard.overnightIshaBadge}</span>
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-2 mt-0.5 ml-7 flex-wrap">
             {hijriDate && (
@@ -598,6 +677,23 @@ export default function HomeDashboard({
           </div>
         </div>
       </div>
+
+      {/* Calm, Subtle Trilingual Overnight Isha Period Banner */}
+      {isPostMidnight && (
+        <div className="p-3.5 sm:p-4 rounded-2xl bg-gradient-to-r from-indigo-50/90 via-indigo-50/50 to-slate-50/50 dark:from-indigo-950/40 dark:via-indigo-950/20 dark:to-slate-900/40 border border-indigo-200/70 dark:border-indigo-800/60 flex items-center gap-3 text-xs text-indigo-900 dark:text-indigo-200 shadow-xs">
+          <div className="p-2 rounded-xl bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 shrink-0">
+            <Moon className="w-4 h-4" />
+          </div>
+          <div>
+            <p className="font-semibold text-slate-900 dark:text-slate-100">
+              {t.dashboard.overnightIshaBadge}
+            </p>
+            <p className="text-[11px] text-slate-600 dark:text-slate-400 mt-0.5 leading-relaxed">
+              {t.dashboard.overnightIshaActive}
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* ========================================================================= */}
       {/* 2-Column Responsive Header: Next Prayer Card & Daily Completion Progress */}

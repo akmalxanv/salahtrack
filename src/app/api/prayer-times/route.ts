@@ -1,5 +1,5 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { authenticateRequest } from '@/lib/auth/guard';
+import { NextRequest, NextResponse } from 'next/server.js';
+import { authenticateRequest } from '../../../lib/auth/index.ts';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,7 +17,7 @@ const TASHKENT_FALLBACK = {
   dhuhr: { time: '12:13', endTime: '16:20' },
   asr: { time: '16:20', endTime: '18:05' },
   maghrib: { time: '18:05', endTime: '19:32' },
-  isha: { time: '19:32', endTime: '23:59' },
+  isha: { time: '19:32', endTime: '04:47', isOvernight: true },
 };
 
 const METHOD_MAP: Record<string, number> = {
@@ -158,7 +158,11 @@ export async function GET(request: NextRequest) {
         dhuhr: { time: formatTime(timings.Dhuhr), endTime: formatTime(timings.Asr) },
         asr: { time: formatTime(timings.Asr), endTime: formatTime(timings.Maghrib) },
         maghrib: { time: formatTime(timings.Maghrib), endTime: formatTime(timings.Isha) },
-        isha: { time: formatTime(timings.Isha), endTime: '23:59' },
+        isha: {
+          time: formatTime(timings.Isha),
+          endTime: formatTime(timings.Fajr),
+          isOvernight: true,
+        },
       },
       source: 'live',
     });

@@ -41,13 +41,11 @@ const PrayerRecordSchema = new Schema<IPrayerRecord>(
       type: Schema.Types.ObjectId,
       ref: 'User',
       required: true,
-      index: true,
     },
     date: {
       type: String,
       required: true,
       match: /^\d{4}-\d{2}-\d{2}$/,
-      index: true,
     },
     prayers: {
       fajr: { type: SinglePrayerSchema, default: () => ({ status: 'PENDING' }) },

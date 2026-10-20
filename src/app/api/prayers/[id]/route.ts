@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 import { connectDB } from '../../../../lib/mongodb.ts';
 import { PrayerRecord } from '../../../../models/Prayer.ts';
 import { authenticateRequest } from '../../../../lib/auth/guard.ts';
-import { calculateFines, getMaxAllowedDate } from '../route.ts';
+import { calculateFines, getMaxAllowedDate, sanitizeNotes } from '../route.ts';
 import type { PrayerId, PrayerStatus } from '../../../../types/prayer.ts';
 
 const VALID_PRAYER_IDS: PrayerId[] = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
@@ -140,18 +140,38 @@ export async function PUT(request: NextRequest, props: RouteContext) {
 
     const { prayerId, status, prayers: batchPrayers, notes } = body;
     const now = new Date();
+    const sanitizedNotes = sanitizeNotes(notes);
 
-    if (batchPrayers && typeof batchPrayers === 'object') {
+    if (batchPrayers && typeof batchPrayers === 'object' && !Array.isArray(batchPrayers)) {
       for (const pId of VALID_PRAYER_IDS) {
         const pStatus = batchPrayers[pId];
         if (pStatus && VALID_STATUSES.includes(pStatus as PrayerStatus)) {
           const norm: PrayerStatus = pStatus === 'PRAYED' ? 'PRAYED_ON_TIME' : pStatus;
+          const existing = record.prayers[pId] || { status: 'PENDING' };
+          let prayedAt = existing.prayedAt;
+          let missedAt = existing.missedAt;
+          let madeUpAt = existing.madeUpAt;
+
+          if (norm === 'PRAYED_ON_TIME' || norm === 'PRAYED_LATE') {
+            if (!prayedAt || existing.status !== norm) prayedAt = now;
+          } else if (norm === 'MISSED') {
+            if (!missedAt) missedAt = now;
+          } else if (norm === 'MADE_UP') {
+            if (!madeUpAt) madeUpAt = now;
+          }
+
           record.prayers[pId] = {
             status: norm,
-            prayedAt: norm === 'PRAYED_ON_TIME' || norm === 'PRAYED_LATE' ? now : undefined,
-            missedAt: norm === 'MISSED' ? now : undefined,
-            madeUpAt: norm === 'MADE_UP' ? now : undefined,
+            prayedAt,
+            missedAt,
+            madeUpAt,
+            notes: existing.notes,
           };
+        }
+      }
+      if (sanitizedNotes !== undefined && prayerId && VALID_PRAYER_IDS.includes(prayerId as PrayerId)) {
+        if (record.prayers[prayerId as PrayerId]) {
+          record.prayers[prayerId as PrayerId].notes = sanitizedNotes;
         }
       }
     } else if (prayerId && status) {
@@ -169,12 +189,25 @@ export async function PUT(request: NextRequest, props: RouteContext) {
       }
 
       const normalizedStatus: PrayerStatus = status === 'PRAYED' ? 'PRAYED_ON_TIME' : status;
+      const existing = record.prayers[prayerId as PrayerId] || { status: 'PENDING' };
+      let prayedAt = existing.prayedAt;
+      let missedAt = existing.missedAt;
+      let madeUpAt = existing.madeUpAt;
+
+      if (normalizedStatus === 'PRAYED_ON_TIME' || normalizedStatus === 'PRAYED_LATE') {
+        if (!prayedAt || existing.status !== normalizedStatus) prayedAt = now;
+      } else if (normalizedStatus === 'MISSED') {
+        if (!missedAt) missedAt = now;
+      } else if (normalizedStatus === 'MADE_UP') {
+        if (!madeUpAt) madeUpAt = now;
+      }
+
       record.prayers[prayerId as PrayerId] = {
         status: normalizedStatus,
-        prayedAt: normalizedStatus === 'PRAYED_ON_TIME' || normalizedStatus === 'PRAYED_LATE' ? now : undefined,
-        missedAt: normalizedStatus === 'MISSED' ? now : undefined,
-        madeUpAt: normalizedStatus === 'MADE_UP' ? now : undefined,
-        notes: typeof notes === 'string' ? notes.slice(0, 200) : undefined,
+        prayedAt,
+        missedAt,
+        madeUpAt,
+        notes: sanitizedNotes !== undefined ? sanitizedNotes : existing.notes,
       };
     } else {
       return NextResponse.json(

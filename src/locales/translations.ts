@@ -244,6 +244,8 @@ export interface TranslationContent {
     calcMethod: string;
     tomorrowPrayer: string;
     calcMethodBased: string;
+    overnightIshaActive: string;
+    overnightIshaBadge: string;
   };
   accountability: {
     title: string;
@@ -748,6 +750,8 @@ export const translations: Record<Language, TranslationContent> = {
       calcMethod: 'Метод расчёта',
       tomorrowPrayer: 'Завтра',
       calcMethodBased: 'По методу {method}',
+      overnightIshaActive: 'Время ночного намаза (Иша) продолжается до наступления рассвета (Фаджр). Литургический день обновляется с наступлением Фаджра.',
+      overnightIshaBadge: 'Иша продолжается',
     },
     accountability: {
       title: 'Учёт Каза и обязательств',
@@ -1251,6 +1255,8 @@ export const translations: Record<Language, TranslationContent> = {
       calcMethod: 'Calculation Method',
       tomorrowPrayer: 'Tomorrow',
       calcMethodBased: 'Based on {method} method',
+      overnightIshaActive: 'Isha prayer continues overnight until the dawn of Fajr. The liturgical prayer day rolls over at Fajr adhan.',
+      overnightIshaBadge: 'Isha is active',
     },
     accountability: {
       title: 'Qaza & Accountability Tracker',
@@ -1754,6 +1760,8 @@ export const translations: Record<Language, TranslationContent> = {
       calcMethod: 'Hisoblash usuli',
       tomorrowPrayer: 'Ertangi',
       calcMethodBased: '{method} usuli bo‘yicha',
+      overnightIshaActive: 'Tong (Bomdod) otguncha Xufton namozi vaqti davom etadi. Diniy kun Bomdod kirishi bilan yangilanadi.',
+      overnightIshaBadge: 'Xufton davom etmoqda',
     },
     accountability: {
       title: 'Qazo va shaxsiy intizom hisobi',
