@@ -1,15 +1,16 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
+import React, { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Eye, EyeOff, Loader2, Lock, Mail, User, Check, X, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { Eye, EyeOff, Loader2, Lock, Mail, User, AlertCircle, CheckCircle2, UserCheck } from 'lucide-react';
 import { useLanguage } from '@/context/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
+import GuestModeModal from '@/components/auth/GuestModeModal';
 
 export default function SignupPage() {
   const { t } = useLanguage();
-  const { signup } = useAuth();
+  const { signup, setGuestMode } = useAuth();
   const router = useRouter();
 
   const [name, setName] = useState('');
@@ -17,31 +18,14 @@ export default function SignupPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [termsAgreed, setTermsAgreed] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [guestModalOpen, setGuestModalOpen] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  // Live password strength calculation
-  const passwordChecks = useMemo(() => {
-    return {
-      length: password.length >= 8 && password.length <= 128,
-      lowercase: /[a-z]/.test(password),
-      uppercase: /[A-Z]/.test(password),
-      number: /[0-9]/.test(password),
-      special: /[^a-zA-Z0-9]/.test(password),
-    };
-  }, [password]);
-
-  const isPasswordStrong =
-    passwordChecks.length &&
-    passwordChecks.lowercase &&
-    passwordChecks.uppercase &&
-    passwordChecks.number &&
-    passwordChecks.special;
-
+  const isPasswordValid = password.length >= 8;
   const passwordsMatch = password.length > 0 && password === confirmPassword;
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -49,13 +33,8 @@ export default function SignupPage() {
     setErrorMessage(null);
     setSuccessMessage(null);
 
-    if (!termsAgreed) {
-      setErrorMessage(t.auth.signup.termsPledge);
-      return;
-    }
-
-    if (!isPasswordStrong) {
-      setErrorMessage(t.auth.validation.passwordRequirements);
+    if (!isPasswordValid) {
+      setErrorMessage(t.auth.passwordCriteriaLength);
       return;
     }
 
@@ -220,6 +199,7 @@ export default function SignupPage() {
               id="signupPassword"
               type={showPassword ? 'text' : 'password'}
               required
+              minLength={8}
               autoComplete="new-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
@@ -235,23 +215,10 @@ export default function SignupPage() {
               {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
             </button>
           </div>
-
-          {/* Real-time Password Strength Criteria */}
-          {password.length > 0 && (
-            <div className="p-2.5 rounded-lg bg-slate-100/70 dark:bg-slate-800/50 border border-slate-200/60 dark:border-slate-700/60 space-y-1 text-xs">
-              <div className="flex items-center gap-1.5 text-slate-600 dark:text-slate-400">
-                {passwordChecks.length ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <X className="w-3.5 h-3.5 text-slate-400" />}
-                <span>{t.auth.passwordCriteriaLength}</span>
-              </div>
-              <div className="flex items-center gap-1.5 text-slate-600 dark:text-slate-400">
-                {passwordChecks.uppercase && passwordChecks.lowercase ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <X className="w-3.5 h-3.5 text-slate-400" />}
-                <span>{t.auth.passwordCriteriaLetters}</span>
-              </div>
-              <div className="flex items-center gap-1.5 text-slate-600 dark:text-slate-400">
-                {passwordChecks.number && passwordChecks.special ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <X className="w-3.5 h-3.5 text-slate-400" />}
-                <span>{t.auth.passwordCriteriaSpecial}</span>
-              </div>
-            </div>
+          {password.length > 0 && !isPasswordValid && (
+            <p className="text-xs text-amber-600 dark:text-amber-400">
+              {t.auth.passwordCriteriaLength}
+            </p>
           )}
         </div>
 
@@ -287,25 +254,10 @@ export default function SignupPage() {
           )}
         </div>
 
-        {/* Terms / Pledge Acknowledgement */}
-        <div className="flex items-start gap-2.5 pt-1">
-          <input
-            id="terms"
-            type="checkbox"
-            required
-            checked={termsAgreed}
-            onChange={(e) => setTermsAgreed(e.target.checked)}
-            className="w-4 h-4 mt-0.5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 dark:border-slate-700 dark:bg-slate-800 dark:checked:bg-emerald-600 shrink-0"
-          />
-          <label htmlFor="terms" className="text-xs text-slate-600 dark:text-slate-400 leading-snug cursor-pointer">
-            {t.auth.signup.termsPledge}
-          </label>
-        </div>
-
         {/* Submit Button */}
         <button
           type="submit"
-          disabled={loading || !termsAgreed || !isPasswordStrong || !passwordsMatch}
+          disabled={loading || !isPasswordValid || !passwordsMatch}
           className="w-full mt-2 py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-medium text-sm rounded-xl shadow-md shadow-emerald-600/20 hover:shadow-emerald-600/30 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900 disabled:opacity-60 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2"
         >
           {loading ? (
@@ -319,6 +271,24 @@ export default function SignupPage() {
         </button>
       </form>
 
+      {/* Divider */}
+      <div className="relative flex items-center justify-center my-1">
+        <div className="border-t border-slate-200 dark:border-slate-800 w-full" />
+        <span className="bg-white dark:bg-slate-900 px-3 text-[11px] font-semibold uppercase text-slate-400 tracking-wider">
+          {t.common.or}
+        </span>
+      </div>
+
+      {/* Continue as Guest Button */}
+      <button
+        type="button"
+        onClick={() => setGuestModalOpen(true)}
+        className="w-full py-2.5 px-4 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 hover:bg-slate-100 dark:bg-slate-800/60 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 font-semibold text-xs sm:text-sm transition-colors flex items-center justify-center gap-2 cursor-pointer"
+      >
+        <UserCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+        <span>{t.guest.continueAsGuest}</span>
+      </button>
+
       {/* Login Redirection Link */}
       <div className="pt-2 text-center text-xs text-slate-500 dark:text-slate-400">
         <span>{t.auth.signup.haveAccount} </span>
@@ -329,6 +299,16 @@ export default function SignupPage() {
           {t.auth.signup.loginLink}
         </Link>
       </div>
+
+      <GuestModeModal
+        isOpen={guestModalOpen}
+        onClose={() => setGuestModalOpen(false)}
+        onConfirm={() => {
+          setGuestMode(true);
+          setGuestModalOpen(false);
+          router.push('/');
+        }}
+      />
     </div>
   );
 }

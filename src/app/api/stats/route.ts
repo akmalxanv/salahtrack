@@ -193,17 +193,8 @@ export async function GET(request: NextRequest) {
     }
 
     // Compute total settled/paid amount across all completed Qaza payments
-    let totalPaidAmount = 0;
-    try {
-      if (typeof QazaPayment?.find === 'function') {
-        const userPayments = await QazaPayment.find({ userId: auth.user.id });
-        if (Array.isArray(userPayments)) {
-          totalPaidAmount = userPayments.reduce((sum, payment) => sum + (payment.totalAmount || 0), 0);
-        }
-      }
-    } catch {
-      totalPaidAmount = 0;
-    }
+    const userPayments = await QazaPayment.find({ userId: auth.user.id });
+    const totalPaidAmount = userPayments.reduce((sum, p) => sum + (p.totalAmount || 0), 0);
 
     return NextResponse.json(
       {

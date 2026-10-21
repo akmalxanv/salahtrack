@@ -10,7 +10,7 @@ export default function LanguageSelector() {
       <button
         type="button"
         onClick={() => setLang('en')}
-        className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
+        className={`min-h-[36px] min-w-[42px] px-3 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
           lang === 'en'
             ? 'bg-emerald-600 text-white shadow-xs'
             : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'
@@ -21,7 +21,7 @@ export default function LanguageSelector() {
       <button
         type="button"
         onClick={() => setLang('ru')}
-        className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
+        className={`min-h-[36px] min-w-[42px] px-3 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
           lang === 'ru'
             ? 'bg-emerald-600 text-white shadow-xs'
             : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'
@@ -32,7 +32,7 @@ export default function LanguageSelector() {
       <button
         type="button"
         onClick={() => setLang('uz')}
-        className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
+        className={`min-h-[36px] min-w-[42px] px-3 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
           lang === 'uz'
             ? 'bg-emerald-600 text-white shadow-xs'
             : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'

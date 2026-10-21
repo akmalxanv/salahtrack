@@ -3,13 +3,14 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Eye, EyeOff, Loader2, Lock, User, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { Eye, EyeOff, Loader2, Lock, User, AlertCircle, CheckCircle2, UserCheck } from 'lucide-react';
 import { useLanguage } from '@/context/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
+import GuestModeModal from '@/components/auth/GuestModeModal';
 
 export default function LoginPage() {
   const { t } = useLanguage();
-  const { login } = useAuth();
+  const { login, setGuestMode } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
   const redirectParam = searchParams.get('redirect') || '/';
@@ -18,6 +19,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [rememberMe, setRememberMe] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [guestModalOpen, setGuestModalOpen] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -190,6 +192,24 @@ export default function LoginPage() {
         </button>
       </form>
 
+      {/* Divider */}
+      <div className="relative flex items-center justify-center my-1">
+        <div className="border-t border-slate-200 dark:border-slate-800 w-full" />
+        <span className="bg-white dark:bg-slate-900 px-3 text-[11px] font-semibold uppercase text-slate-400 tracking-wider">
+          {t.common.or}
+        </span>
+      </div>
+
+      {/* Continue as Guest Button */}
+      <button
+        type="button"
+        onClick={() => setGuestModalOpen(true)}
+        className="w-full py-2.5 px-4 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 hover:bg-slate-100 dark:bg-slate-800/60 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 font-semibold text-xs sm:text-sm transition-colors flex items-center justify-center gap-2 cursor-pointer"
+      >
+        <UserCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+        <span>{t.guest.continueAsGuest}</span>
+      </button>
+
       {/* Signup Redirection Link */}
       <div className="pt-2 text-center text-xs text-slate-500 dark:text-slate-400">
         <span>{t.auth.login.noAccount} </span>
@@ -200,6 +220,16 @@ export default function LoginPage() {
           {t.auth.login.signupLink}
         </Link>
       </div>
+
+      <GuestModeModal
+        isOpen={guestModalOpen}
+        onClose={() => setGuestModalOpen(false)}
+        onConfirm={() => {
+          setGuestMode(true);
+          setGuestModalOpen(false);
+          router.push(redirectParam);
+        }}
+      />
     </div>
   );
 }

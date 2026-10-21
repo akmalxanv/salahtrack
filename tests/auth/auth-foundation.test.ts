@@ -273,23 +273,38 @@ describe('4. Input Validation & Sanitization Module', () => {
   });
 
   describe('Password complexity validation', () => {
-    it('accepts strong passwords meeting all requirements', () => {
-      const result = validatePassword('T@shkent2026!');
-      assert.strictEqual(result.isValid, true);
-      assert.strictEqual(result.errors.length, 0);
+    it('accepts valid passwords meeting length requirements (>= 8 and <= 128)', () => {
+      // Strong complex password
+      const resultComplex = validatePassword('T@shkent2026!');
+      assert.strictEqual(resultComplex.isValid, true);
+      assert.strictEqual(resultComplex.errors.length, 0);
+
+      // Simple lowercase password >= 8 characters passes
+      const resultSimple = validatePassword('password');
+      assert.strictEqual(resultSimple.isValid, true);
+      assert.strictEqual(resultSimple.errors.length, 0);
+
+      // Simple numeric or alphabetic password passes
+      const resultNumeric = validatePassword('12345678');
+      assert.strictEqual(resultNumeric.isValid, true);
+      assert.strictEqual(resultNumeric.errors.length, 0);
     });
 
-    it('rejects weak passwords missing required characteristics', () => {
-      // Too short
-      assert.strictEqual(validatePassword('Short1!').isValid, false);
-      // Missing uppercase
-      assert.strictEqual(validatePassword('lowercase123!').isValid, false);
-      // Missing lowercase
-      assert.strictEqual(validatePassword('UPPERCASE123!').isValid, false);
-      // Missing digit
-      assert.strictEqual(validatePassword('NoDigitsHere!').isValid, false);
-      // Missing special symbol
-      assert.strictEqual(validatePassword('NoSymbols1234').isValid, false);
+    it('rejects passwords violating length or type constraints', () => {
+      // Too short (< 8 chars)
+      const shortResult = validatePassword('short');
+      assert.strictEqual(shortResult.isValid, false);
+      assert.ok(shortResult.errors.includes('Password must be at least 8 characters long'));
+
+      // Too long (> 128 chars)
+      const longResult = validatePassword('a'.repeat(129));
+      assert.strictEqual(longResult.isValid, false);
+      assert.ok(longResult.errors.includes('Password must not exceed 128 characters'));
+
+      // Non-string input
+      const nonStringResult = validatePassword(null);
+      assert.strictEqual(nonStringResult.isValid, false);
+      assert.ok(nonStringResult.errors.includes('Password must be a valid string'));
     });
   });
 

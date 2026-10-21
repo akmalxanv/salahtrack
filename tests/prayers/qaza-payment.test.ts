@@ -378,7 +378,7 @@ describe('Qaza Payment & Sadaqah Tracking Engine', () => {
   });
 
   describe('3. POST /api/prayers/qaza-payment Fine Settlement & Ledger Execution', () => {
-    it('settles a recent MISSED prayer (<= 7 days) at 15,000 UZS base fine', async () => {
+    it('rejects settling a MISSED prayer when confirmedMadeUp is false or missing', async () => {
       const todayStr = new Date().toISOString().split('T')[0];
       const record = createMockRecord(todayStr);
       record.prayers.dhuhr = { status: 'MISSED', isPaid: false, paidAmount: 0 };
@@ -391,21 +391,50 @@ describe('Qaza Payment & Sadaqah Tracking Engine', () => {
         body: JSON.stringify({ items: [{ date: todayStr, prayerId: 'dhuhr' }] }),
       });
       const res = await payQazaHandler(req);
+      assert.equal(res.status, 400);
+      const json = await res.json();
+      assert.equal(json.success, false);
+      assert.equal(json.code, 'CONFIRMATION_REQUIRED');
+      assert.equal(
+        json.error,
+        'You must confirm that the selected missed prayers have been made up before settling sadaqah. Sadaqah does not substitute obligatory prayer.'
+      );
+    });
+
+    it('settles a recent MISSED prayer (<= 7 days) at 15,000 UZS base fine when confirmedMadeUp is true', async () => {
+      const todayStr = new Date().toISOString().split('T')[0];
+      const record = createMockRecord(todayStr);
+      record.prayers.dhuhr = { status: 'MISSED', isPaid: false, paidAmount: 0 };
+      record.finesAccrued = 15000;
+      mockRecords.push(record);
+
+      const req = new NextRequest('http://localhost:3000/api/prayers/qaza-payment', {
+        method: 'POST',
+        headers: { cookie: `salahtrack_session=${validSessionToken}` },
+        body: JSON.stringify({
+          items: [{ date: todayStr, prayerId: 'dhuhr' }],
+          confirmedMadeUp: true,
+        }),
+      });
+      const res = await payQazaHandler(req);
       assert.equal(res.status, 201);
       const json = await res.json();
 
       assert.equal(json.success, true);
       assert.equal(json.data.totalAmount, 15000);
       assert.equal(json.data.items[0].amount, 15000);
+      assert.equal(json.data.items[0].status, 'MADE_UP');
       assert.equal(json.data.items[0].isOverdue, false);
 
-      // Verify the underlying prayer record was updated
+      // Verify the underlying prayer record was updated to MADE_UP and marked paid
+      assert.equal(record.prayers.dhuhr.status, 'MADE_UP');
+      assert.ok(record.prayers.dhuhr.madeUpAt);
       assert.equal(record.prayers.dhuhr.isPaid, true);
       assert.equal(record.prayers.dhuhr.paidAmount, 15000);
       assert.equal(record.finesAccrued, 0); // Settled prayer has 0 remaining fine
     });
 
-    it('settles an overdue MISSED prayer (> 7 days) at 30,000 UZS (15k base + 15k overdue)', async () => {
+    it('settles an overdue MISSED prayer (> 7 days) at 30,000 UZS when confirmedMadeUp is true', async () => {
       const oldDate = '2026-09-01'; // well over 7 days ago
       const record = createMockRecord(oldDate);
       record.prayers.asr = { status: 'MISSED', isPaid: false, paidAmount: 0 };
@@ -415,7 +444,10 @@ describe('Qaza Payment & Sadaqah Tracking Engine', () => {
       const req = new NextRequest('http://localhost:3000/api/prayers/qaza-payment', {
         method: 'POST',
         headers: { cookie: `salahtrack_session=${validSessionToken}` },
-        body: JSON.stringify({ items: [{ date: oldDate, prayerId: 'asr' }] }),
+        body: JSON.stringify({
+          items: [{ date: oldDate, prayerId: 'asr' }],
+          confirmedMadeUp: true,
+        }),
       });
       const res = await payQazaHandler(req);
       assert.equal(res.status, 201);
@@ -424,14 +456,17 @@ describe('Qaza Payment & Sadaqah Tracking Engine', () => {
       assert.equal(json.success, true);
       assert.equal(json.data.totalAmount, 30000);
       assert.equal(json.data.items[0].amount, 30000);
+      assert.equal(json.data.items[0].status, 'MADE_UP');
       assert.equal(json.data.items[0].isOverdue, true);
 
+      assert.equal(record.prayers.asr.status, 'MADE_UP');
+      assert.ok(record.prayers.asr.madeUpAt);
       assert.equal(record.prayers.asr.isPaid, true);
       assert.equal(record.prayers.asr.paidAmount, 30000);
       assert.equal(record.finesAccrued, 0);
     });
 
-    it('settles a MADE_UP prayer at 15,000 UZS even if older than 7 days', async () => {
+    it('settles a MADE_UP prayer at 15,000 UZS even if older than 7 days (does not require confirmedMadeUp)', async () => {
       const oldDate = '2026-09-01';
       const record = createMockRecord(oldDate);
       record.prayers.maghrib = { status: 'MADE_UP', isPaid: false, paidAmount: 0 };
@@ -449,6 +484,8 @@ describe('Qaza Payment & Sadaqah Tracking Engine', () => {
 
       assert.equal(json.success, true);
       assert.equal(json.data.totalAmount, 15000); // Capped at 15k, no overdue penalty
+      assert.equal(json.data.items[0].status, 'MADE_UP');
+      assert.equal(record.prayers.maghrib.status, 'MADE_UP');
       assert.equal(record.prayers.maghrib.isPaid, true);
       assert.equal(record.finesAccrued, 0);
     });
@@ -461,6 +498,7 @@ describe('Qaza Payment & Sadaqah Tracking Engine', () => {
 
       const payload = {
         items: [{ date: todayStr, prayerId: 'isha' }],
+        confirmedMadeUp: true,
         idempotencyKey: 'idemp-tx-12345',
         note: 'Charity payment for Isha',
       };
@@ -601,6 +639,73 @@ describe('Qaza Payment & Sadaqah Tracking Engine', () => {
       assert.equal(json.data.accountability.totalPaidAmount, 30000);
       assert.equal(json.data.accountability.breakdown.length, 1);
       assert.equal(json.data.accountability.breakdown[0].prayerId, 'fajr');
+    });
+
+    it('accurately sums totalPaidAmount across multiple payments and distinguishes unpaid MISSED and MADE_UP', async () => {
+      const todayStr = '2026-10-20';
+
+      // Record 1: unpaid MISSED prayer (recent, 15k)
+      const rec1 = createMockRecord('2026-10-19');
+      rec1.prayers.fajr = { status: 'MISSED', isPaid: false };
+      mockRecords.push(rec1);
+
+      // Record 2: unpaid MADE_UP prayer (older than 7 days, 15k, capped, no overdue penalty)
+      const rec2 = createMockRecord('2026-10-01');
+      rec2.prayers.dhuhr = { status: 'MADE_UP', isPaid: false };
+      mockRecords.push(rec2);
+
+      // Record 3: paid prayer (should be skipped from outstanding and breakdown)
+      const rec3 = createMockRecord('2026-10-02');
+      rec3.prayers.asr = { status: 'MADE_UP', isPaid: true, paidAmount: 15000 };
+      mockRecords.push(rec3);
+
+      // Multiple payments in payment collection
+      mockPayments.push({
+        _id: new mongoose.Types.ObjectId(),
+        userId: testUserId,
+        items: [{ date: '2026-10-02', prayerId: 'asr', status: 'MADE_UP', amount: 15000, isOverdue: false }],
+        totalAmount: 15000,
+        createdAt: new Date('2026-10-03T10:00:00Z'),
+        updatedAt: new Date('2026-10-03T10:00:00Z'),
+        save: async function () { return this; },
+      });
+      mockPayments.push({
+        _id: new mongoose.Types.ObjectId(),
+        userId: testUserId,
+        items: [{ date: '2026-09-15', prayerId: 'maghrib', status: 'MADE_UP', amount: 30000, isOverdue: true }],
+        totalAmount: 30000,
+        createdAt: new Date('2026-10-05T10:00:00Z'),
+        updatedAt: new Date('2026-10-05T10:00:00Z'),
+        save: async function () { return this; },
+      });
+
+      const req = new NextRequest(`http://localhost:3000/api/stats?today=${todayStr}`, {
+        headers: { cookie: `salahtrack_session=${validSessionToken}` },
+      });
+      const res = await getStatsHandler(req);
+      assert.equal(res.status, 200);
+      const json = await res.json();
+
+      assert.equal(json.success, true);
+      // Total paid across both payments = 15000 + 30000 = 45000
+      assert.equal(json.data.accountability.totalPaidAmount, 45000);
+      // Outstanding: 1 MISSED (15k) + 1 MADE_UP (15k) = 30000
+      assert.equal(json.data.accountability.totalAmount, 30000);
+      assert.equal(json.data.accountability.totalMissed, 1);
+      assert.equal(json.data.accountability.totalMadeUp, 1);
+      assert.equal(json.data.accountability.totalOverdue, 0); // neither is overdue
+      assert.equal(json.data.accountability.breakdown.length, 2);
+
+      const missedItem = json.data.accountability.breakdown.find((b: { prayerId: string }) => b.prayerId === 'fajr');
+      assert.ok(missedItem);
+      assert.equal(missedItem.status, 'MISSED');
+      assert.equal(missedItem.totalAmount, 15000);
+
+      const madeUpItem = json.data.accountability.breakdown.find((b: { prayerId: string }) => b.prayerId === 'dhuhr');
+      assert.ok(madeUpItem);
+      assert.equal(madeUpItem.status, 'MADE_UP');
+      assert.equal(madeUpItem.totalAmount, 15000);
+      assert.equal(madeUpItem.isOverdue, false);
     });
   });
 });

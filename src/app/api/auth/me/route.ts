@@ -9,8 +9,8 @@ export async function GET(request: NextRequest) {
       return NextResponse.json(
         {
           success: false,
-          error: 'Unauthorized: No active session found',
-          code: 'AUTH_UNAUTHORIZED',
+          error: 'Session expired',
+          code: 'AUTH_SESSION_EXPIRED',
         },
         { status: 401 }
       );

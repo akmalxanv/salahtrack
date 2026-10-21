@@ -116,6 +116,7 @@ export interface TranslationContent {
     cancel: string;
     error: string;
     success: string;
+    or: string;
   };
   nav: {
     home: string;
@@ -212,6 +213,24 @@ export interface TranslationContent {
     passwordCriteriaSpecial: string;
     footerTagline: string;
   };
+  guest: {
+    bannerTitle: string;
+    bannerBadge: string;
+    bannerDesc: string;
+    loginButton: string;
+    signupButton: string;
+    continueAsGuest: string;
+    modalTitle: string;
+    modalDesc: string;
+    modalConfirm: string;
+    modalCancel: string;
+  };
+  sessionExpired: {
+    title: string;
+    desc: string;
+    signInAgain: string;
+    dismiss: string;
+  };
   prayers: Record<'fajr' | 'dhuhr' | 'asr' | 'maghrib' | 'isha', string>;
   statuses: Record<'PENDING' | 'PRAYED_ON_TIME' | 'PRAYED_LATE' | 'MISSED' | 'MADE_UP' | 'PRAYED', string>;
   dashboard: {
@@ -276,6 +295,9 @@ export interface TranslationContent {
     paymentHistory: string;
     noPaymentsYet: string;
     receiptId: string;
+    confirmedMadeUpCheckbox: string;
+    confirmedMadeUpWarning: string;
+    blockPaymentNotice: string;
   };
   leaderboard: {
     title: string;
@@ -613,7 +635,7 @@ export interface TranslationContent {
 export const translations: Record<Language, TranslationContent> = {
   ru: {
     appTitle: 'Namozlarim',
-    appSubtitle: 'Трекер намаза и духовного самоконтроля',
+    appSubtitle: 'Трекер намаза и самоконтроля',
     common: {
       hoursUnit: 'ч',
       minsUnit: 'мин',
@@ -625,6 +647,7 @@ export const translations: Record<Language, TranslationContent> = {
       cancel: 'Отмена',
       error: 'Произошла ошибка',
       success: 'Успешно',
+      or: 'или',
     },
     nav: {
       home: 'Главная',
@@ -721,6 +744,24 @@ export const translations: Record<Language, TranslationContent> = {
       passwordCriteriaSpecial: 'Цифра и специальный символ',
       footerTagline: 'Создано для осознанного совершения намаза и личной дисциплины.',
     },
+    guest: {
+      bannerTitle: 'Режим гостя',
+      bannerBadge: 'Гостевой режим',
+      bannerDesc: 'Ваши данные и серия сохраняются только в этом браузере. Войдите или зарегистрируйтесь, чтобы синхронизировать их между устройствами.',
+      loginButton: 'Войти',
+      signupButton: 'Регистрация',
+      continueAsGuest: 'Продолжить как гость',
+      modalTitle: 'О гостевом режиме',
+      modalDesc: 'В гостевом режиме все данные хранятся локально в вашем браузере. При очистке кэша или смене браузера история может быть утеряна. Вы можете зарегистрироваться в любое время для сохранения данных.',
+      modalConfirm: 'Продолжить',
+      modalCancel: 'Отмена',
+    },
+    sessionExpired: {
+      title: 'Сессия истекла',
+      desc: 'В целях безопасности ваша сессия завершена. Ваши локальные изменения сохранены. Пожалуйста, войдите снова для синхронизации.',
+      signInAgain: 'Войти снова',
+      dismiss: 'Закрыть',
+    },
     prayers: {
       fajr: 'Фаджр',
       dhuhr: 'Зухр',
@@ -782,13 +823,13 @@ export const translations: Record<Language, TranslationContent> = {
       cancel: 'Отмена',
       baseRateNote: 'Базовая ставка: 15 000 UZS за пропущенный намаз',
       overdueNote: 'Период восполнения: 7 дней, далее +15 000 UZS за просрочку. Отметка «Восполнен» навсегда фиксирует штраф на 15 000 UZS.',
-      payQaza: '+ Погасить каза',
-      payModalTitle: 'Погашение долгов каза',
-      payModalDesc: 'Выберите пропущенные намазы (каза) для погашения задолженности по садака.',
+      payQaza: 'Пожертвовать садака',
+      payModalTitle: 'Садака за пропущенные намазы',
+      payModalDesc: 'Оформление добровольного пожертвования (садака) за пропущенные намазы.',
       selectAll: 'Выбрать все',
       deselectAll: 'Снять выбор',
       noOutstanding: 'Задолженностей по каза нет! Альхамдулиллах.',
-      confirmPayment: 'Подтвердить погашение',
+      confirmPayment: 'Подтвердить садака',
       confirming: 'Обработка...',
       selectedTotal: 'Итого выбрано',
       paymentSuccess: 'Оплата успешно сохранена! Баланс обновлен.',
@@ -798,6 +839,9 @@ export const translations: Record<Language, TranslationContent> = {
       paymentHistory: 'История погашений',
       noPaymentsYet: 'Платежей пока не зарегистрировано.',
       receiptId: 'Квитанция',
+      confirmedMadeUpCheckbox: 'Подтверждаю, что восполнил выбранные пропущенные намазы (каза)',
+      confirmedMadeUpWarning: 'Внимание: Обязательный (фард) намаз невозможно откупить деньгами. Пропущенные намазы необходимо восполнить молитвой. Садака служит лишь личной ответственностью.',
+      blockPaymentNotice: 'Садака не может быть оформлена без восполнения намазов. Пожалуйста, совершите каза-намазы и отметьте подтверждение выше.',
     },
     leaderboard: {
       title: 'Рейтинг постоянства',
@@ -1134,7 +1178,7 @@ export const translations: Record<Language, TranslationContent> = {
 
   en: {
     appTitle: 'Namozlarim',
-    appSubtitle: 'Prayer Tracker & Personal Accountability Platform',
+    appSubtitle: 'Prayer Tracker & Consistency',
     common: {
       hoursUnit: 'h',
       minsUnit: 'm',
@@ -1146,6 +1190,7 @@ export const translations: Record<Language, TranslationContent> = {
       cancel: 'Cancel',
       error: 'An error occurred',
       success: 'Success',
+      or: 'or',
     },
     nav: {
       home: 'Home',
@@ -1242,6 +1287,24 @@ export const translations: Record<Language, TranslationContent> = {
       passwordCriteriaSpecial: 'Number & special character',
       footerTagline: 'Built for mindful worshippers and personal accountability.',
     },
+    guest: {
+      bannerTitle: 'Guest Mode',
+      bannerBadge: 'Guest Mode',
+      bannerDesc: 'Your prayer records and streak are saved only in this browser. Sign in or create an account to permanently sync across devices.',
+      loginButton: 'Sign In',
+      signupButton: 'Sign Up',
+      continueAsGuest: 'Continue as Guest',
+      modalTitle: 'About Guest Mode',
+      modalDesc: 'In guest mode, all your data is stored locally in this browser. Clearing your browser cache or switching devices may cause data loss. You can create an account at any time to preserve your progress.',
+      modalConfirm: 'Continue',
+      modalCancel: 'Cancel',
+    },
+    sessionExpired: {
+      title: 'Session Expired',
+      desc: 'Your session has expired for security reasons. Your local changes are preserved. Please sign in again to continue syncing.',
+      signInAgain: 'Sign In Again',
+      dismiss: 'Close',
+    },
     prayers: {
       fajr: 'Fajr',
       dhuhr: 'Dhuhr',
@@ -1303,13 +1366,13 @@ export const translations: Record<Language, TranslationContent> = {
       cancel: 'Cancel',
       baseRateNote: 'Base pledge: 15,000 UZS per missed prayer',
       overdueNote: '7-day grace period, then +15,000 UZS overdue penalty. Marking Made Up permanently caps fine at 15,000 UZS.',
-      payQaza: '+ Pay Qaza',
-      payModalTitle: 'Pay Outstanding Qaza',
-      payModalDesc: 'Select outstanding Qaza prayers to settle the accountability sadaqah.',
+      payQaza: 'Donate Sadaqah',
+      payModalTitle: 'Accountability Sadaqah',
+      payModalDesc: 'Record voluntary accountability sadaqah for missed prayer obligations.',
       selectAll: 'Select All',
       deselectAll: 'Deselect All',
       noOutstanding: 'No outstanding Qaza fines owed! Alhamdu lillah.',
-      confirmPayment: 'Confirm Settlement',
+      confirmPayment: 'Confirm Sadaqah',
       confirming: 'Processing...',
       selectedTotal: 'Total Selected',
       paymentSuccess: 'Payment recorded successfully! Balance updated.',
@@ -1319,6 +1382,9 @@ export const translations: Record<Language, TranslationContent> = {
       paymentHistory: 'Payment History',
       noPaymentsYet: 'No payments recorded yet.',
       receiptId: 'Receipt',
+      confirmedMadeUpCheckbox: 'I confirm that I have made up the selected missed prayers (Qaza)',
+      confirmedMadeUpWarning: 'Notice: Obligatory prayers cannot be replaced by money. Missed prayers must be performed as Qaza. Sadaqah serves only as a personal accountability pledge.',
+      blockPaymentNotice: 'Sadaqah cannot be recorded without making up the prayers. Please perform the Qaza prayers and check the confirmation above.',
     },
     leaderboard: {
       title: 'Consistency Leaderboard',
@@ -1655,7 +1721,7 @@ export const translations: Record<Language, TranslationContent> = {
 
   uz: {
     appTitle: 'Namozlarim',
-    appSubtitle: 'Namoz va shaxsiy intizom platformasi',
+    appSubtitle: 'Namoz va ma’naviy intizom',
     common: {
       hoursUnit: 'soat',
       minsUnit: 'daqiqa',
@@ -1667,6 +1733,7 @@ export const translations: Record<Language, TranslationContent> = {
       cancel: 'Bekor qilish',
       error: 'Xatolik yuz berdi',
       success: 'Muvaffaqiyatli',
+      or: 'yoki',
     },
     nav: {
       home: 'Bosh sahifa',
@@ -1763,6 +1830,24 @@ export const translations: Record<Language, TranslationContent> = {
       passwordCriteriaSpecial: 'Raqam va maxsus belgi',
       footerTagline: 'Namozlarni o‘z vaqtida ado etish va shaxsiy intizom uchun yaratilgan.',
     },
+    guest: {
+      bannerTitle: 'Mehmon rejimi',
+      bannerBadge: 'Mehmon rejimi',
+      bannerDesc: 'Namozlaringiz va ketma-ketlik faqat ushbu brauzerda saqlanadi. Ma’lumotlarni barcha qurilmalarda xavfsiz saqlash uchun tizimga kiring yoki ro‘yxatdan o‘ting.',
+      loginButton: 'Kirish',
+      signupButton: 'Ro‘yxatdan o‘tish',
+      continueAsGuest: 'Mehmon sifatida kirish',
+      modalTitle: 'Mehmon rejimi haqida',
+      modalDesc: 'Mehmon rejimida barcha ma’lumotlar faqat shu brauzeringiz xotirasida saqlanadi. Kesh tozalansa yoki boshqa qurilmaga o‘tsangiz, ma’lumotlar yo‘qolishi mumkin. Istalgan vaqtda ro‘yxatdan o‘tib, ularni doimiy saqlashingiz mumkin.',
+      modalConfirm: 'Davom etish',
+      modalCancel: 'Bekor qilish',
+    },
+    sessionExpired: {
+      title: 'Sessiya muddati tugadi',
+      desc: 'Xavfsizlik maqsadida sessiyangiz muddati tugadi. Saqlangan ma’lumotlaringiz joyida, sinxronizatsiyani davom ettirish uchun qayta kiring.',
+      signInAgain: 'Qayta kirish',
+      dismiss: 'Yopish',
+    },
     prayers: {
       fajr: 'Bomdod',
       dhuhr: 'Peshin',
@@ -1824,13 +1909,13 @@ export const translations: Record<Language, TranslationContent> = {
       cancel: 'Bekor qilish',
       baseRateNote: 'Asosiy stavka: har bir qazo uchun 15 000 UZS',
       overdueNote: 'Qazo o‘tash muddati: 7 kun, undan keyin +15 000 UZS jarima. «Qazo o‘tildi» deb belgilash jarimani 15 000 UZS bilan cheklaydi.',
-      payQaza: '+ Qazo to‘lash',
-      payModalTitle: 'Qazo qarzlarini to‘lash',
-      payModalDesc: 'Kafillik sadaqasini to‘lash uchun qazo namozlarini tanlang.',
+      payQaza: 'Sadaqa berish',
+      payModalTitle: 'Kafillik sadaqasi',
+      payModalDesc: 'O‘tkazib yuborilgan namozlar uchun kafillik sadaqasini rasmiylashtirish.',
       selectAll: 'Barchasini tanlash',
       deselectAll: 'Barchasini bekor qilish',
       noOutstanding: 'Qazo qarzi mavjud emas! Alhamdulillah.',
-      confirmPayment: 'To‘lovni tasdiqlash',
+      confirmPayment: 'Sadaqani tasdiqlash',
       confirming: 'Bajarilmoqda...',
       selectedTotal: 'Tanlangan jami',
       paymentSuccess: 'To‘lov muvaffaqiyatli saqlandi! Balans yangilandi.',
@@ -1840,6 +1925,9 @@ export const translations: Record<Language, TranslationContent> = {
       paymentHistory: 'To‘lovlar tarixi',
       noPaymentsYet: 'Hozircha hech qanday to‘lov amalga oshirilmagan.',
       receiptId: 'Kvitansiya',
+      confirmedMadeUpCheckbox: 'Tanlangan qazo namozlarini o‘qib bo‘lganimni tasdiqlayman',
+      confirmedMadeUpWarning: 'Eslatma: Qazo namozlarini faqat o‘qish orqali ado etish mumkin. Moliyaviy to‘lov namoz o‘rnini bosmaydi; sadaqa faqat intizom va kafillik uchun beriladi.',
+      blockPaymentNotice: 'Qazo namozlarini o‘qimay turib sadaqa to‘lab bo‘lmaydi. Avval namozlarni qazo qilib o‘qing va yuqoridagi tasdiqni belgilang.',
     },
     leaderboard: {
       title: 'Muntazamlik reytingi',

@@ -12,6 +12,7 @@ import type {
 } from '../../../../types/prayer.ts';
 
 const VALID_PRAYER_IDS: PrayerId[] = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
+const MAX_PAYMENT_ITEMS = 500;
 
 /**
  * GET /api/prayers/qaza-payment
@@ -90,6 +91,17 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    if (body.items.length > MAX_PAYMENT_ITEMS) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `Payment batch exceeds maximum allowed limit of ${MAX_PAYMENT_ITEMS} items`,
+          code: 'BATCH_LIMIT_EXCEEDED',
+        },
+        { status: 400 }
+      );
+    }
+
     // 1. Syntax & structure validation
     const seen = new Set<string>();
     for (const item of body.items) {
@@ -129,7 +141,7 @@ export async function POST(request: NextRequest) {
     // 2. Check Idempotency Key
     const idempotencyKey =
       typeof body.idempotencyKey === 'string' && body.idempotencyKey.trim().length > 0
-        ? body.idempotencyKey.trim()
+        ? body.idempotencyKey.trim().slice(0, 128)
         : undefined;
 
     if (idempotencyKey) {
@@ -259,7 +271,21 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // 5. Atomic Update Pass: mark prayers as paid and persist
+    // 4b. Validate confirmedMadeUp requirement: If any prayer in body.items has status 'MISSED', require body.confirmedMadeUp === true
+    const hasMissed = verifiedItems.some((it) => it.status === 'MISSED');
+    if (hasMissed && body.confirmedMadeUp !== true) {
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            'You must confirm that the selected missed prayers have been made up before settling sadaqah. Sadaqah does not substitute obligatory prayer.',
+          code: 'CONFIRMATION_REQUIRED',
+        },
+        { status: 400 }
+      );
+    }
+
+    // 5. Atomic Update Pass: transition prayers to MADE_UP, mark as paid, and persist
     let totalAmount = 0;
     const receiptItems = [];
     const recordsToSave = new Set<IPrayerRecord>();
@@ -267,6 +293,10 @@ export async function POST(request: NextRequest) {
     for (const item of verifiedItems) {
       totalAmount += item.amount;
       const prayerObj = item.record.prayers[item.prayerId];
+      prayerObj.status = 'MADE_UP';
+      if (!prayerObj.madeUpAt) {
+        prayerObj.madeUpAt = now;
+      }
       prayerObj.isPaid = true;
       prayerObj.paidAt = now;
       prayerObj.paidAmount = item.amount;
@@ -277,7 +307,7 @@ export async function POST(request: NextRequest) {
         prayerRecordId: item.record._id,
         date: item.date,
         prayerId: item.prayerId,
-        status: item.status,
+        status: 'MADE_UP' as PrayerStatus,
         amount: item.amount,
         isOverdue: item.isOverdue,
       });

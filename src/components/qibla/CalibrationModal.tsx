@@ -37,7 +37,7 @@ export function CalibrationModal({ isOpen, onClose }: CalibrationModalProps) {
         <button
           type="button"
           onClick={onClose}
-          className="absolute right-4 top-4 w-8 h-8 rounded-full flex items-center justify-center text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+          className="absolute right-4 top-4 min-h-[44px] min-w-[44px] rounded-full flex items-center justify-center text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
           aria-label={t.qibla.calibrateClose}
         >
           <X className="w-5 h-5" />

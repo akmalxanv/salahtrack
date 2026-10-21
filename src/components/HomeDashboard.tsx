@@ -4,7 +4,6 @@ import { useMemo, useState, useEffect, useCallback } from 'react';
 import {
   CheckCircle2,
   Flame,
-  Plus,
   Clock,
   Calendar as CalendarIcon,
   ChevronDown,
@@ -16,13 +15,19 @@ import {
   AlertTriangle,
   Loader2,
   Moon,
+  HeartHandshake,
+  UserCheck,
+  LogIn,
+  UserPlus,
 } from 'lucide-react';
+import Link from 'next/link';
 import { useLocalStorage, useIsMounted } from '@/hooks/useLocalStorage';
 import { useLanguage } from '@/context/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
 import LanguageSelector from '@/components/LanguageSelector';
 import PayQazaModal from '@/components/qaza/PayQazaModal';
 import { PrayerItem, PrayerStatus, PrayerId, StreakData, DEFAULT_STREAK } from '@/types/prayer';
+import { calculateAccountabilityLedger } from '@/lib/accountability';
 import { calculateStreakTransition, evaluateRolloverStreak } from '@/lib/streak';
 import { validateCoordinates } from '@/lib/qibla';
 import { formatLocalizedDate, formatLocalizedHijriDate, formatCurrency } from '@/lib/formatters';
@@ -36,8 +41,10 @@ import {
   saveDailyPrayersSync,
   loadPrayersForLiturgicalDate,
   archiveLiturgicalDay,
+  catchupMultiDayGap,
   mirrorDailyPrayersToHistory,
   getStoredHistoryRecords,
+  dispatchStorageUpdate,
 } from '@/lib/storage-sync';
 
 export const DEFAULT_PRAYERS: PrayerItem[] = [
@@ -228,7 +235,6 @@ export default function HomeDashboard({
   // Location and Prayer API states
   const [locationName, setLocationName] = useState<string>('Tashkent');
   const [apiStatus, setApiStatus] = useState<'loading' | 'live' | 'fallback' | 'error'>('loading');
-  const [calcMethodName, setCalcMethodName] = useState<string>('MWL');
 
   // Saving states per prayer item
   const [savingStatus, setSavingStatus] = useState<Record<PrayerId, 'idle' | 'saving' | 'saved' | 'error'>>({
@@ -316,26 +322,46 @@ export default function HomeDashboard({
       // 1. Archive the completed liturgical day into salahtrack_history_records
       const { uncompletedCount } = archiveLiturgicalDay(lastSavedDate, prayers);
 
-      // 2. Add uncompleted prayers from the completed cycle to Qaza
-      if (uncompletedCount > 0) {
-        setQazaCount((prev) => prev + uncompletedCount);
+      // 2. If gap > 1 day, catch up intermediate missing dates
+      const gapMissed = catchupMultiDayGap(lastSavedDate, activeLiturgicalDate);
+
+      // 3. Increment Qaza count by total missed prayers
+      const totalMissed = uncompletedCount + gapMissed;
+      if (totalMissed > 0) {
+        setQazaCount((prev) => prev + totalMissed);
       }
 
-      // 3. Update consistency streak based on rollover evaluation
+      // 4. Update consistency streak based on rollover evaluation
       setStreak((prevStreak) => evaluateRolloverStreak(prevStreak, activeLiturgicalDate));
 
-      // 4. Load or initialize fresh prayers for the new active liturgical date
+      // 5. Load fresh prayers for activeLiturgicalDate (or default 5 PENDING)
       const freshPrayers = loadPrayersForLiturgicalDate(activeLiturgicalDate, DEFAULT_PRAYERS);
+
+      // 6. Update state and save daily prayers sync
       setPrayers(freshPrayers);
-
-      // 5. Update lastSavedDate
       setLastSavedDate(activeLiturgicalDate);
-
-      // 6. Save new liturgical day state to storage & sync cookie
       saveDailyPrayersSync(activeLiturgicalDate, freshPrayers);
+
+      // 7. If user is authenticated, call POST /api/prayers/rollover in background
+      if (user) {
+        fetch('/api/prayers/rollover', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fromDate: lastSavedDate,
+            toDate: activeLiturgicalDate,
+          }),
+        }).catch((err) => {
+          console.warn('Background rollover sync error:', err);
+        });
+      }
+
+      // 8. Trigger dispatchStorageUpdate so all tabs update
+      dispatchStorageUpdate();
     }
   }, [
     isMounted,
+    user,
     lastSavedDate,
     activeLiturgicalDate,
     prayers,
@@ -445,7 +471,6 @@ export default function HomeDashboard({
         }
         const method = user?.preferences?.calculationMethod || 'MWL';
         queryParams.set('method', method);
-        setCalcMethodName(method);
 
         const url = `/api/prayer-times?${queryParams.toString()}`;
         const res = await fetch(url);
@@ -499,6 +524,18 @@ export default function HomeDashboard({
       const normalizedStatus: PrayerStatus = status === 'PRAYED' ? 'PRAYED_ON_TIME' : status;
       const targetDate = activeLiturgicalDate;
 
+      // Fine difference calculation for immediate 0ms UI feedback
+      const getFineAndUnpaid = (st: PrayerStatus) => {
+        if (st === 'MISSED' || st === 'MADE_UP') return { fine: 15000, unpaid: 1 };
+        return { fine: 0, unpaid: 0 };
+      };
+      const oldItem = prayers.find((p) => p.id === id);
+      const oldStatus = oldItem ? (oldItem.status === 'PRAYED' ? 'PRAYED_ON_TIME' : oldItem.status) : 'PENDING';
+      const oldCalc = getFineAndUnpaid(oldStatus);
+      const newCalc = getFineAndUnpaid(normalizedStatus);
+      const fineDiff = newCalc.fine - oldCalc.fine;
+      const unpaidDiff = newCalc.unpaid - oldCalc.unpaid;
+
       // 1. Instant 0ms optimistic UI update
       const updatedPrayers = prayers.map((item) =>
         item.id === id ? { ...item, status: normalizedStatus, updatedAt: new Date().toISOString() } : item
@@ -507,6 +544,7 @@ export default function HomeDashboard({
       setActiveMenuPrayerId(null);
 
       // 2. Synchronize to localStorage, cookie, and mirror to salahtrack_history_records[targetDate]
+      // mirrorDailyPrayersToHistory inside saveDailyPrayersSync immediately updates record.finesAccrued
       saveDailyPrayersSync(targetDate, updatedPrayers);
 
       // 3. Optimistic streak transition calculation (strictly 5/5 completed prayers)
@@ -515,10 +553,22 @@ export default function HomeDashboard({
       ).length === 5;
       setStreak((prevStreak) => calculateStreakTransition(prevStreak, targetDate, isDayCompleted));
 
-      // 4. Set saving status feedback
+      // 4. Optimistically adjust server accountability (if active) so totalSadaqahOwed immediately updates by 15,000 UZS
+      if (serverAccountability !== null && (fineDiff !== 0 || unpaidDiff !== 0)) {
+        setServerAccountability((prev) =>
+          prev
+            ? {
+                totalAmount: Math.max(0, prev.totalAmount + fineDiff),
+                unpaidCount: Math.max(0, prev.unpaidCount + unpaidDiff),
+              }
+            : null
+        );
+      }
+
+      // 5. Set saving status feedback
       setSavingStatus((prev) => ({ ...prev, [id]: 'saving' }));
 
-      // 5. Background sync to MongoDB Atlas if authenticated
+      // 6. Background sync to MongoDB Atlas if authenticated
       if (user) {
         try {
           const res = await fetch('/api/prayers', {
@@ -581,7 +631,7 @@ export default function HomeDashboard({
         }, 1500);
       }
     },
-    [user, activeLiturgicalDate, prayers, setPrayers, setStreak]
+    [user, activeLiturgicalDate, prayers, setPrayers, setStreak, serverAccountability]
   );
 
   // Quick toggle (done / pending)
@@ -595,41 +645,18 @@ export default function HomeDashboard({
     handleSetStatus(id, nextStatus);
   };
 
-  // Local accountability ledger calculated from historical prayer records
+  // Local accountability ledger calculated from historical prayer records using single source of truth
   const localAccountability = useMemo(() => {
     if (!isMounted) return { totalAmount: 0, unpaidCount: 0 };
     // Track reactive store changes
     if (historyVersion < 0 || prayers.length < 0) return { totalAmount: 0, unpaidCount: 0 };
 
     const history = getStoredHistoryRecords();
-    let totalAmount = 0;
-    let unpaidCount = 0;
-    const nowTime = now.getTime();
-    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
-
-    for (const date of Object.keys(history)) {
-      const rec = history[date];
-      if (!rec?.prayers) continue;
-
-      const recDate = new Date(`${date}T00:00:00Z`).getTime();
-      const diffMs = nowTime - recDate;
-      const isOverdue = diffMs > sevenDaysMs;
-
-      for (const p of (['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'] as PrayerId[])) {
-        const entry = rec.prayers[p];
-        if (!entry || entry.isPaid) continue;
-
-        if (entry.status === 'MISSED') {
-          unpaidCount++;
-          totalAmount += 15000 + (isOverdue ? 15000 : 0);
-        } else if (entry.status === 'MADE_UP') {
-          unpaidCount++;
-          totalAmount += 15000;
-        }
-      }
-    }
-
-    return { totalAmount, unpaidCount };
+    const ledger = calculateAccountabilityLedger(history, now.getTime());
+    return {
+      totalAmount: ledger.totalAmount,
+      unpaidCount: ledger.unpaidCount,
+    };
   }, [isMounted, prayers, historyVersion, now]);
 
   const unpaidQazaCount =
@@ -698,7 +725,47 @@ export default function HomeDashboard({
   const ringOffset = ringCircumference - (completedCount / 5) * ringCircumference;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6">
+      {/* Prominent Guest Mode Banner */}
+      {!user && (
+        <div className="relative overflow-hidden rounded-2xl border border-amber-300/80 dark:border-amber-700/60 bg-gradient-to-r from-amber-50 via-amber-50/80 to-amber-100/50 dark:from-amber-950/40 dark:via-amber-950/30 dark:to-amber-900/20 p-4 sm:p-5 shadow-xs">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3.5">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-amber-500/10 dark:bg-amber-500/20 border border-amber-500/30 text-amber-700 dark:text-amber-400 flex items-center justify-center shrink-0 mt-0.5">
+                <UserCheck className="w-5 h-5" />
+              </div>
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-bold uppercase tracking-wider bg-amber-200/80 dark:bg-amber-900/60 text-amber-900 dark:text-amber-200 border border-amber-300 dark:border-amber-700">
+                    {t.guest.bannerBadge}
+                  </span>
+                </div>
+                <p className="text-xs sm:text-sm text-amber-900/90 dark:text-amber-200/90 leading-relaxed font-medium">
+                  {t.guest.bannerDesc}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 self-start md:self-auto shrink-0 pl-13 md:pl-0">
+              <Link
+                href="/login"
+                className="py-2 px-3.5 rounded-xl bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white text-xs font-semibold shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
+              >
+                <LogIn className="w-3.5 h-3.5" />
+                <span>{t.guest.loginButton}</span>
+              </Link>
+              <Link
+                href="/signup"
+                className="py-2 px-3.5 rounded-xl border border-amber-300 dark:border-amber-700 bg-white/80 dark:bg-slate-900/80 hover:bg-white dark:hover:bg-slate-900 text-amber-900 dark:text-amber-200 text-xs font-semibold shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
+              >
+                <UserPlus className="w-3.5 h-3.5" />
+                <span>{t.guest.signupButton}</span>
+              </Link>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Top Header Bar: Date & Streak & Mobile Language Selector */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-2 border-b border-slate-200/80 dark:border-slate-800/80">
         <div>
@@ -723,10 +790,6 @@ export default function HomeDashboard({
               <MapPin className="w-3 h-3 text-emerald-600 dark:text-emerald-400 shrink-0" />
               <span>{locationName}</span>
             </div>
-            <span className="text-slate-300 dark:text-slate-700 text-xs hidden sm:inline">•</span>
-            <span className="text-[11px] font-medium text-slate-400 dark:text-slate-500">
-              {calcMethodName}
-            </span>
           </div>
         </div>
 
@@ -852,8 +915,7 @@ export default function HomeDashboard({
             </div>
           </div>
 
-          <div className="mt-4 pt-3 border-t border-slate-700/60 flex items-center justify-between text-xs text-slate-400">
-            <span className="text-[11px]">{t.dashboard.calcMethodBased.replace('{method}', calcMethodName)}</span>
+          <div className="mt-4 pt-3 border-t border-slate-700/60 flex items-center justify-end text-xs text-slate-400">
             {notificationPermission === 'granted' ? (
               <span className="inline-flex items-center gap-1 text-[11px] text-emerald-400 font-medium">
                 <Bell className="w-3.5 h-3.5 text-emerald-400" />
@@ -980,10 +1042,10 @@ export default function HomeDashboard({
             type="button"
             onClick={() => setIsPayModalOpen(true)}
             disabled={unpaidQazaCount === 0}
-            className="self-start sm:self-auto flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white hover:bg-emerald-50 text-emerald-900 text-xs font-bold transition-all active:scale-95 cursor-pointer shadow-xs disabled:opacity-50 disabled:cursor-not-allowed"
+            className="self-start sm:self-auto min-h-[44px] flex items-center gap-2 px-4 py-2 rounded-xl bg-white hover:bg-emerald-50 text-emerald-900 text-xs font-bold transition-all active:scale-95 cursor-pointer shadow-xs disabled:opacity-50 disabled:cursor-not-allowed"
             title={t.accountability.payQaza}
           >
-            <Plus className="w-3.5 h-3.5 text-emerald-700" />
+            <HeartHandshake className="w-4 h-4 text-emerald-700" />
             <span>{t.accountability.payQaza}</span>
           </button>
         </div>
@@ -1050,7 +1112,7 @@ export default function HomeDashboard({
                     <button
                       type="button"
                       onClick={() => handleQuickToggle(prayer.id)}
-                      className="cursor-pointer focus:outline-hidden"
+                      className="min-h-[44px] min-w-[44px] flex items-center justify-center -ml-2 cursor-pointer focus:outline-hidden"
                       aria-label={`${t.dashboard.markPrayed}: ${prayerLabel}`}
                     >
                       <CheckCircle2 className={`w-6 h-6 transition-transform active:scale-90 ${config.iconClass}`} />
@@ -1087,7 +1149,7 @@ export default function HomeDashboard({
                   </div>
 
                   {/* Right: Status badge & dropdown trigger */}
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1 sm:gap-2">
                     <span
                       className={`text-[11px] font-semibold px-2.5 py-1 rounded-full border ${config.badgeClass}`}
                     >
@@ -1097,8 +1159,9 @@ export default function HomeDashboard({
                     <button
                       type="button"
                       onClick={() => setActiveMenuPrayerId(isMenuOpen ? null : prayer.id)}
-                      className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 dark:hover:text-slate-200 cursor-pointer"
+                      className="min-h-[44px] min-w-[44px] flex items-center justify-center -mr-2 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 dark:hover:text-slate-200 cursor-pointer transition-colors"
                       title={t.dashboard.changeStatus}
+                      aria-label={t.dashboard.changeStatus}
                     >
                       <ChevronDown className={`w-4 h-4 transition-transform ${isMenuOpen ? 'rotate-180' : ''}`} />
                     </button>

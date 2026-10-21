@@ -80,7 +80,7 @@ const QazaPaymentSchema = new Schema<IQazaPayment>(
     idempotencyKey: {
       type: String,
       trim: true,
-      index: { unique: true, sparse: true },
+      maxlength: 128,
     },
     note: {
       type: String,
@@ -101,6 +101,15 @@ const QazaPaymentSchema = new Schema<IQazaPayment>(
 
 // Compound index for user payment history queries
 QazaPaymentSchema.index({ userId: 1, createdAt: -1 });
+
+// Compound unique index for user-scoped idempotency keys (prevents cross-user collisions and duplicate replay)
+QazaPaymentSchema.index(
+  { userId: 1, idempotencyKey: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { idempotencyKey: { $type: 'string' } },
+  }
+);
 
 export const QazaPayment: Model<IQazaPayment> =
   (mongoose.models && mongoose.models.QazaPayment) ||

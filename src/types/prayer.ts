@@ -96,6 +96,7 @@ export interface PayQazaRequestBody {
   items: PayQazaRequestItem[];
   idempotencyKey?: string;
   note?: string;
+  confirmedMadeUp?: boolean;
 }
 
 export interface QazaPaymentReceiptItem {

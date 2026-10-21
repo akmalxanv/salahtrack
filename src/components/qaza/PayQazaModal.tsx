@@ -3,19 +3,23 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   X,
-  Check,
   AlertCircle,
+  AlertTriangle,
   CheckCircle2,
+  HeartHandshake,
   Loader2,
 } from 'lucide-react';
 import { useLanguage } from '@/context/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
 import type {
   PrayerId,
-  PrayerStatus,
   AccountabilityBreakdownItem,
   OutstandingQazaItem,
 } from '@/types/prayer';
+import {
+  calculateAccountabilityLedger,
+  type PayableQazaItem,
+} from '@/lib/accountability';
 import { formatCurrency } from '@/lib/formatters';
 import {
   getStoredHistoryRecords,
@@ -23,16 +27,7 @@ import {
   dispatchStorageUpdate,
 } from '@/lib/storage-sync';
 
-export interface PayableQazaItem {
-  date: string;
-  prayerId: PrayerId;
-  status: PrayerStatus;
-  amount: number;
-  baseAmount: number;
-  overdueAmount: number;
-  isOverdue: boolean;
-  daysPassed: number;
-}
+export type { PayableQazaItem };
 
 export interface PayQazaModalProps {
   isOpen: boolean;
@@ -52,6 +47,7 @@ export default function PayQazaModal({
 
   const [items, setItems] = useState<PayableQazaItem[]>([]);
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
+  const [confirmedMadeUp, setConfirmedMadeUp] = useState(false);
   const [loading, setLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -63,67 +59,15 @@ export default function PayQazaModal({
   const getItemKey = (item: { date: string; prayerId: PrayerId }): string =>
     `${item.date}:${item.prayerId}`;
 
-  // Helper to derive payable items from local storage history
+  // Helper to derive payable items from local storage history using single source of truth
   const loadLocalPayableItems = useCallback((): PayableQazaItem[] => {
     const history = getStoredHistoryRecords();
-    const result: PayableQazaItem[] = [];
-    const nowTime = Date.now();
-    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
-    const prayerOrder: PrayerId[] = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
-
-    const sortedDates = Object.keys(history).sort((a, b) => b.localeCompare(a));
-
-    for (const date of sortedDates) {
-      const record = history[date];
-      if (!record?.prayers) continue;
-
-      const recDate = new Date(`${date}T00:00:00Z`).getTime();
-      const diffMs = nowTime - recDate;
-      const daysPassed = Math.max(0, Math.floor(diffMs / (24 * 60 * 60 * 1000)));
-      const isOverdue = diffMs > sevenDaysMs;
-
-      for (const p of prayerOrder) {
-        const prayer = record.prayers[p];
-        if (!prayer) continue;
-
-        if (prayer.isPaid) continue;
-
-        if (prayer.status === 'MISSED') {
-          const base = 15000;
-          const overdue = isOverdue ? 15000 : 0;
-          result.push({
-            date,
-            prayerId: p,
-            status: 'MISSED',
-            baseAmount: base,
-            overdueAmount: overdue,
-            amount: base + overdue,
-            isOverdue,
-            daysPassed,
-          });
-        } else if (prayer.status === 'MADE_UP') {
-          result.push({
-            date,
-            prayerId: p,
-            status: 'MADE_UP',
-            baseAmount: 15000,
-            overdueAmount: 0,
-            amount: 15000,
-            isOverdue: false,
-            daysPassed,
-          });
-        }
-      }
-    }
-
-    return result;
+    return calculateAccountabilityLedger(history, Date.now()).items;
   }, []);
 
   // Fetch or populate items whenever modal opens
   useEffect(() => {
-    if (!isOpen) {
-      return;
-    }
+    if (!isOpen) return;
 
     let isCancelled = false;
 
@@ -133,6 +77,7 @@ export default function PayQazaModal({
       setLoading(true);
       setErrorMessage(null);
       setSuccessMessage(null);
+      setConfirmedMadeUp(false);
 
       // If initial items were supplied and non-empty, normalize them
       if (initialItems && initialItems.length > 0) {
@@ -145,6 +90,7 @@ export default function PayQazaModal({
             prayerId: it.prayerId,
             status: it.status || 'MISSED',
             amount: totalAmount,
+            totalAmount,
             baseAmount,
             overdueAmount,
             isOverdue: it.isOverdue,
@@ -172,6 +118,7 @@ export default function PayQazaModal({
                 prayerId: it.prayerId,
                 status: it.status || 'MISSED',
                 amount: it.totalAmount,
+                totalAmount: it.totalAmount,
                 baseAmount: it.baseAmount,
                 overdueAmount: it.overdueAmount,
                 isOverdue: it.isOverdue,
@@ -233,6 +180,15 @@ export default function PayQazaModal({
     };
   }, [isOpen, onClose]);
 
+  // Selected items list & verification
+  const selectedItems = useMemo(() => {
+    return items.filter((it) => selectedKeys.has(getItemKey(it)));
+  }, [items, selectedKeys]);
+
+  const hasMissedSelected = useMemo(() => {
+    return selectedItems.some((it) => it.status === 'MISSED');
+  }, [selectedItems]);
+
   // Select all / deselect all
   const isAllSelected = useMemo(() => {
     return items.length > 0 && selectedKeys.size === items.length;
@@ -260,22 +216,19 @@ export default function PayQazaModal({
 
   // Selected fine amount total
   const selectedTotal = useMemo(() => {
-    return items
-      .filter((it) => selectedKeys.has(getItemKey(it)))
-      .reduce((sum, it) => sum + it.amount, 0);
-  }, [items, selectedKeys]);
+    return selectedItems.reduce((sum, it) => sum + it.amount, 0);
+  }, [selectedItems]);
 
   const selectedCount = selectedKeys.size;
 
   // Confirm payment settlement
   const handleConfirmSettlement = async () => {
     if (selectedCount === 0 || isSubmitting) return;
+    if (hasMissedSelected && !confirmedMadeUp) return;
 
     setIsSubmitting(true);
     setErrorMessage(null);
     setSuccessMessage(null);
-
-    const selectedItems = items.filter((it) => selectedKeys.has(getItemKey(it)));
 
     try {
       if (user) {
@@ -288,7 +241,8 @@ export default function PayQazaModal({
               date: it.date,
               prayerId: it.prayerId,
             })),
-            idempotencyKey: `qaza-pay-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+            confirmedMadeUp: true,
+            idempotencyKey: `sadaqah-pay-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
           }),
         });
 
@@ -307,6 +261,8 @@ export default function PayQazaModal({
         if (dateRecord?.prayers?.[item.prayerId]) {
           dateRecord.prayers[item.prayerId] = {
             ...dateRecord.prayers[item.prayerId],
+            status: 'MADE_UP',
+            madeUpAt: nowIso,
             isPaid: true,
             paidAt: nowIso,
             paidAmount: item.amount,
@@ -321,6 +277,33 @@ export default function PayQazaModal({
         const currentSettled = rawSettled ? JSON.parse(rawSettled) : 0;
         const newSettled = (typeof currentSettled === 'number' ? currentSettled : 0) + selectedTotal;
         window.localStorage.setItem('salahtrack_settled_donations', JSON.stringify(newSettled));
+      } catch {
+        // ignore
+      }
+
+      // If today's daily prayers in salahtrack_daily_prayers had this prayer, update its status to MADE_UP as well!
+      try {
+        const rawDaily = window.localStorage.getItem('salahtrack_daily_prayers');
+        if (rawDaily) {
+          const dailyPrayers = JSON.parse(rawDaily);
+          if (Array.isArray(dailyPrayers)) {
+            let updatedDaily = false;
+            const todayStr = new Date().toISOString().split('T')[0];
+            for (const item of selectedItems) {
+              if (item.date === todayStr) {
+                const idx = dailyPrayers.findIndex((p: { id: PrayerId }) => p.id === item.prayerId);
+                if (idx !== -1) {
+                  dailyPrayers[idx].status = 'MADE_UP';
+                  dailyPrayers[idx].updatedAt = nowIso;
+                  updatedDaily = true;
+                }
+              }
+            }
+            if (updatedDaily) {
+              window.localStorage.setItem('salahtrack_daily_prayers', JSON.stringify(dailyPrayers));
+            }
+          }
+        }
       } catch {
         // ignore
       }
@@ -477,11 +460,11 @@ export default function PayQazaModal({
                               {t.prayers[item.prayerId]}
                             </span>
                             {isMadeUp ? (
-                              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-sky-50 dark:bg-sky-950/80 text-sky-800 dark:text-sky-300 border border-sky-200 dark:border-sky-800">
+                              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-sky-50 text-sky-800 dark:bg-sky-950/80 dark:text-sky-300 border border-sky-200 dark:border-sky-800">
                                 {t.statuses.MADE_UP}
                               </span>
                             ) : (
-                              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-rose-50 dark:bg-rose-950/80 text-rose-800 dark:text-rose-300 border border-rose-200 dark:border-rose-800">
+                              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-rose-50 text-rose-800 dark:bg-rose-950/80 dark:text-rose-300 border border-rose-200 dark:border-rose-800">
                                 {t.statuses.MISSED}
                               </span>
                             )}
@@ -518,9 +501,39 @@ export default function PayQazaModal({
           )}
         </div>
 
-        {/* Footer with Summary and Action Button */}
+        {/* Footer with Summary, Pre-Payment Confirmation, and Action Buttons */}
         {items.length > 0 && (
           <div className="p-4 sm:p-5 border-t border-slate-100 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-900/80 shrink-0 space-y-3">
+            {/* Pre-payment Confirmation Checkbox for Missed Qaza */}
+            {hasMissedSelected && (
+              <div className="space-y-2.5 p-3.5 rounded-xl bg-amber-50/90 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800/70 text-xs">
+                <div className="flex items-start gap-2 text-amber-800 dark:text-amber-300">
+                  <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600 dark:text-amber-400 mt-0.5" />
+                  <p className="text-[11px] leading-relaxed font-medium">
+                    {t.accountability.confirmedMadeUpWarning}
+                  </p>
+                </div>
+
+                <label className="min-h-[44px] flex items-center gap-2.5 pt-2 border-t border-amber-200/60 dark:border-amber-800/60 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={confirmedMadeUp}
+                    onChange={(e) => setConfirmedMadeUp(e.target.checked)}
+                    className="w-4 h-4 rounded border-amber-400 dark:border-amber-600 text-emerald-600 focus:ring-emerald-500 cursor-pointer accent-emerald-600 shrink-0"
+                  />
+                  <span className="text-xs font-semibold text-amber-950 dark:text-amber-100 leading-snug">
+                    {t.accountability.confirmedMadeUpCheckbox}
+                  </span>
+                </label>
+
+                {!confirmedMadeUp && (
+                  <p className="text-[11px] text-rose-600 dark:text-rose-400 font-medium">
+                    {t.accountability.blockPaymentNotice}
+                  </p>
+                )}
+              </div>
+            )}
+
             <div className="flex items-center justify-between text-xs">
               <span className="text-slate-600 dark:text-slate-400 font-medium">
                 {t.accountability.selectedTotal} ({selectedCount}):
@@ -543,8 +556,8 @@ export default function PayQazaModal({
               <button
                 type="button"
                 onClick={handleConfirmSettlement}
-                disabled={selectedCount === 0 || isSubmitting}
-                className="min-h-[44px] flex-[2] py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={selectedCount === 0 || isSubmitting || (hasMissedSelected && !confirmedMadeUp)}
+                className="min-h-[44px] flex-[2] py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-xs transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {isSubmitting ? (
                   <>
@@ -553,7 +566,7 @@ export default function PayQazaModal({
                   </>
                 ) : (
                   <>
-                    <Check className="w-4 h-4" />
+                    <HeartHandshake className="w-4 h-4" />
                     <span>{t.accountability.confirmPayment}</span>
                   </>
                 )}

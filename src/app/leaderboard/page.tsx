@@ -200,7 +200,7 @@ export default function LeaderboardPage() {
             <button
               onClick={handleToggleOptIn}
               disabled={togglingOptIn}
-              className={`py-2 px-4 rounded-xl text-xs font-semibold transition-all shrink-0 flex items-center justify-center gap-2 cursor-pointer ${
+              className={`min-h-[44px] py-2 px-4 rounded-xl text-xs font-semibold transition-all shrink-0 flex items-center justify-center gap-2 cursor-pointer ${
                 isOptedIn
                   ? 'bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300'
                   : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm shadow-emerald-600/20'
@@ -217,7 +217,7 @@ export default function LeaderboardPage() {
           ) : (
             <Link
               href="/login"
-              className="py-2 px-4 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-xl transition-colors shrink-0 flex items-center justify-center gap-1.5 shadow-sm"
+              className="min-h-[44px] py-2 px-4 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-xl transition-colors shrink-0 flex items-center justify-center gap-1.5 shadow-sm"
             >
               <LogIn className="w-3.5 h-3.5" />
               <span>{t.nav.login}</span>
@@ -245,7 +245,7 @@ export default function LeaderboardPage() {
           <button
             type="button"
             onClick={() => setPeriod('daily')}
-            className={`py-1.5 px-3.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+            className={`min-h-[38px] py-1.5 px-3.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
               period === 'daily'
                 ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
                 : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
@@ -256,7 +256,7 @@ export default function LeaderboardPage() {
           <button
             type="button"
             onClick={() => setPeriod('weekly')}
-            className={`py-1.5 px-3.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+            className={`min-h-[38px] py-1.5 px-3.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
               period === 'weekly'
                 ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
                 : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
@@ -267,7 +267,7 @@ export default function LeaderboardPage() {
           <button
             type="button"
             onClick={() => setPeriod('monthly')}
-            className={`py-1.5 px-3.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+            className={`min-h-[38px] py-1.5 px-3.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
               period === 'monthly'
                 ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
                 : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'

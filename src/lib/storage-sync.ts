@@ -9,6 +9,8 @@
  */
 
 import type { PrayerId, PrayerItem, PrayerStatus, PrayerHistoryRecord } from '@/types/prayer';
+import { calculateAccountabilityFines } from './accountability.ts';
+import { parseDateComponents, formatDateString } from './calendar.ts';
 
 export const STORAGE_KEY_DAILY_PRAYERS = 'salahtrack_daily_prayers';
 export const STORAGE_KEY_HISTORY_RECORDS = 'salahtrack_history_records';
@@ -125,6 +127,7 @@ export function mirrorDailyPrayersToHistory(
     };
 
     const updatedPrayers = { ...existingRecord.prayers };
+    const nowIso = new Date().toISOString();
 
     for (const prayer of prayers) {
       const normalizedStatus: PrayerStatus = prayer.status === 'PRAYED' ? 'PRAYED_ON_TIME' : prayer.status;
@@ -132,20 +135,33 @@ export function mirrorDailyPrayersToHistory(
 
       const isCompleted = normalizedStatus === 'PRAYED_ON_TIME' || normalizedStatus === 'PRAYED_LATE';
       const prayedAt = isCompleted
-        ? currentEntry.prayedAt || prayer.updatedAt || new Date().toISOString()
+        ? currentEntry.prayedAt || prayer.updatedAt || nowIso
         : currentEntry.prayedAt;
+
+      const missedAt = normalizedStatus === 'MISSED'
+        ? currentEntry.missedAt || prayer.updatedAt || nowIso
+        : currentEntry.missedAt;
+
+      const madeUpAt = normalizedStatus === 'MADE_UP'
+        ? currentEntry.madeUpAt || prayer.updatedAt || nowIso
+        : currentEntry.madeUpAt;
 
       updatedPrayers[prayer.id] = {
         ...currentEntry,
         status: normalizedStatus,
         prayedAt,
+        missedAt,
+        madeUpAt,
       };
     }
+
+    const calculatedFines = calculateAccountabilityFines(existingRecord.date, updatedPrayers);
 
     records[liturgicalDate] = {
       ...existingRecord,
       prayers: updatedPrayers,
-      updatedAt: new Date().toISOString(),
+      finesAccrued: calculatedFines,
+      updatedAt: nowIso,
     };
 
     saveStoredHistoryRecords(records);
@@ -232,7 +248,9 @@ export function loadPrayersForLiturgicalDate(
 
 /**
  * Archives a completed liturgical day into salahtrack_history_records.
- * Calculates uncompleted prayers that should be converted to Qaza.
+ * Ensures all 5 prayers exist. Any prayer with status 'PENDING' is converted to 'MISSED'
+ * with missedAt timestamp. Recalculates finesAccrued for the completed day.
+ * Returns { uncompletedCount } representing total uncompleted prayers (converted to MISSED or already MISSED).
  */
 export function archiveLiturgicalDay(
   completedDate: string,
@@ -243,15 +261,126 @@ export function archiveLiturgicalDay(
   }
 
   try {
-    mirrorDailyPrayersToHistory(completedDate, prayers);
+    const records = getStoredHistoryRecords();
+    const existingRecord: PrayerHistoryRecord = records[completedDate] || {
+      date: completedDate,
+      prayers: {
+        fajr: { status: 'PENDING' },
+        dhuhr: { status: 'PENDING' },
+        asr: { status: 'PENDING' },
+        maghrib: { status: 'PENDING' },
+        isha: { status: 'PENDING' },
+      },
+      finesAccrued: 0,
+    };
 
-    const uncompletedCount = prayers.filter(
-      (p) => p.status === 'PENDING' || p.status === 'MISSED'
-    ).length;
+    const updatedPrayers = { ...existingRecord.prayers };
+    const nowIso = new Date().toISOString();
+    let uncompletedCount = 0;
 
+    for (const prayerId of ALL_PRAYER_IDS) {
+      const incoming = prayers.find((p) => p.id === prayerId);
+      const incomingStatus: PrayerStatus | undefined = incoming
+        ? incoming.status === 'PRAYED'
+          ? 'PRAYED_ON_TIME'
+          : incoming.status
+        : undefined;
+
+      const currentEntry = updatedPrayers[prayerId];
+      const effectiveStatus: PrayerStatus = incomingStatus || currentEntry?.status || 'PENDING';
+
+      if (effectiveStatus === 'PENDING' || effectiveStatus === 'MISSED') {
+        updatedPrayers[prayerId] = {
+          ...currentEntry,
+          status: 'MISSED',
+          missedAt: currentEntry?.missedAt || incoming?.updatedAt || nowIso,
+        };
+        uncompletedCount++;
+      } else {
+        const isCompleted = effectiveStatus === 'PRAYED_ON_TIME' || effectiveStatus === 'PRAYED_LATE';
+        updatedPrayers[prayerId] = {
+          ...currentEntry,
+          status: effectiveStatus,
+          prayedAt: isCompleted ? currentEntry?.prayedAt || incoming?.updatedAt || nowIso : currentEntry?.prayedAt,
+          madeUpAt: effectiveStatus === 'MADE_UP' ? currentEntry?.madeUpAt || incoming?.updatedAt || nowIso : currentEntry?.madeUpAt,
+        };
+      }
+    }
+
+    const finesAccrued = calculateAccountabilityFines(completedDate, updatedPrayers);
+
+    records[completedDate] = {
+      ...existingRecord,
+      date: completedDate,
+      prayers: updatedPrayers,
+      finesAccrued,
+      updatedAt: nowIso,
+    };
+
+    saveStoredHistoryRecords(records);
     return { uncompletedCount };
   } catch (err) {
     console.error('Failed to archive liturgical day:', err);
     return { uncompletedCount: 0 };
+  }
+}
+
+/**
+ * Catches up multi-day gaps between fromDate and toDate (exclusive).
+ * For each intermediate calendar date missing from history, creates a record
+ * with all 5 prayers set to status: 'MISSED' and finesAccrued: 75000.
+ * Returns total missed prayers created across all intermediate days.
+ */
+export function catchupMultiDayGap(fromDate: string, toDate: string): number {
+  if (typeof window === 'undefined' || !fromDate || !toDate || fromDate >= toDate) {
+    return 0;
+  }
+
+  try {
+    const records = getStoredHistoryRecords();
+    let missedPrayersCreated = 0;
+    let modified = false;
+
+    // Advance day by day strictly using UTC to avoid DST hour skew
+    const { year: fromY, month: fromM, day: fromD } = parseDateComponents(fromDate);
+    let currentUtc = Date.UTC(fromY, fromM - 1, fromD) + 24 * 60 * 60 * 1000;
+
+    const { year: toY, month: toM, day: toD } = parseDateComponents(toDate);
+    const endUtc = Date.UTC(toY, toM - 1, toD);
+
+    const nowIso = new Date().toISOString();
+
+    while (currentUtc < endUtc) {
+      const d = new Date(currentUtc);
+      const dateStr = formatDateString(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate());
+
+      if (!records[dateStr]) {
+        records[dateStr] = {
+          date: dateStr,
+          prayers: {
+            fajr: { status: 'MISSED', missedAt: nowIso },
+            dhuhr: { status: 'MISSED', missedAt: nowIso },
+            asr: { status: 'MISSED', missedAt: nowIso },
+            maghrib: { status: 'MISSED', missedAt: nowIso },
+            isha: { status: 'MISSED', missedAt: nowIso },
+          },
+          finesAccrued: 75000,
+          updatedAt: nowIso,
+        };
+        missedPrayersCreated += 5;
+        modified = true;
+      }
+
+      currentUtc += 24 * 60 * 60 * 1000;
+    }
+
+    if (modified) {
+      saveStoredHistoryRecords(records);
+    }
+
+    return missedPrayersCreated;
+  } catch (err) {
+    console.error('Failed to catch up multi-day gap:', err);
+    return 0;
   }
 }

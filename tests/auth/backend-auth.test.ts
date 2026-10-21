@@ -589,7 +589,8 @@ describe('Backend Authentication Layer Tests', () => {
 
       const json = await res.json();
       assert.strictEqual(json.success, false);
-      assert.ok(json.error.includes('Unauthorized'));
+      assert.strictEqual(json.error, 'Session expired');
+      assert.strictEqual(json.code, 'AUTH_SESSION_EXPIRED');
     });
   });
 

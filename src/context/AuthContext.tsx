@@ -3,10 +3,18 @@
 import React, { createContext, useContext, useEffect, useState, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import type { SafeUser } from '@/lib/auth/guard';
+import SessionExpiredModal from '@/components/auth/SessionExpiredModal';
+
+const STORAGE_KEY_MODE = 'salahtrack_mode';
+const STORAGE_KEY_HAD_SESSION = 'salahtrack_had_session';
 
 interface AuthContextType {
   user: SafeUser | null;
   loading: boolean;
+  isGuest: boolean;
+  setGuestMode: (val: boolean) => void;
+  sessionExpired: boolean;
+  dismissSessionExpired: () => void;
   login: (data: { identifier: string; password: string; rememberMe?: boolean }) => Promise<{ success: boolean; error?: string }>;
   signup: (data: { name: string; username: string; email: string; password: string; confirmPassword?: string }) => Promise<{ success: boolean; error?: string; errors?: Record<string, string> }>;
   logout: () => Promise<void>;
@@ -25,7 +33,32 @@ export function AuthProvider({
 }) {
   const [user, setUser] = useState<SafeUser | null>(initialUser);
   const [loading, setLoading] = useState<boolean>(!initialUser);
+  const [isGuest, setIsGuest] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      return window.localStorage.getItem(STORAGE_KEY_MODE) === 'guest';
+    }
+    return false;
+  });
+  const [sessionExpired, setSessionExpired] = useState<boolean>(false);
   const router = useRouter();
+
+  const setGuestMode = useCallback((val: boolean) => {
+    setIsGuest(val);
+    if (typeof window !== 'undefined') {
+      if (val) {
+        window.localStorage.setItem(STORAGE_KEY_MODE, 'guest');
+      } else {
+        window.localStorage.removeItem(STORAGE_KEY_MODE);
+      }
+    }
+  }, []);
+
+  const dismissSessionExpired = useCallback(() => {
+    setSessionExpired(false);
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem(STORAGE_KEY_HAD_SESSION);
+    }
+  }, []);
 
   // Fetch current user from /api/auth/me using HttpOnly session cookie
   const refreshUser = useCallback(async (): Promise<SafeUser | null> => {
@@ -39,7 +72,25 @@ export function AuthProvider({
         const json = await res.json();
         if (json.success && json.data?.user) {
           setUser(json.data.user);
+          if (typeof window !== 'undefined') {
+            window.localStorage.setItem(STORAGE_KEY_HAD_SESSION, 'true');
+            window.localStorage.removeItem(STORAGE_KEY_MODE);
+          }
+          setIsGuest(false);
+          setSessionExpired(false);
           return json.data.user;
+        }
+      } else if (res.status === 401) {
+        try {
+          const errJson = await res.json();
+          if (errJson?.code === 'AUTH_SESSION_EXPIRED') {
+            const hadSession = typeof window !== 'undefined' && window.localStorage.getItem(STORAGE_KEY_HAD_SESSION) === 'true';
+            if (hadSession) {
+              setSessionExpired(true);
+            }
+          }
+        } catch {
+          // ignore
         }
       }
       setUser(null);
@@ -57,14 +108,36 @@ export function AuthProvider({
     let active = true;
     if (!initialUser) {
       fetch('/api/auth/me', { credentials: 'same-origin' })
-        .then((res) => (res.ok ? res.json() : null))
-        .then((json) => {
-          if (active) {
+        .then(async (res) => {
+          if (!active) return;
+          if (res.ok) {
+            const json = await res.json();
             if (json?.success && json?.data?.user) {
               setUser(json.data.user);
+              if (typeof window !== 'undefined') {
+                window.localStorage.setItem(STORAGE_KEY_HAD_SESSION, 'true');
+                window.localStorage.removeItem(STORAGE_KEY_MODE);
+              }
+              setIsGuest(false);
+              setSessionExpired(false);
             } else {
               setUser(null);
             }
+          } else if (res.status === 401) {
+            try {
+              const errJson = await res.json();
+              if (errJson?.code === 'AUTH_SESSION_EXPIRED') {
+                const hadSession = typeof window !== 'undefined' && window.localStorage.getItem(STORAGE_KEY_HAD_SESSION) === 'true';
+                if (hadSession) {
+                  setSessionExpired(true);
+                }
+              }
+            } catch {
+              // ignore
+            }
+            setUser(null);
+          } else {
+            setUser(null);
           }
         })
         .catch(() => {
@@ -102,6 +175,12 @@ export function AuthProvider({
         }
 
         setUser(json.data.user);
+        if (typeof window !== 'undefined') {
+          window.localStorage.setItem(STORAGE_KEY_HAD_SESSION, 'true');
+          window.localStorage.removeItem(STORAGE_KEY_MODE);
+        }
+        setIsGuest(false);
+        setSessionExpired(false);
         return { success: true };
       } catch {
         return {
@@ -139,6 +218,12 @@ export function AuthProvider({
         }
 
         setUser(json.data.user);
+        if (typeof window !== 'undefined') {
+          window.localStorage.setItem(STORAGE_KEY_HAD_SESSION, 'true');
+          window.localStorage.removeItem(STORAGE_KEY_MODE);
+        }
+        setIsGuest(false);
+        setSessionExpired(false);
         return { success: true };
       } catch {
         return {
@@ -159,6 +244,12 @@ export function AuthProvider({
     } catch (err) {
       console.error('Logout error:', err);
     } finally {
+      if (typeof window !== 'undefined') {
+        window.localStorage.removeItem(STORAGE_KEY_HAD_SESSION);
+        window.localStorage.removeItem(STORAGE_KEY_MODE);
+      }
+      setIsGuest(false);
+      setSessionExpired(false);
       setUser(null);
       router.push('/login');
       router.refresh();
@@ -169,18 +260,23 @@ export function AuthProvider({
     () => ({
       user,
       loading,
+      isGuest,
+      setGuestMode,
+      sessionExpired,
+      dismissSessionExpired,
       login,
       signup,
       logout,
       refreshUser,
       setUser,
     }),
-    [user, loading, login, signup, logout, refreshUser]
+    [user, loading, isGuest, setGuestMode, sessionExpired, dismissSessionExpired, login, signup, logout, refreshUser]
   );
 
   return (
     <AuthContext.Provider value={contextValue}>
       {children}
+      <SessionExpiredModal />
     </AuthContext.Provider>
   );
 }

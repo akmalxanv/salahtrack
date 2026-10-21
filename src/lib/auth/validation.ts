@@ -66,10 +66,6 @@ export function normalizeUsername(username: string): string {
  * Validates password complexity against the security specification:
  * - Minimum 8 characters
  * - Maximum 128 characters (DoS mitigation)
- * - At least one lowercase letter
- * - At least one uppercase letter
- * - At least one digit
- * - At least one special symbol
  */
 export function validatePassword(password: unknown): PasswordValidationResult {
   const errors: string[] = [];
@@ -84,22 +80,6 @@ export function validatePassword(password: unknown): PasswordValidationResult {
 
   if (password.length > 128) {
     errors.push('Password must not exceed 128 characters');
-  }
-
-  if (!/[a-z]/.test(password)) {
-    errors.push('Password must contain at least one lowercase letter');
-  }
-
-  if (!/[A-Z]/.test(password)) {
-    errors.push('Password must contain at least one uppercase letter');
-  }
-
-  if (!/[0-9]/.test(password)) {
-    errors.push('Password must contain at least one digit (0-9)');
-  }
-
-  if (!/[^a-zA-Z0-9]/.test(password)) {
-    errors.push('Password must contain at least one special character');
   }
 
   return {
