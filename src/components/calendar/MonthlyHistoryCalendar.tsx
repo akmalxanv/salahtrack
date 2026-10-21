@@ -204,9 +204,9 @@ export default function MonthlyHistoryCalendar({
   return (
     <div className="space-y-6">
       {/* Calendar & Inspector Layout Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-6 items-start">
         {/* ==================== LEFT COLUMN: INTERACTIVE MONTHLY CALENDAR ==================== */}
-        <div className="lg:col-span-7 xl:col-span-8 rounded-2xl border border-slate-200 bg-white p-4 sm:p-6 dark:border-slate-800 dark:bg-slate-900 shadow-xs space-y-5">
+        <div className="lg:col-span-7 xl:col-span-7 2xl:col-span-7 rounded-2xl border border-slate-200 bg-white p-4 sm:p-6 dark:border-slate-800 dark:bg-slate-900 shadow-xs space-y-5">
           {/* Calendar Header with Navigation Controls */}
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
             <div className="flex items-center gap-2.5">
@@ -411,7 +411,7 @@ export default function MonthlyHistoryCalendar({
         </div>
 
         {/* ==================== RIGHT COLUMN: SELECTED DATE DETAIL CARD ==================== */}
-        <div className="lg:col-span-5 xl:col-span-4 rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900 shadow-xs space-y-5 lg:sticky lg:top-6">
+        <div className="lg:col-span-5 xl:col-span-5 2xl:col-span-5 rounded-2xl border border-slate-200 bg-white p-4 sm:p-5 dark:border-slate-800 dark:bg-slate-900 shadow-xs space-y-5 lg:sticky lg:top-6">
           {/* Card Header */}
           <div className="pb-3 border-b border-slate-100 dark:border-slate-800 flex items-start justify-between gap-3">
             <div>
@@ -489,21 +489,21 @@ export default function MonthlyHistoryCalendar({
                     </div>
 
                     {/* 3 Canonical Action Buttons */}
-                    <div className="grid grid-cols-3 gap-2 pt-1 text-xs">
+                    <div className="grid grid-cols-3 gap-1.5 sm:gap-2 pt-1 text-xs">
                       {/* 1. Prayed */}
                       <button
                         type="button"
                         disabled={isRowUpdating}
                         onClick={() => onUpdatePrayerStatus(selectedDate, p, 'PRAYED_ON_TIME')}
                         title={t.dashboard.markPrayed}
-                        className={`min-h-[44px] rounded-xl font-semibold flex items-center justify-center gap-1 sm:gap-1.5 px-1.5 sm:px-2 py-2 text-[11px] sm:text-xs leading-tight transition-colors duration-150 cursor-pointer focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 focus-visible:outline-none disabled:opacity-50 disabled:cursor-not-allowed text-center ${
+                        className={`min-h-[44px] rounded-xl font-semibold flex items-center justify-center gap-1 sm:gap-1.5 px-1 sm:px-2 py-2 text-[11px] sm:text-xs leading-tight transition-colors duration-150 cursor-pointer focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 focus-visible:outline-none disabled:opacity-50 disabled:cursor-not-allowed text-center ${
                           prayerStatus === 'PRAYED_ON_TIME' || prayerStatus === 'PRAYED' || prayerStatus === 'PRAYED_LATE'
                             ? 'bg-emerald-600 text-white font-bold shadow-xs border border-emerald-600 dark:bg-emerald-500 dark:border-emerald-500'
                             : 'bg-emerald-50 hover:bg-emerald-100/90 text-emerald-800 border border-emerald-200/80 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/60 dark:text-emerald-300 dark:border-emerald-800/60'
                         }`}
                       >
-                        <Check className="w-3.5 h-3.5 shrink-0 hidden sm:inline" />
-                        <span>{t.dashboard.markPrayed}</span>
+                        <Check className="w-3.5 h-3.5 shrink-0 hidden xl:inline" />
+                        <span className="truncate">{t.statuses.PRAYED}</span>
                       </button>
 
                       {/* 2. Made Up */}
@@ -512,30 +512,30 @@ export default function MonthlyHistoryCalendar({
                         disabled={isRowUpdating}
                         onClick={() => onUpdatePrayerStatus(selectedDate, p, 'MADE_UP')}
                         title={t.dashboard.markMadeUp}
-                        className={`min-h-[44px] rounded-xl font-semibold flex items-center justify-center gap-1 sm:gap-1.5 px-1.5 sm:px-2 py-2 text-[11px] sm:text-xs leading-tight transition-colors duration-150 cursor-pointer focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 focus-visible:outline-none disabled:opacity-50 disabled:cursor-not-allowed text-center ${
+                        className={`min-h-[44px] rounded-xl font-semibold flex items-center justify-center gap-1 sm:gap-1.5 px-1 sm:px-2 py-2 text-[11px] sm:text-xs leading-tight transition-colors duration-150 cursor-pointer focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 focus-visible:outline-none disabled:opacity-50 disabled:cursor-not-allowed text-center ${
                           prayerStatus === 'MADE_UP'
                             ? 'bg-sky-600 text-white font-bold shadow-xs border border-sky-600 dark:bg-sky-500 dark:border-sky-500'
                             : 'bg-sky-50 hover:bg-sky-100/90 text-sky-800 border border-sky-200/80 dark:bg-sky-950/40 dark:hover:bg-sky-900/60 dark:text-sky-300 dark:border-sky-800/60'
                         }`}
                       >
-                        <RotateCcw className="w-3.5 h-3.5 shrink-0 hidden sm:inline" />
-                        <span>{t.dashboard.markMadeUp}</span>
+                        <RotateCcw className="w-3.5 h-3.5 shrink-0 hidden xl:inline" />
+                        <span className="truncate">{t.statuses.MADE_UP}</span>
                       </button>
 
-                      {/* 3. Qaza */}
+                      {/* 3. Missed */}
                       <button
                         type="button"
                         disabled={isRowUpdating}
                         onClick={() => onUpdatePrayerStatus(selectedDate, p, 'MISSED')}
                         title={t.dashboard.markMissed}
-                        className={`min-h-[44px] rounded-xl font-semibold flex items-center justify-center gap-1 sm:gap-1.5 px-1.5 sm:px-2 py-2 text-[11px] sm:text-xs leading-tight transition-colors duration-150 cursor-pointer focus-visible:ring-2 focus-visible:ring-rose-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 focus-visible:outline-none disabled:opacity-50 disabled:cursor-not-allowed text-center ${
+                        className={`min-h-[44px] rounded-xl font-semibold flex items-center justify-center gap-1 sm:gap-1.5 px-1 sm:px-2 py-2 text-[11px] sm:text-xs leading-tight transition-colors duration-150 cursor-pointer focus-visible:ring-2 focus-visible:ring-rose-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 focus-visible:outline-none disabled:opacity-50 disabled:cursor-not-allowed text-center ${
                           prayerStatus === 'MISSED'
                             ? 'bg-rose-600 text-white font-bold shadow-xs border border-rose-600 dark:bg-rose-500 dark:border-rose-500'
                             : 'bg-rose-50 hover:bg-rose-100/90 text-rose-800 border border-rose-200/80 dark:bg-rose-950/40 dark:hover:bg-rose-900/60 dark:text-rose-300 dark:border-rose-800/60'
                         }`}
                       >
-                        <AlertCircle className="w-3.5 h-3.5 shrink-0 hidden sm:inline" />
-                        <span>{t.dashboard.markMissed}</span>
+                        <AlertCircle className="w-3.5 h-3.5 shrink-0 hidden xl:inline" />
+                        <span className="truncate">{t.statuses.MISSED}</span>
                       </button>
                     </div>
 

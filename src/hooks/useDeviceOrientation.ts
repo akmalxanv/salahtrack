@@ -133,17 +133,18 @@ export function useDeviceOrientation({
     return 'unsupported';
   });
 
-  // Trigger safe haptic vibration (Android & supporting mobile browsers)
+  // Trigger safe, subtle haptic vibration (Android & supporting mobile browsers)
   const triggerHapticFeedback = useCallback(() => {
     if (typeof window === 'undefined') return;
     const now = performance.now();
     if (now - lastVibrateTimestampRef.current >= HAPTIC_COOLDOWN_MS) {
       lastVibrateTimestampRef.current = now;
-      if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+      if (typeof window !== 'undefined' && 'navigator' in window && typeof navigator.vibrate === 'function') {
         try {
-          navigator.vibrate([20]);
+          // Subtle 30ms pulse to confirm Qibla alignment
+          navigator.vibrate(30);
         } catch {
-          // Ignore vibration policy rejections
+          // Gracefully ignore vibration policy rejections or unpermitted contexts
         }
       }
     }
@@ -320,8 +321,13 @@ export function useDeviceOrientation({
         const guidance = calculateTurnGuidance(roundedHeading, qiblaBearing, alignmentTolerance);
         const tilt = computeTiltMetrics(rawBetaRef.current, rawGammaRef.current);
 
-        // Haptic pulse when user first locks onto alignment
-        if (guidance.isAligned && !wasAlignedRef.current) {
+        // Haptic pulse ONLY on transition from unaligned to aligned with valid readings and non-excessive tilt
+        const isActivelyReading =
+          simulatedHeadingRef.current !== null ||
+          (rawHeadingRef.current !== null && sensorEventFiredRef.current);
+        const isNotExcessiveTilt = tilt.tiltStatus !== 'EXCESSIVE_TILT';
+
+        if (guidance.isAligned && !wasAlignedRef.current && isActivelyReading && isNotExcessiveTilt) {
           triggerHapticFeedback();
         }
         wasAlignedRef.current = guidance.isAligned;

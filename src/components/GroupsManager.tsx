@@ -17,9 +17,11 @@ import {
   ChevronRight,
   ArrowLeft,
   Calendar,
+  HeartHandshake,
 } from 'lucide-react';
 import { useLanguage } from '@/context/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
+import { formatCurrency } from '@/lib/formatters';
 
 interface GroupSummary {
   id: string;
@@ -41,6 +43,7 @@ interface GroupMemberRanking {
   joinedAt: string;
   completedCount: number;
   onTimeCount: number;
+  sadaqahOwed?: number;
   maxPossible: number;
   consistencyPercentage: number;
   isCurrentUser: boolean;
@@ -59,7 +62,7 @@ interface GroupDetails {
 }
 
 export default function GroupsManager() {
-  const { t } = useLanguage();
+  const { t, lang } = useLanguage();
   const { user } = useAuth();
 
   const [groups, setGroups] = useState<GroupSummary[]>([]);
@@ -380,18 +383,27 @@ export default function GroupsManager() {
                   </div>
 
                   <div className="min-w-0">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-bold text-sm text-slate-900 dark:text-slate-100 truncate">
                         {member.name}
                       </span>
                       {member.isCurrentUser && (
-                        <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-600 text-white">
+                        <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-600 text-white shrink-0">
                           {t.leaderboard.youBadge}
                         </span>
                       )}
                       {member.role === 'owner' && (
-                        <span className="px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
+                        <span className="px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 shrink-0">
                           {t.groups.owner}
+                        </span>
+                      )}
+                      {typeof member.sadaqahOwed === 'number' && member.sadaqahOwed > 0 && (
+                        <span
+                          title={t.accountability.title}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border border-rose-200/80 dark:border-rose-900/60 shrink-0"
+                        >
+                          <HeartHandshake className="w-3 h-3 text-rose-600 dark:text-rose-400 shrink-0" />
+                          <span>{formatCurrency(member.sadaqahOwed, lang)}</span>
                         </span>
                       )}
                     </div>
@@ -419,6 +431,11 @@ export default function GroupsManager() {
                       {member.consistencyPercentage}%
                     </span>
                   </div>
+                  {typeof member.sadaqahOwed === 'number' && member.sadaqahOwed > 0 && (
+                    <div className="text-[11px] font-bold text-rose-600 dark:text-rose-400 mt-1 flex items-center justify-end gap-1">
+                      <span>{formatCurrency(member.sadaqahOwed, lang)}</span>
+                    </div>
+                  )}
                 </div>
               </div>
             ))}

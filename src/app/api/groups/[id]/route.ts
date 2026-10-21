@@ -62,13 +62,11 @@ export async function GET(
     let maxPrayers = 5;
 
     if (period === 'weekly') {
-      const weekAgo = new Date(now);
-      weekAgo.setDate(weekAgo.getDate() - 6);
+      const weekAgo = new Date(now.getTime() - 6 * 24 * 60 * 60 * 1000);
       startDateStr = weekAgo.toISOString().split('T')[0];
       maxPrayers = 35;
     } else if (period === 'monthly') {
-      const monthAgo = new Date(now);
-      monthAgo.setDate(monthAgo.getDate() - 29);
+      const monthAgo = new Date(now.getTime() - 29 * 24 * 60 * 60 * 1000);
       startDateStr = monthAgo.toISOString().split('T')[0];
       maxPrayers = 150;
     }
@@ -88,49 +86,83 @@ export async function GET(
       });
     }
 
+    // Query prayer records for all circle members to compute period stats and total outstanding sadaqah owed
     const records = await PrayerRecord.find({
       userId: { $in: memberUserIds },
-      date: { $gte: startDateStr, $lte: todayStr },
-    }).lean();
+    })
+      .select('userId date prayers')
+      .lean();
 
     // Map records by userId
     const memberStatsMap = new Map<
       string,
-      { completedCount: number; onTimeCount: number }
+      { completedCount: number; onTimeCount: number; sadaqahOwed: number }
     >();
 
     for (const mId of memberUserIds) {
-      memberStatsMap.set(mId.toString(), { completedCount: 0, onTimeCount: 0 });
+      memberStatsMap.set(mId.toString(), {
+        completedCount: 0,
+        onTimeCount: 0,
+        sadaqahOwed: 0,
+      });
     }
+
+    const nowTime = Date.now();
+    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
 
     for (const rec of records) {
       const uId = rec.userId.toString();
       const stats = memberStatsMap.get(uId);
       if (!stats) continue;
 
+      const recDate = new Date(`${rec.date}T00:00:00Z`).getTime();
+      const isOverdue = !isNaN(recDate) && nowTime - recDate > sevenDaysMs;
+      const isWithinPeriod = rec.date >= startDateStr && rec.date <= todayStr;
+
       for (const pKey of PRAYER_KEYS) {
-        const prayer = rec.prayers[pKey];
+        const prayer = rec.prayers?.[pKey];
         if (!prayer) continue;
 
-        if (prayer.status === 'PRAYED_ON_TIME' || prayer.status === 'PRAYED') {
-          stats.completedCount++;
-          stats.onTimeCount++;
-        } else if (prayer.status === 'PRAYED_LATE') {
-          stats.completedCount++;
+        // In private circles ONLY:
+        // Compute applicable outstanding sadaqah owed:
+        // - Unpaid MISSED is 15,000 UZS base + 15,000 UZS if >7 days overdue
+        // - Unpaid MADE_UP is 15,000 UZS base
+        // - Exclude paid/settled prayers (prayer.isPaid: true)
+        if (!prayer.isPaid) {
+          if (prayer.status === 'MISSED') {
+            stats.sadaqahOwed += 15000 + (isOverdue ? 15000 : 0);
+          } else if (prayer.status === 'MADE_UP') {
+            stats.sadaqahOwed += 15000;
+          }
+        }
+
+        // Leaderboard stats within active period
+        if (isWithinPeriod) {
+          if (prayer.status === 'PRAYED_ON_TIME' || prayer.status === 'PRAYED') {
+            stats.completedCount++;
+            stats.onTimeCount++;
+          } else if (prayer.status === 'PRAYED_LATE') {
+            stats.completedCount++;
+          }
         }
       }
     }
 
-    // Assemble member entries with deterministic tie-breaking
+    // Assemble member entries with clean defaults and sadaqahOwed
     const memberEntries = group.members.map((m) => {
       const uId = m.userId.toString();
       const uInfo = userMap.get(uId);
-      const stats = memberStatsMap.get(uId) || { completedCount: 0, onTimeCount: 0 };
+      const stats = memberStatsMap.get(uId) || {
+        completedCount: 0,
+        onTimeCount: 0,
+        sadaqahOwed: 0,
+      };
 
-      const consistencyPercentage =
+      const rawPercentage =
         maxPrayers > 0
-          ? Math.min(100, Math.round((stats.completedCount / maxPrayers) * 100))
+          ? Math.round((stats.completedCount / maxPrayers) * 100)
           : 0;
+      const consistencyPercentage = isNaN(rawPercentage) ? 0 : Math.min(100, rawPercentage);
 
       return {
         userId: uId,
@@ -140,6 +172,7 @@ export async function GET(
         joinedAt: m.joinedAt,
         completedCount: stats.completedCount,
         onTimeCount: stats.onTimeCount,
+        sadaqahOwed: stats.sadaqahOwed,
         maxPossible: maxPrayers,
         consistencyPercentage,
         isCurrentUser: uId === auth.user.id,
@@ -147,28 +180,51 @@ export async function GET(
     });
 
     // Deterministic sorting:
-    // 1. Completed prayers descending
+    // 1. Percentage / completed prayers descending
     // 2. On-time prayers descending
-    // 3. Consistency percentage descending
-    // 4. Joined date ascending
+    // 3. Joined date ascending
+    // 4. Deterministic fallback by userId
     memberEntries.sort((a, b) => {
+      if (b.consistencyPercentage !== a.consistencyPercentage) {
+        return b.consistencyPercentage - a.consistencyPercentage;
+      }
       if (b.completedCount !== a.completedCount) {
         return b.completedCount - a.completedCount;
       }
       if (b.onTimeCount !== a.onTimeCount) {
         return b.onTimeCount - a.onTimeCount;
       }
-      if (b.consistencyPercentage !== a.consistencyPercentage) {
-        return b.consistencyPercentage - a.consistencyPercentage;
+      const joinedA = new Date(a.joinedAt).getTime();
+      const joinedB = new Date(b.joinedAt).getTime();
+      if (joinedA !== joinedB) {
+        return joinedA - joinedB;
       }
-      return new Date(a.joinedAt).getTime() - new Date(b.joinedAt).getTime();
+      return a.userId.localeCompare(b.userId);
     });
 
-    // Assign ranks
-    const rankedMembers = memberEntries.map((entry, idx) => ({
-      ...entry,
-      rank: idx + 1,
-    }));
+    // Assign ranks using Standard Competition Ranking (1224 ranking):
+    // Identical performance metrics share the rank; next rank reflects true position.
+    let currentRank = 1;
+    const rankedMembers = memberEntries.map((entry, idx) => {
+      if (idx > 0) {
+        const prev = memberEntries[idx - 1];
+        const isTie =
+          entry.consistencyPercentage === prev.consistencyPercentage &&
+          entry.completedCount === prev.completedCount &&
+          entry.onTimeCount === prev.onTimeCount;
+
+        if (!isTie) {
+          currentRank = idx + 1;
+        }
+      } else {
+        currentRank = 1;
+      }
+
+      return {
+        ...entry,
+        rank: currentRank,
+      };
+    });
 
     return NextResponse.json(
       {
