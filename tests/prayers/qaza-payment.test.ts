@@ -378,7 +378,7 @@ describe('Qaza Payment & Sadaqah Tracking Engine', () => {
   });
 
   describe('3. POST /api/prayers/qaza-payment Fine Settlement & Ledger Execution', () => {
-    it('rejects settling a MISSED prayer when confirmedMadeUp is false or missing', async () => {
+    it('allows settling a MISSED prayer independently without confirmedMadeUp requirement and keeps spiritual status MISSED', async () => {
       const todayStr = new Date().toISOString().split('T')[0];
       const record = createMockRecord(todayStr);
       record.prayers.dhuhr = { status: 'MISSED', isPaid: false, paidAmount: 0 };
@@ -391,17 +391,20 @@ describe('Qaza Payment & Sadaqah Tracking Engine', () => {
         body: JSON.stringify({ items: [{ date: todayStr, prayerId: 'dhuhr' }] }),
       });
       const res = await payQazaHandler(req);
-      assert.equal(res.status, 400);
+      assert.equal(res.status, 201);
       const json = await res.json();
-      assert.equal(json.success, false);
-      assert.equal(json.code, 'CONFIRMATION_REQUIRED');
-      assert.equal(
-        json.error,
-        'You must confirm that the selected missed prayers have been made up before settling sadaqah. Sadaqah does not substitute obligatory prayer.'
-      );
+      assert.equal(json.success, true);
+      assert.equal(json.data.totalAmount, 15000);
+      assert.equal(json.data.items[0].status, 'MISSED');
+      assert.equal(record.prayers.dhuhr.status, 'MISSED');
+      assert.equal(record.prayers.dhuhr.isPaid, true);
+      assert.equal(record.prayers.dhuhr.paidAmount, 15000);
+      assert.equal(record.finesAccrued, 0);
+      assert.equal(json.data.remainingFinancialDebt, 0);
+      assert.equal(json.data.remainingPendingQazaCount, 1);
     });
 
-    it('settles a recent MISSED prayer (<= 7 days) at 15,000 UZS base fine when confirmedMadeUp is true', async () => {
+    it('settles a recent MISSED prayer (<= 7 days) at 15,000 UZS base fine and preserves MISSED status with isPaid: true', async () => {
       const todayStr = new Date().toISOString().split('T')[0];
       const record = createMockRecord(todayStr);
       record.prayers.dhuhr = { status: 'MISSED', isPaid: false, paidAmount: 0 };
@@ -413,7 +416,6 @@ describe('Qaza Payment & Sadaqah Tracking Engine', () => {
         headers: { cookie: `salahtrack_session=${validSessionToken}` },
         body: JSON.stringify({
           items: [{ date: todayStr, prayerId: 'dhuhr' }],
-          confirmedMadeUp: true,
         }),
       });
       const res = await payQazaHandler(req);
@@ -423,18 +425,19 @@ describe('Qaza Payment & Sadaqah Tracking Engine', () => {
       assert.equal(json.success, true);
       assert.equal(json.data.totalAmount, 15000);
       assert.equal(json.data.items[0].amount, 15000);
-      assert.equal(json.data.items[0].status, 'MADE_UP');
+      assert.equal(json.data.items[0].status, 'MISSED');
       assert.equal(json.data.items[0].isOverdue, false);
 
-      // Verify the underlying prayer record was updated to MADE_UP and marked paid
-      assert.equal(record.prayers.dhuhr.status, 'MADE_UP');
-      assert.ok(record.prayers.dhuhr.madeUpAt);
+      // Verify the underlying prayer record preserved MISSED status, marked paid, and fines accrued 0
+      assert.equal(record.prayers.dhuhr.status, 'MISSED');
       assert.equal(record.prayers.dhuhr.isPaid, true);
       assert.equal(record.prayers.dhuhr.paidAmount, 15000);
       assert.equal(record.finesAccrued, 0); // Settled prayer has 0 remaining fine
+      assert.equal(json.data.remainingFinancialDebt, 0);
+      assert.equal(json.data.remainingPendingQazaCount, 1);
     });
 
-    it('settles an overdue MISSED prayer (> 7 days) at 30,000 UZS when confirmedMadeUp is true', async () => {
+    it('settles an overdue MISSED prayer (> 7 days) at 30,000 UZS and preserves MISSED status with isPaid: true', async () => {
       const oldDate = '2026-09-01'; // well over 7 days ago
       const record = createMockRecord(oldDate);
       record.prayers.asr = { status: 'MISSED', isPaid: false, paidAmount: 0 };
@@ -446,7 +449,6 @@ describe('Qaza Payment & Sadaqah Tracking Engine', () => {
         headers: { cookie: `salahtrack_session=${validSessionToken}` },
         body: JSON.stringify({
           items: [{ date: oldDate, prayerId: 'asr' }],
-          confirmedMadeUp: true,
         }),
       });
       const res = await payQazaHandler(req);
@@ -456,14 +458,15 @@ describe('Qaza Payment & Sadaqah Tracking Engine', () => {
       assert.equal(json.success, true);
       assert.equal(json.data.totalAmount, 30000);
       assert.equal(json.data.items[0].amount, 30000);
-      assert.equal(json.data.items[0].status, 'MADE_UP');
+      assert.equal(json.data.items[0].status, 'MISSED');
       assert.equal(json.data.items[0].isOverdue, true);
 
-      assert.equal(record.prayers.asr.status, 'MADE_UP');
-      assert.ok(record.prayers.asr.madeUpAt);
+      assert.equal(record.prayers.asr.status, 'MISSED');
       assert.equal(record.prayers.asr.isPaid, true);
       assert.equal(record.prayers.asr.paidAmount, 30000);
       assert.equal(record.finesAccrued, 0);
+      assert.equal(json.data.remainingFinancialDebt, 0);
+      assert.equal(json.data.remainingPendingQazaCount, 1);
     });
 
     it('settles a MADE_UP prayer at 15,000 UZS even if older than 7 days (does not require confirmedMadeUp)', async () => {

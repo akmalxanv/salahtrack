@@ -298,6 +298,26 @@ export interface TranslationContent {
     confirmedMadeUpCheckbox: string;
     confirmedMadeUpWarning: string;
     blockPaymentNotice: string;
+    spiritualTitle: string;
+    spiritualDesc: string;
+    financialTitle: string;
+    financialDesc: string;
+    sadaqahNotice: string;
+    qazaRuleNotice: string;
+    overdueExplanation: string;
+    overdueWhyReason: string;
+    baseDebtLabel: string;
+    overduePenaltyLabel: string;
+    totalOutstandingLabel: string;
+    remainingBalanceLabel: string;
+    statusMissedNeedsMakeup: string;
+    statusMadeUpSpiritualDone: string;
+    markAsMadeUp: string;
+    donateSadaqah: string;
+    baseFinesSubtotal: string;
+    overduePenaltiesSubtotal: string;
+    spiritualPendingCount: string;
+    totalFinancialDebt: string;
   };
   leaderboard: {
     title: string;
@@ -842,6 +862,26 @@ export const translations: Record<Language, TranslationContent> = {
       confirmedMadeUpCheckbox: 'Подтверждаю, что восполнил выбранные пропущенные намазы (каза)',
       confirmedMadeUpWarning: 'Внимание: Обязательный (фард) намаз невозможно откупить деньгами. Пропущенные намазы необходимо восполнить молитвой. Садака служит лишь личной ответственностью.',
       blockPaymentNotice: 'Садака не может быть оформлена без восполнения намазов. Пожалуйста, совершите каза-намазы и отметьте подтверждение выше.',
+      spiritualTitle: 'Духовный долг: Восполнение каза-намазов',
+      spiritualDesc: 'Обязательное восполнение пропущенных фард-намазов молитвой. Совершение каза-намаза закрывает духовный долг.',
+      financialTitle: 'Финансовая ответственность: Штрафы дисциплины и садака',
+      financialDesc: 'Личный залог самодисциплины: 15 000 UZS за пропуск и +15 000 UZS штраф за просрочку свыше 7 дней. Выплата садака закрывает финансовый долг, но не заменяет совершение каза.',
+      sadaqahNotice: 'Выплата садака закрывает личное обязательство по самодисциплине, но не заменяет обязательное совершение пропущенных каза-намазов.',
+      qazaRuleNotice: 'Совершение каза-намаза закрывает духовный долг, однако начисленный взнос дисциплины (15 000 UZS) остается к выплате в качестве садака.',
+      overdueExplanation: 'Просрочено более 7 дней (+15 000 UZS штраф)',
+      overdueWhyReason: 'Начислен дополнительный штраф из-за превышения 7-дневного льготного периода с даты намаза',
+      baseDebtLabel: 'Базовый штраф',
+      overduePenaltyLabel: 'Штраф за просрочку',
+      totalOutstandingLabel: 'Итого к оплате',
+      remainingBalanceLabel: 'Остаток после оплаты',
+      statusMissedNeedsMakeup: 'Каза (Требует восполнения)',
+      statusMadeUpSpiritualDone: 'Восполнен',
+      markAsMadeUp: 'Отметить восполненным',
+      donateSadaqah: 'Пожертвовать садака',
+      baseFinesSubtotal: 'Сумма базовых штрафов',
+      overduePenaltiesSubtotal: 'Сумма штрафов за просрочку',
+      spiritualPendingCount: 'Осталось каза-намазов',
+      totalFinancialDebt: 'Общий финансовый долг',
     },
     leaderboard: {
       title: 'Рейтинг постоянства',
@@ -1385,6 +1425,26 @@ export const translations: Record<Language, TranslationContent> = {
       confirmedMadeUpCheckbox: 'I confirm that I have made up the selected missed prayers (Qaza)',
       confirmedMadeUpWarning: 'Notice: Obligatory prayers cannot be replaced by money. Missed prayers must be performed as Qaza. Sadaqah serves only as a personal accountability pledge.',
       blockPaymentNotice: 'Sadaqah cannot be recorded without making up the prayers. Please perform the Qaza prayers and check the confirmation above.',
+      spiritualTitle: 'Spiritual Obligation: Qaza Prayers (Make-up)',
+      spiritualDesc: 'Fulfilling missed obligatory prayers through prayer. Making up a prayer clears your spiritual Qaza debt.',
+      financialTitle: 'Financial Accountability: Self-Discipline Fines & Overdue Penalties',
+      financialDesc: 'Personal discipline pledge: 15,000 UZS base fine plus +15,000 UZS penalty after 7 days. Donating sadaqah settles financial debt, but does NOT substitute for performing Qaza.',
+      sadaqahNotice: 'Paying sadaqah settles your financial accountability pledge, but does not substitute for making up obligatory missed prayers (Qaza).',
+      qazaRuleNotice: 'Making up a prayer fulfills Qaza (spiritual debt), while any unpaid financial pledge remains intact (capped at 15,000 UZS) to be donated as sadaqah.',
+      overdueExplanation: 'Overdue by >7 days (+15,000 UZS penalty)',
+      overdueWhyReason: 'Additional penalty applied because over 7 full days have elapsed since the prayer date',
+      baseDebtLabel: 'Base Debt',
+      overduePenaltyLabel: 'Overdue Penalty',
+      totalOutstandingLabel: 'Total Outstanding',
+      remainingBalanceLabel: 'Remaining Balance',
+      statusMissedNeedsMakeup: 'Missed (Needs Make-up)',
+      statusMadeUpSpiritualDone: 'Made Up',
+      markAsMadeUp: 'Mark as Made Up',
+      donateSadaqah: 'Donate Sadaqah',
+      baseFinesSubtotal: 'Base Fines Subtotal',
+      overduePenaltiesSubtotal: 'Overdue Penalties Subtotal',
+      spiritualPendingCount: 'Pending Qaza Prayers',
+      totalFinancialDebt: 'Total Financial Debt',
     },
     leaderboard: {
       title: 'Consistency Leaderboard',
@@ -1928,6 +1988,26 @@ export const translations: Record<Language, TranslationContent> = {
       confirmedMadeUpCheckbox: 'Tanlangan qazo namozlarini o‘qib bo‘lganimni tasdiqlayman',
       confirmedMadeUpWarning: 'Eslatma: Qazo namozlarini faqat o‘qish orqali ado etish mumkin. Moliyaviy to‘lov namoz o‘rnini bosmaydi; sadaqa faqat intizom va kafillik uchun beriladi.',
       blockPaymentNotice: 'Qazo namozlarini o‘qimay turib sadaqa to‘lab bo‘lmaydi. Avval namozlarni qazo qilib o‘qing va yuqoridagi tasdiqni belgilang.',
+      spiritualTitle: 'Diniy majburiyat: Qazo namozlari',
+      spiritualDesc: 'O‘tkazib yuborilgan farz namozlarni ado etish. Har bir o‘qilgan qazo namozi qazo ro‘yxatidan yechiladi.',
+      financialTitle: 'Moliyaviy intizom: Badallar va kechikish jarimalari',
+      financialDesc: 'Shaxsiy intizom kafilligi: har bir qazo uchun 15 000 UZS badal va 7 kundan oshsa +15 000 UZS jarima. Sadaqa berish moliyaviy qarzni yopadi, lekin namoz o‘rnini bosmaydi.',
+      sadaqahNotice: 'Sadaqa berish shaxsiy intizomiy badalingizni yopadi, biroq qazo bo‘lgan farz namozlarni o‘qish o‘rnini bosmaydi.',
+      qazaRuleNotice: 'Namozni qazo qilib o‘qish qazo burchini (ruhiy qarzni) yopadi, lekin to‘lanmagan intizomiy badal (15 000 UZS) sadaqa sifatida o‘z kuchida qoladi.',
+      overdueExplanation: '7 kundan ortiq kechikkan (+15 000 UZS jarima)',
+      overdueWhyReason: 'Namoz vaqtidan 7 kundan ortiq vaqt o‘tgani sababli qo‘shimcha jarima qo‘shilgan',
+      baseDebtLabel: 'Asosiy badal',
+      overduePenaltyLabel: 'Kechikish jarimasi',
+      totalOutstandingLabel: 'Jami to‘lanishi kerak',
+      remainingBalanceLabel: 'To‘lovdan keyingi qoldiq',
+      statusMissedNeedsMakeup: 'Qazo (O‘qilishi kerak)',
+      statusMadeUpSpiritualDone: 'Qazosi o‘qilgan',
+      markAsMadeUp: 'Qazo o‘qildi deb belgilash',
+      donateSadaqah: 'Sadaqa ehson qilish',
+      baseFinesSubtotal: 'Asosiy badallar summasi',
+      overduePenaltiesSubtotal: 'Kechikish jarimalari summasi',
+      spiritualPendingCount: 'Qazo namozlari qoldig‘i',
+      totalFinancialDebt: 'Umumiy moliyaviy qarz',
     },
     leaderboard: {
       title: 'Muntazamlik reytingi',

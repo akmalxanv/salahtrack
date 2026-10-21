@@ -3,7 +3,8 @@ import mongoose from 'mongoose';
 import { connectDB } from '../../../../lib/mongodb.ts';
 import { PrayerRecord } from '../../../../models/Prayer.ts';
 import { authenticateRequest } from '../../../../lib/auth/guard.ts';
-import { calculateFines, getMaxAllowedDate, sanitizeNotes } from '../route.ts';
+import { getMaxAllowedDate, sanitizeNotes } from '../route.ts';
+import { calculateAccountabilityFines } from '../../../../lib/accountability.ts';
 import type { PrayerId, PrayerStatus } from '../../../../types/prayer.ts';
 
 const VALID_PRAYER_IDS: PrayerId[] = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
@@ -63,7 +64,7 @@ export async function GET(request: NextRequest, props: RouteContext) {
     }
 
     // Deterministically recalculate fines accrued in case overdue threshold was crossed since last write
-    const currentFines = calculateFines(record.date, record.prayers);
+    const currentFines = calculateAccountabilityFines(record.date, record.prayers);
     if (record.finesAccrued !== currentFines) {
       record.finesAccrued = currentFines;
       if (typeof record.save === 'function') {
@@ -265,7 +266,7 @@ export async function PUT(request: NextRequest, props: RouteContext) {
     }
 
     // Recalculate fines accrued
-    record.finesAccrued = calculateFines(record.date, record.prayers);
+    record.finesAccrued = calculateAccountabilityFines(record.date, record.prayers);
     await record.save();
 
     return NextResponse.json(

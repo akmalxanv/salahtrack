@@ -342,39 +342,24 @@ describe('End-to-End Qaza / Sadaqah Security & DevOps Audit', () => {
     });
   });
 
-  describe('3. Confirmation Enforcement & Religious Guardrails', () => {
-    it('strictly requires confirmedMadeUp === true for MISSED prayers', async () => {
+  describe('3. Independent Settlement & Status Separation Guardrails', () => {
+    it('allows settling MISSED prayers independently without requiring confirmedMadeUp flag', async () => {
       const rec = createRecordForUser(userAId, '2026-10-18');
       rec.prayers.asr = { status: 'MISSED', isPaid: false, paidAmount: 0 };
       mockRecords.push(rec);
 
-      // Missing confirmation
-      const reqMissing = new NextRequest('http://localhost:3000/api/prayers/qaza-payment', {
+      // Financial obligation can be settled independently
+      const req = new NextRequest('http://localhost:3000/api/prayers/qaza-payment', {
         method: 'POST',
         headers: { cookie: `salahtrack_session=${sessionTokenUserA}` },
         body: JSON.stringify({ items: [{ date: '2026-10-18', prayerId: 'asr' }] }),
       });
-      const resMissing = await payQazaHandler(reqMissing);
-      assert.equal(resMissing.status, 400);
-      assert.equal((await resMissing.json()).code, 'CONFIRMATION_REQUIRED');
-
-      // Falsy confirmation
-      const reqFalse = new NextRequest('http://localhost:3000/api/prayers/qaza-payment', {
-        method: 'POST',
-        headers: { cookie: `salahtrack_session=${sessionTokenUserA}` },
-        body: JSON.stringify({ items: [{ date: '2026-10-18', prayerId: 'asr' }], confirmedMadeUp: false }),
-      });
-      const resFalse = await payQazaHandler(reqFalse);
-      assert.equal(resFalse.status, 400);
-
-      // String truthy confirmation
-      const reqString = new NextRequest('http://localhost:3000/api/prayers/qaza-payment', {
-        method: 'POST',
-        headers: { cookie: `salahtrack_session=${sessionTokenUserA}` },
-        body: JSON.stringify({ items: [{ date: '2026-10-18', prayerId: 'asr' }], confirmedMadeUp: 'true' }),
-      });
-      const resString = await payQazaHandler(reqString);
-      assert.equal(resString.status, 400);
+      const res = await payQazaHandler(req);
+      assert.equal(res.status, 201);
+      const json = await res.json();
+      assert.equal(json.success, true);
+      assert.equal(rec.prayers.asr.isPaid, true);
+      assert.equal(rec.prayers.asr.status, 'MISSED'); // Spiritual status preserved
     });
 
     it('allows settling already MADE_UP prayers without confirmedMadeUp flag', async () => {

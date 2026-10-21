@@ -21,6 +21,8 @@ import {
   Info,
   RotateCcw,
   HeartHandshake,
+  Coins,
+  Sparkles,
 } from 'lucide-react';
 import { useLanguage } from '@/context/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
@@ -89,9 +91,14 @@ interface StatsData {
   };
   accountability: {
     totalAmount: number;
+    totalFinancialDebt?: number;
+    pendingQazaCount?: number;
+    totalBaseAmount?: number;
+    totalOverdueAmount?: number;
     totalPaidAmount?: number;
     totalMissed?: number;
     totalOverdue?: number;
+    totalMadeUp?: number;
     currency: string;
     baseRatePerPrayer?: number;
     overdueRatePerPrayer?: number;
@@ -465,19 +472,48 @@ function ProgressContent() {
     [calendarTodayStr, liturgicalTodayStr, t.progress.futureDateError, user, fetchStats]
   );
 
-  // Qaza adjustment helpers
-  const adjustQaza = (prayer: PrayerId, delta: number) => {
-    setQazaByPrayer((prev) => {
-      const current = prev?.[prayer] || 0;
-      const updated = Math.max(0, current + delta);
-      return {
-        ...prev,
-        [prayer]: updated,
-      };
-    });
-    setLocalQaza((prev) => Math.max(0, (prev || 0) + delta));
-  };
+  // Analytical breakdown of MISSED prayers from history
+  const historyMissedByPrayer = useMemo(() => {
+    const counts: Record<PrayerId, number> = { fajr: 0, dhuhr: 0, asr: 0, maghrib: 0, isha: 0 };
+    for (const record of Object.values(recordsByDate)) {
+      if (!record.prayers) continue;
+      for (const p of PRAYER_IDS) {
+        if (record.prayers[p]?.status === 'MISSED') {
+          counts[p] += 1;
+        }
+      }
+    }
+    return counts;
+  }, [recordsByDate]);
 
+  // Qaza adjustment helpers:
+  // When fulfilling a qaza (-1), if there is a MISSED prayer in history, mark the oldest as MADE_UP.
+  // This clears the spiritual debt while leaving the financial fine intact (capped at 15,000 UZS).
+  const adjustQaza = useCallback(
+    (prayer: PrayerId, delta: number) => {
+      if (delta < 0) {
+        const missedRecords = Object.values(recordsByDate)
+          .filter((r) => r.prayers?.[prayer]?.status === 'MISSED')
+          .sort((a, b) => a.date.localeCompare(b.date));
+
+        if (missedRecords.length > 0) {
+          const target = missedRecords[0];
+          handleHistoricalCorrection(target.date, prayer, 'MADE_UP');
+        }
+      }
+
+      setQazaByPrayer((prev) => {
+        const current = prev?.[prayer] || 0;
+        const updated = Math.max(0, current + delta);
+        return {
+          ...prev,
+          [prayer]: updated,
+        };
+      });
+      setLocalQaza((prev) => Math.max(0, (prev || 0) + delta));
+    },
+    [recordsByDate, handleHistoricalCorrection, setQazaByPrayer, setLocalQaza]
+  );
 
   // Sorted list of historical records (descending date)
   const sortedHistoryRecords = useMemo(() => {
@@ -510,22 +546,53 @@ function ProgressContent() {
     return counts;
   }, [sortedHistoryRecords]);
 
-  // Total Qaza count
-  const totalQazaCount = useMemo(() => {
-    return Object.values(qazaByPrayer || {}).reduce((acc, val) => acc + (val || 0), 0) || localQaza || 0;
-  }, [qazaByPrayer, localQaza]);
-
   // Accountability calculations: single source of truth calculation for instant 0ms offline/pre-fetch UI,
   // reconciled with server stats once fetched. Prevents arbitrary default multiplication bug.
   const localLedger = useMemo(() => {
     return calculateAccountabilityLedger(recordsByDate);
   }, [recordsByDate]);
 
-  const accountabilityTotal = stats?.accountability?.totalAmount ?? localLedger.totalAmount;
-  const accountabilityMissed = stats?.accountability?.totalMissed ?? localLedger.missedCount;
-  const accountabilityOverdue =
-    stats?.accountability?.totalOverdue ?? localLedger.items.filter((it) => it.isOverdue).length;
   const fineItems = stats?.accountability?.breakdown || localLedger.items;
+
+  const accountabilityTotal =
+    stats?.accountability?.totalFinancialDebt ??
+    stats?.accountability?.totalAmount ??
+    localLedger.totalAmount;
+
+  const pendingQazaCount =
+    stats?.accountability?.pendingQazaCount ??
+    stats?.accountability?.totalMissed ??
+    localLedger.pendingQazaCount ??
+    localLedger.missedCount;
+
+  const accountabilityOverdue =
+    stats?.accountability?.totalOverdue ??
+    fineItems.filter((it) => it.isOverdue && it.status === 'MISSED').length;
+
+  const totalBaseFines = useMemo(() => {
+    return fineItems.reduce((sum, it) => sum + (it.baseAmount || 15000), 0);
+  }, [fineItems]);
+
+  const totalOverduePenalties = useMemo(() => {
+    return fineItems.reduce((sum, it) => sum + (it.overdueAmount || 0), 0);
+  }, [fineItems]);
+
+  // Combined prayer-by-prayer Qaza tracking (considers manual counter and history missed records)
+  const displayQazaByPrayer = useMemo(() => {
+    const res: Record<PrayerId, number> = { fajr: 0, dhuhr: 0, asr: 0, maghrib: 0, isha: 0 };
+    for (const p of PRAYER_IDS) {
+      const manual = qazaByPrayer?.[p] || 0;
+      const fromHistory = historyMissedByPrayer[p] || 0;
+      res[p] = Math.max(manual, fromHistory);
+    }
+    return res;
+  }, [qazaByPrayer, historyMissedByPrayer]);
+
+  // Total Qaza count for projection calculator and status
+  const totalQazaCount = useMemo(() => {
+    const manualSum = Object.values(qazaByPrayer || {}).reduce((acc, val) => acc + (val || 0), 0);
+    return manualSum > 0 ? manualSum : (pendingQazaCount || localQaza || 0);
+  }, [qazaByPrayer, pendingQazaCount, localQaza]);
 
   return (
     <div className="space-y-4 sm:space-y-6">
@@ -900,308 +967,465 @@ function ProgressContent() {
       )}
 
 
-      {/* ==================== TAB 4: ACCOUNTABILITY & FINES ==================== */}
+      {/* ==================== TAB 3: QAZA & ACCOUNTABILITY ==================== */}
       {activeTab === 'qaza' && (
-        <div className="space-y-4 sm:space-y-6">
-          {/* Executive Accountability Card */}
-          <div className="rounded-2xl bg-gradient-to-br from-slate-900 to-slate-800 text-white p-3.5 sm:p-6 shadow-sm border border-slate-700 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-6">
-            <div>
-              <span className="text-xs font-semibold uppercase tracking-wider text-emerald-400">
-                {t.accountability.title}
-              </span>
-              <p className="text-3xl font-black text-white mt-1">
-                {formatCurrency(accountabilityTotal, lang)}
-              </p>
-              <div className="flex items-center gap-4 text-xs text-slate-300 mt-2">
-                <span>{t.progress.missedPrayersCount.replace('{count}', String(accountabilityMissed))}</span>
-                <span>•</span>
-                <span className="text-amber-400">{t.progress.overduePrayersCount.replace('{count}', String(accountabilityOverdue))}</span>
+        <div className="space-y-8">
+          {/* ======================================================== */}
+          {/* SECTION A: SPIRITUAL OBLIGATION (QAZA PRAYERS)           */}
+          {/* ======================================================== */}
+          <section className="space-y-4" aria-labelledby="spiritual-section-title">
+            {/* Section Header */}
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-slate-200 dark:border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <span className="p-2 rounded-xl bg-sky-50 dark:bg-sky-950/60 text-sky-600 dark:text-sky-400">
+                  <RotateCcw className="w-5 h-5" />
+                </span>
+                <div>
+                  <h2 id="spiritual-section-title" className="text-lg font-bold text-slate-900 dark:text-slate-100">
+                    {t.accountability.spiritualTitle}
+                  </h2>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    {t.accountability.spiritualDesc}
+                  </p>
+                </div>
               </div>
             </div>
 
-            <div className="p-3.5 rounded-xl bg-white/10 text-xs text-slate-300 max-w-md">
-              <span className="font-bold text-white block mb-1">
-                {t.accountability.disclaimer}
-              </span>
-              <p className="text-[11px] leading-relaxed text-slate-300">
-                {t.progress.recordPaymentDesc} {t.progress.finesPolicyNotice}
-              </p>
-            </div>
-          </div>
-
-          {/* Settled / Sadaqah Tracking Card */}
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900 shadow-xs flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-            <div>
-              <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                {t.progress.settledAmount}
-              </span>
-              <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-0.5">
-                {formatCurrency(
-                  stats?.accountability?.totalPaidAmount ?? (settledDonations || 0),
-                  lang
-                )}
-              </p>
+            {/* Prominent Educational Notice on Spiritual Makeup */}
+            <div className="p-4 rounded-2xl bg-sky-50/70 dark:bg-sky-950/40 border border-sky-200/70 dark:border-sky-800/60 text-sky-950 dark:text-sky-200 flex items-start gap-3 text-xs leading-relaxed">
+              <Info className="w-5 h-5 text-sky-600 dark:text-sky-400 shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <span className="font-bold block text-sky-900 dark:text-sky-100">
+                  {t.accountability.qazaRuleNotice}
+                </span>
+                <p className="text-[11px] text-sky-800/80 dark:text-sky-300/80">
+                  {t.accountability.baseRateNote}. {t.accountability.overdueNote}
+                </p>
+              </div>
             </div>
 
-            <div>
+            {/* Spiritual KPI Banner Card */}
+            <div className="rounded-2xl bg-gradient-to-br from-sky-950 via-slate-900 to-indigo-950 text-white p-4 sm:p-6 shadow-sm border border-sky-900/40 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+              <div>
+                <span className="text-xs font-semibold uppercase tracking-wider text-sky-400">
+                  {t.accountability.spiritualPendingCount}
+                </span>
+                <div className="flex items-baseline gap-2 mt-1">
+                  <span className="text-3xl sm:text-4xl font-black text-white">
+                    {pendingQazaCount}
+                  </span>
+                  <span className="text-xs text-sky-200">
+                    {t.accountability.prayersCount}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-300 mt-2">
+                  {t.progress.missedPrayersCount.replace('{count}', String(pendingQazaCount))}
+                </p>
+              </div>
+
+              {/* Quick payoff insight */}
+              <div className="p-3.5 rounded-xl bg-white/10 border border-white/10 text-xs text-slate-200 max-w-sm">
+                <span className="font-semibold text-white block mb-1 flex items-center gap-1.5">
+                  <Sparkles className="w-4 h-4 text-sky-400 shrink-0" />
+                  <span>{t.progress.calculatorTitle}</span>
+                </span>
+                <p className="text-[11px] text-slate-300">
+                  {t.progress.dailyOneExtra}: <span className="font-bold text-sky-300">{Math.ceil((totalQazaCount || 1) / 1)} {t.progress.daysToComplete}</span>
+                </p>
+              </div>
+            </div>
+
+            {/* Prayer-by-Prayer Counter Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
+              {PRAYER_IDS.map((p) => {
+                const count = displayQazaByPrayer[p] || 0;
+                return (
+                  <div
+                    key={p}
+                    className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900 shadow-xs text-center space-y-3"
+                  >
+                    <span className="text-xs font-bold text-slate-700 dark:text-slate-300 capitalize block">
+                      {t.prayers[p]}
+                    </span>
+                    <p className="text-2xl font-bold text-slate-900 dark:text-slate-100">
+                      {count}
+                    </p>
+                    <div className="flex items-center justify-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => adjustQaza(p, -1)}
+                        disabled={count === 0}
+                        className="min-h-[44px] min-w-[44px] rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors active:scale-95"
+                        title={t.accountability.fulfillOne}
+                        aria-label={`${t.accountability.fulfillOne}: ${t.prayers[p]}`}
+                      >
+                        <Minus className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => adjustQaza(p, 1)}
+                        className="min-h-[44px] min-w-[44px] rounded-xl bg-sky-50 dark:bg-sky-950/60 hover:bg-sky-100 dark:hover:bg-sky-900 text-sky-700 dark:text-sky-300 flex items-center justify-center cursor-pointer transition-colors active:scale-95"
+                        title={t.accountability.addMissed}
+                        aria-label={`${t.accountability.addMissed}: ${t.prayers[p]}`}
+                      >
+                        <Plus className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Payoff Projection Calculator */}
+            <div className="rounded-2xl border border-slate-200 bg-white p-3.5 sm:p-6 dark:border-slate-800 dark:bg-slate-900 shadow-xs space-y-4">
+              <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-sky-600 dark:text-sky-400" />
+                <span>{t.progress.calculatorTitle}</span>
+              </h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="p-4 rounded-xl border border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40">
+                  <span className="text-xs text-slate-400 block mb-1">
+                    {t.progress.dailyOneExtra}
+                  </span>
+                  <p className="text-lg font-bold text-sky-600 dark:text-sky-400">
+                    {Math.ceil((totalQazaCount || 1) / 1)} {t.progress.daysToComplete}
+                  </p>
+                </div>
+                <div className="p-4 rounded-xl border border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40">
+                  <span className="text-xs text-slate-400 block mb-1">
+                    {t.progress.dailyFiveExtra}
+                  </span>
+                  <p className="text-lg font-bold text-sky-600 dark:text-sky-400">
+                    {Math.ceil((totalQazaCount || 1) / 5)} {t.progress.daysToComplete}
+                  </p>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          {/* ======================================================== */}
+          {/* SECTION B: FINANCIAL ACCOUNTABILITY (FINES & SADAQAH)    */}
+          {/* ======================================================== */}
+          <section className="space-y-4 pt-6 border-t border-slate-200 dark:border-slate-800" aria-labelledby="financial-section-title">
+            {/* Section Header */}
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-slate-200 dark:border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <span className="p-2 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400">
+                  <Coins className="w-5 h-5" />
+                </span>
+                <div>
+                  <h2 id="financial-section-title" className="text-lg font-bold text-slate-900 dark:text-slate-100">
+                    {t.accountability.financialTitle}
+                  </h2>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    {t.accountability.financialDesc}
+                  </p>
+                </div>
+              </div>
+
+              {/* Donate Sadaqah CTA */}
               <button
                 type="button"
                 onClick={() => setIsPayModalOpen(true)}
-                disabled={fineItems.length === 0}
-                className="min-h-[44px] px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white text-xs font-bold flex items-center gap-2 cursor-pointer shadow-xs transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={fineItems.length === 0 || accountabilityTotal === 0}
+                className="min-h-[44px] px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white text-xs font-bold flex items-center justify-center gap-2 cursor-pointer shadow-xs transition-all disabled:opacity-50 disabled:cursor-not-allowed self-start sm:self-auto"
+                title={t.accountability.donateSadaqah}
               >
                 <HeartHandshake className="w-4 h-4" />
-                <span>{t.accountability.payQaza}</span>
+                <span>{t.accountability.donateSadaqah}</span>
               </button>
             </div>
-          </div>
 
-          {/* Detailed Fine Breakdown Table / Cards */}
-          <div className="rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 shadow-xs p-3.5 sm:p-6 space-y-4">
-            <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-              <span>{t.progress.accountabilityBreakdown}</span>
-            </h3>
-
-            {fineItems.length === 0 ? (
-              <div className="p-8 text-center rounded-xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-100 dark:border-emerald-900/40 text-emerald-800 dark:text-emerald-300 text-xs">
-                <CheckCircle2 className="w-6 h-6 text-emerald-600 mx-auto mb-2" />
-                <p className="font-semibold">{t.progress.noFines}</p>
+            {/* Prominent Educational Notice on Sadaqah != Qaza */}
+            <div className="p-4 rounded-2xl bg-amber-50/80 dark:bg-amber-950/40 border border-amber-200/80 dark:border-amber-900/60 text-amber-950 dark:text-amber-200 flex items-start gap-3 text-xs leading-relaxed">
+              <AlertCircle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <p className="font-bold text-amber-900 dark:text-amber-100">
+                  {t.accountability.sadaqahNotice}
+                </p>
+                <p className="text-[11px] text-amber-800/80 dark:text-amber-300/80">
+                  {t.accountability.disclaimer}
+                </p>
               </div>
-            ) : (
-              <div className="divide-y divide-slate-100 dark:divide-slate-800">
-                {fineItems.map((item, idx) => {
-                  const isMadeUp = item.status === 'MADE_UP';
-                  return (
-                    <div
-                      key={`${item.date}-${item.prayerId}-${idx}`}
-                      className="py-3.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3"
-                    >
-                      <div>
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-bold text-xs text-slate-900 dark:text-slate-100">
-                            {item.date}
-                          </span>
-                          <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 capitalize">
-                            {t.prayers[item.prayerId]}
-                          </span>
-                          {isMadeUp ? (
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-sky-50 dark:bg-sky-950/80 text-sky-800 dark:text-sky-300 border border-sky-200 dark:border-sky-800">
-                              {t.statuses.MADE_UP}
+            </div>
+
+            {/* Financial KPI Summary Cards (4-Grid) */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+              {/* Card 1: Total Financial Debt */}
+              <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-slate-900 to-slate-800 text-white border border-slate-700 shadow-xs flex flex-col justify-between">
+                <div>
+                  <span className="text-xs font-semibold uppercase tracking-wider text-emerald-400">
+                    {t.accountability.totalFinancialDebt}
+                  </span>
+                  <p className="text-2xl font-black text-white mt-1">
+                    {formatCurrency(accountabilityTotal, lang)}
+                  </p>
+                </div>
+                <div className="mt-3 pt-2.5 border-t border-slate-700/60 flex items-center justify-between text-[11px] text-slate-300">
+                  <span>{fineItems.length} {t.accountability.prayersCount}</span>
+                  <span className="text-amber-400 font-semibold">
+                    {t.progress.overduePrayersCount.replace('{count}', String(accountabilityOverdue))}
+                  </span>
+                </div>
+              </div>
+
+              {/* Card 2: Base Fines Subtotal */}
+              <div className="p-4 sm:p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col justify-between">
+                <div>
+                  <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                    {t.accountability.baseFinesSubtotal}
+                  </span>
+                  <p className="text-2xl font-bold text-slate-900 dark:text-slate-100 mt-1">
+                    {formatCurrency(totalBaseFines, lang)}
+                  </p>
+                </div>
+                <p className="text-[11px] text-slate-400 mt-3 pt-2.5 border-t border-slate-100 dark:border-slate-800">
+                  15 000 UZS / {t.accountability.statusMissedNeedsMakeup}
+                </p>
+              </div>
+
+              {/* Card 3: Overdue Penalties Subtotal */}
+              <div className="p-4 sm:p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col justify-between">
+                <div>
+                  <span className="text-xs font-semibold uppercase tracking-wider text-amber-500">
+                    {t.accountability.overduePenaltiesSubtotal}
+                  </span>
+                  <p className="text-2xl font-bold text-amber-600 dark:text-amber-400 mt-1">
+                    {formatCurrency(totalOverduePenalties, lang)}
+                  </p>
+                </div>
+                <p className="text-[11px] text-slate-400 mt-3 pt-2.5 border-t border-slate-100 dark:border-slate-800">
+                  +15 000 UZS ({accountabilityOverdue > 0 ? t.progress.overduePrayersCount.replace('{count}', String(accountabilityOverdue)) : '0'})
+                </p>
+              </div>
+
+              {/* Card 4: Settled Sadaqah */}
+              <div className="p-4 sm:p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col justify-between">
+                <div>
+                  <span className="text-xs font-semibold uppercase tracking-wider text-emerald-500">
+                    {t.progress.settledAmount}
+                  </span>
+                  <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">
+                    {formatCurrency(stats?.accountability?.totalPaidAmount ?? (settledDonations || 0), lang)}
+                  </p>
+                </div>
+                <p className="text-[11px] text-slate-400 mt-3 pt-2.5 border-t border-slate-100 dark:border-slate-800">
+                  {paymentHistory.length} {t.accountability.paymentHistory.toLowerCase()}
+                </p>
+              </div>
+            </div>
+
+            {/* Detailed Fine Breakdown Table / Cards */}
+            <div className="rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 shadow-xs p-3.5 sm:p-6 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
+                <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                  <span>{t.progress.accountabilityBreakdown}</span>
+                </h3>
+                <span className="text-xs text-slate-400">
+                  {t.accountability.overdueNote}
+                </span>
+              </div>
+
+              {fineItems.length === 0 ? (
+                <div className="p-8 text-center rounded-xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-100 dark:border-emerald-900/40 text-emerald-800 dark:text-emerald-300 text-xs">
+                  <CheckCircle2 className="w-6 h-6 text-emerald-600 mx-auto mb-2" />
+                  <p className="font-semibold">{t.progress.noFines}</p>
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {fineItems.map((item, idx) => {
+                    const isMadeUp = item.status === 'MADE_UP';
+                    return (
+                      <div
+                        key={`${item.date}-${item.prayerId}-${idx}`}
+                        className="py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3"
+                      >
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-bold text-xs text-slate-900 dark:text-slate-100">
+                              {item.date}
                             </span>
-                          ) : (
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-rose-50 dark:bg-rose-950/80 text-rose-800 dark:text-rose-300 border border-rose-200 dark:border-rose-800">
-                              {t.statuses.MISSED}
+                            <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 capitalize">
+                              {t.prayers[item.prayerId]}
                             </span>
-                          )}
+                            {isMadeUp ? (
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-sky-50 dark:bg-sky-950/80 text-sky-800 dark:text-sky-300 border border-sky-200 dark:border-sky-800 flex items-center gap-1">
+                                <Check className="w-3 h-3 text-sky-600 dark:text-sky-400" />
+                                <span>{t.accountability.statusMadeUpSpiritualDone}</span>
+                              </span>
+                            ) : (
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-rose-50 dark:bg-rose-950/80 text-rose-800 dark:text-rose-300 border border-rose-200 dark:border-rose-800">
+                                {t.accountability.statusMissedNeedsMakeup}
+                              </span>
+                            )}
+                            {!isMadeUp && item.isOverdue && (
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
+                                {t.progress.overdueBadge.replace('{days}', String(item.daysPassed))}
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Itemized Calculation */}
+                          <div className="flex items-center gap-2 flex-wrap text-[11px] text-slate-500 dark:text-slate-400">
+                            <span>{formatCurrency(item.baseAmount, lang)} ({t.accountability.baseDebtLabel})</span>
+                            {item.overdueAmount > 0 && (
+                              <>
+                                <span>+</span>
+                                <span className="text-amber-600 dark:text-amber-400 font-semibold">
+                                  {formatCurrency(item.overdueAmount, lang)} ({t.accountability.overduePenaltyLabel})
+                                </span>
+                              </>
+                            )}
+                          </div>
+
+                          {/* Transparent overdue explanation */}
                           {!isMadeUp && item.isOverdue && (
-                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-rose-100 dark:bg-rose-950/80 text-rose-700 dark:text-rose-300">
-                              {t.progress.overdueBadge.replace('{days}', String(item.daysPassed))}
+                            <p className="text-[10px] text-amber-700 dark:text-amber-400 flex items-center gap-1 mt-0.5">
+                              <AlertCircle className="w-3 h-3 shrink-0" />
+                              <span>{t.accountability.overdueWhyReason}</span>
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="flex items-center justify-between sm:justify-end gap-3 w-full sm:w-auto">
+                          <div className="text-right">
+                            <span className={`text-base font-black ${isMadeUp ? 'text-sky-600 dark:text-sky-400' : 'text-rose-600 dark:text-rose-400'}`}>
+                              {formatCurrency(item.totalAmount, lang)}
+                            </span>
+                            <span className="block text-[10px] text-slate-400">
+                              {t.accountability.totalOutstandingLabel}
+                            </span>
+                          </div>
+
+                          {!isMadeUp ? (
+                            <button
+                              type="button"
+                              onClick={() => handleHistoricalCorrection(item.date, item.prayerId, 'MADE_UP')}
+                              className="min-h-[44px] px-3.5 py-2 rounded-xl bg-sky-50 dark:bg-sky-950/60 hover:bg-sky-100 dark:hover:bg-sky-900 text-sky-800 dark:text-sky-300 border border-sky-200/80 dark:border-sky-800/60 text-xs font-semibold cursor-pointer transition-colors duration-150 flex items-center gap-1.5 focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 focus-visible:outline-none shadow-xs active:scale-95"
+                              title={t.accountability.markAsMadeUp}
+                            >
+                              <RotateCcw className="w-3.5 h-3.5 shrink-0" />
+                              <span>{t.accountability.markAsMadeUp}</span>
+                            </button>
+                          ) : (
+                            <span className="min-h-[44px] px-3.5 py-2 rounded-xl bg-sky-50/50 dark:bg-sky-950/40 text-sky-700 dark:text-sky-300 text-xs font-semibold flex items-center gap-1.5 border border-sky-200/50 dark:border-sky-800/50">
+                              <Check className="w-3.5 h-3.5 shrink-0 text-sky-600 dark:text-sky-400" />
+                              <span>{t.accountability.statusMadeUpSpiritualDone}</span>
                             </span>
                           )}
                         </div>
-                        <p className="text-[11px] text-slate-400 mt-1">
-                          {formatCurrency(item.baseAmount, lang)} {t.progress.baseFineLabel}
-                          {item.overdueAmount > 0 && ` + ${formatCurrency(item.overdueAmount, lang)} ${t.progress.overdueFineLabel}`}
-                        </p>
                       </div>
-
-                      <div className="flex items-center justify-between sm:justify-end gap-3 w-full sm:w-auto">
-                        <span className={`text-sm font-black ${isMadeUp ? 'text-sky-600 dark:text-sky-400' : 'text-rose-600 dark:text-rose-400'}`}>
-                          {formatCurrency(item.totalAmount, lang)}
-                        </span>
-                        {!isMadeUp ? (
-                          <button
-                            type="button"
-                            onClick={() => handleHistoricalCorrection(item.date, item.prayerId, 'MADE_UP')}
-                            className="min-h-[44px] px-3 py-2 rounded-xl bg-sky-50 dark:bg-sky-950/60 hover:bg-sky-100 dark:hover:bg-sky-900 text-sky-800 dark:text-sky-300 border border-sky-200/80 dark:border-sky-800/60 text-xs font-semibold cursor-pointer transition-colors duration-150 flex items-center gap-1.5 focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 focus-visible:outline-none shadow-xs"
-                          >
-                            <RotateCcw className="w-3.5 h-3.5 shrink-0" />
-                            <span>{t.dashboard.markMadeUp}</span>
-                          </button>
-                        ) : (
-                          <span className="min-h-[44px] px-3 py-2 rounded-xl bg-sky-50/50 dark:bg-sky-950/40 text-sky-700 dark:text-sky-300 text-xs font-semibold flex items-center gap-1.5 border border-sky-200/50 dark:border-sky-800/50">
-                            <Check className="w-3.5 h-3.5 shrink-0 text-sky-600 dark:text-sky-400" />
-                            <span>{t.statuses.MADE_UP}</span>
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          {/* Prayer-by-Prayer Counter Grid */}
-          <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
-            {PRAYER_IDS.map((p) => {
-              const count = qazaByPrayer?.[p] || 0;
-              return (
-                <div
-                  key={p}
-                  className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900 shadow-xs text-center space-y-3"
-                >
-                  <span className="text-xs font-bold text-slate-700 dark:text-slate-300 capitalize block">
-                    {t.prayers[p]}
-                  </span>
-                  <p className="text-2xl font-bold text-slate-900 dark:text-slate-100">
-                    {count}
-                  </p>
-                  <div className="flex items-center justify-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => adjustQaza(p, -1)}
-                      disabled={count === 0}
-                      className="min-h-[44px] min-w-[44px] rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors"
-                      title={t.accountability.fulfillOne}
-                      aria-label={`${t.accountability.fulfillOne}: ${t.prayers[p]}`}
-                    >
-                      <Minus className="w-4 h-4" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => adjustQaza(p, 1)}
-                      className="min-h-[44px] min-w-[44px] rounded-xl bg-emerald-50 dark:bg-emerald-950/60 hover:bg-emerald-100 dark:hover:bg-emerald-900 text-emerald-700 dark:text-emerald-300 flex items-center justify-center cursor-pointer transition-colors"
-                      title={t.accountability.addMissed}
-                      aria-label={`${t.accountability.addMissed}: ${t.prayers[p]}`}
-                    >
-                      <Plus className="w-4 h-4" />
-                    </button>
-                  </div>
+                    );
+                  })}
                 </div>
-              );
-            })}
-          </div>
-
-          {/* Payoff Projection Calculator */}
-          <div className="rounded-2xl border border-slate-200 bg-white p-3.5 sm:p-6 dark:border-slate-800 dark:bg-slate-900 shadow-xs space-y-4">
-            <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
-              {t.progress.calculatorTitle}
-            </h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="p-4 rounded-xl border border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40">
-                <span className="text-xs text-slate-400 block mb-1">
-                  {t.progress.dailyOneExtra}
-                </span>
-                <p className="text-lg font-bold text-emerald-600 dark:text-emerald-400">
-                  {Math.ceil(totalQazaCount / 1)} {t.progress.daysToComplete}
-                </p>
-              </div>
-              <div className="p-4 rounded-xl border border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40">
-                <span className="text-xs text-slate-400 block mb-1">
-                  {t.progress.dailyFiveExtra}
-                </span>
-                <p className="text-lg font-bold text-emerald-600 dark:text-emerald-400">
-                  {Math.ceil(totalQazaCount / 5)} {t.progress.daysToComplete}
-                </p>
-              </div>
-            </div>
-          </div>
-
-          {/* Payment History Section */}
-          <div className="rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 shadow-xs p-3.5 sm:p-6 space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-                <span>{t.accountability.paymentHistory}</span>
-              </h3>
-              {paymentHistory.length > 0 && (
-                <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-800/60">
-                  {paymentHistory.length}
-                </span>
               )}
             </div>
 
-            {loadingPayments ? (
-              <div className="py-8 flex justify-center text-slate-400">
-                <Loader2 className="w-6 h-6 animate-spin text-emerald-600" />
+            {/* Payment History Section */}
+            <div className="rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 shadow-xs p-3.5 sm:p-6 space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                  <span>{t.accountability.paymentHistory}</span>
+                </h3>
+                {paymentHistory.length > 0 && (
+                  <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-800/60">
+                    {paymentHistory.length}
+                  </span>
+                )}
               </div>
-            ) : paymentHistory.length === 0 ? (
-              <div className="p-8 text-center rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800 text-slate-500 dark:text-slate-400 text-xs">
-                <p>{t.accountability.noPaymentsYet}</p>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {paymentHistory.map((receipt) => {
-                  const receiptDate = new Date(receipt.createdAt);
-                  const formattedDate = !isNaN(receiptDate.getTime())
-                    ? receiptDate.toLocaleDateString(
-                        lang === 'uz' ? 'uz-UZ' : lang === 'ru' ? 'ru-RU' : 'en-US',
-                        {
-                          year: 'numeric',
-                          month: 'short',
-                          day: 'numeric',
-                          hour: '2-digit',
-                          minute: '2-digit',
-                        }
-                      )
-                    : receipt.createdAt;
 
-                  return (
-                    <div
-                      key={receipt.id}
-                      className="p-4 rounded-xl border border-slate-100 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-850/60 space-y-3"
-                    >
-                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 border-b border-slate-200/60 dark:border-slate-700/60 pb-2.5">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-xs font-bold text-slate-900 dark:text-slate-100">
-                            {t.accountability.receiptId}: #{receipt.id.slice(-6).toUpperCase()}
-                          </span>
-                          <span className="text-[11px] text-slate-400 dark:text-slate-500">
-                            • {formattedDate}
-                          </span>
-                        </div>
-                        <span className="text-sm font-black text-emerald-600 dark:text-emerald-400">
-                          {formatCurrency(receipt.totalAmount, lang)}
-                        </span>
-                      </div>
+              {loadingPayments ? (
+                <div className="py-8 flex justify-center text-slate-400">
+                  <Loader2 className="w-6 h-6 animate-spin text-emerald-600" />
+                </div>
+              ) : paymentHistory.length === 0 ? (
+                <div className="p-8 text-center rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800 text-slate-500 dark:text-slate-400 text-xs">
+                  <p>{t.accountability.noPaymentsYet}</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {paymentHistory.map((receipt) => {
+                    const receiptDate = new Date(receipt.createdAt);
+                    const formattedDate = !isNaN(receiptDate.getTime())
+                      ? receiptDate.toLocaleDateString(
+                          lang === 'uz' ? 'uz-UZ' : lang === 'ru' ? 'ru-RU' : 'en-US',
+                          {
+                            year: 'numeric',
+                            month: 'short',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          }
+                        )
+                      : receipt.createdAt;
 
-                      {/* Items in this payment */}
-                      <div className="space-y-1.5">
-                        {receipt.items.map((it, idx) => (
-                          <div
-                            key={`${receipt.id}-${it.date}-${it.prayerId}-${idx}`}
-                            className="flex items-center justify-between text-xs py-1 px-2 rounded-lg bg-white/70 dark:bg-slate-900/70 border border-slate-100/80 dark:border-slate-800/80"
-                          >
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className="font-medium text-slate-700 dark:text-slate-300">
-                                {it.date}
-                              </span>
-                              <span className="font-semibold text-slate-900 dark:text-slate-100 capitalize">
-                                {t.prayers[it.prayerId]}
-                              </span>
-                              <span
-                                className={`text-[10px] font-bold px-1.5 py-0.2 rounded ${
-                                  it.status === 'MADE_UP'
-                                    ? 'bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-300'
-                                    : 'bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300'
-                                }`}
-                              >
-                                {t.statuses[it.status] || it.status}
-                              </span>
-                              {it.isOverdue && (
-                                <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300">
-                                  Overdue
-                                </span>
-                              )}
-                            </div>
-                            <span className="font-bold text-slate-800 dark:text-slate-200">
-                              {formatCurrency(it.amount, lang)}
+                    return (
+                      <div
+                        key={receipt.id}
+                        className="p-4 rounded-xl border border-slate-100 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-850/60 space-y-3"
+                      >
+                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 border-b border-slate-200/60 dark:border-slate-700/60 pb-2.5">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-xs font-bold text-slate-900 dark:text-slate-100">
+                              {t.accountability.receiptId}: #{receipt.id.slice(-6).toUpperCase()}
+                            </span>
+                            <span className="text-[11px] text-slate-400 dark:text-slate-500">
+                              • {formattedDate}
                             </span>
                           </div>
-                        ))}
-                      </div>
+                          <span className="text-sm font-black text-emerald-600 dark:text-emerald-400">
+                            {formatCurrency(receipt.totalAmount, lang)}
+                          </span>
+                        </div>
 
-                      {receipt.note && (
-                        <p className="text-[11px] italic text-slate-500 dark:text-slate-400">
-                          {receipt.note}
-                        </p>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
+                        {/* Items in this payment */}
+                        <div className="space-y-1.5">
+                          {receipt.items.map((it, idx) => (
+                            <div
+                              key={`${receipt.id}-${it.date}-${it.prayerId}-${idx}`}
+                              className="flex items-center justify-between text-xs py-1 px-2 rounded-lg bg-white/70 dark:bg-slate-900/70 border border-slate-100/80 dark:border-slate-800/80"
+                            >
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="font-medium text-slate-700 dark:text-slate-300">
+                                  {it.date}
+                                </span>
+                                <span className="font-semibold text-slate-900 dark:text-slate-100 capitalize">
+                                  {t.prayers[it.prayerId]}
+                                </span>
+                                <span
+                                  className={`text-[10px] font-bold px-1.5 py-0.2 rounded ${
+                                    it.status === 'MADE_UP'
+                                      ? 'bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-300'
+                                      : 'bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300'
+                                  }`}
+                                >
+                                  {t.statuses[it.status] || it.status}
+                                </span>
+                                {it.isOverdue && (
+                                  <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300">
+                                    Overdue
+                                  </span>
+                                )}
+                              </div>
+                              <span className="font-bold text-slate-800 dark:text-slate-200">
+                                {formatCurrency(it.amount, lang)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+
+                        {receipt.note && (
+                          <p className="text-[11px] italic text-slate-500 dark:text-slate-400">
+                            {receipt.note}
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </section>
         </div>
       )}
 

@@ -3,7 +3,8 @@ import { connectDB } from '../../../../lib/mongodb.ts';
 import { PrayerRecord } from '../../../../models/Prayer.ts';
 import { authenticateRequest } from '../../../../lib/auth/index.ts';
 import { calculateStreakFromHistory, getDaysDifference } from '../../../../lib/streak.ts';
-import { calculateFines, isValidCalendarDate } from '../route.ts';
+import { isValidCalendarDate } from '../route.ts';
+import { calculateAccountabilityFines } from '../../../../lib/accountability.ts';
 import type { PrayerId, PrayerStatus } from '../../../../types/prayer.ts';
 
 const VALID_PRAYER_IDS: PrayerId[] = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
@@ -104,7 +105,7 @@ export async function POST(request: NextRequest) {
         }
       }
       if (modified || fromRecord.finesAccrued === undefined) {
-        fromRecord.finesAccrued = calculateFines(fromDate, fromRecord.prayers);
+        fromRecord.finesAccrued = calculateAccountabilityFines(fromDate, fromRecord.prayers);
         if (typeof fromRecord.markModified === 'function') {
           fromRecord.markModified('prayers');
           fromRecord.markModified('finesAccrued');
@@ -159,7 +160,7 @@ export async function POST(request: NextRequest) {
           }
         }
         if (hasPending) {
-          interRecord.finesAccrued = calculateFines(interDate, interRecord.prayers);
+          interRecord.finesAccrued = calculateAccountabilityFines(interDate, interRecord.prayers);
           if (typeof interRecord.markModified === 'function') {
             interRecord.markModified('prayers');
             interRecord.markModified('finesAccrued');

@@ -4,7 +4,15 @@ import { connectDB } from '../../../../lib/mongodb.ts';
 import { PrayerRecord, type IPrayerRecord } from '../../../../models/Prayer.ts';
 import { QazaPayment } from '../../../../models/QazaPayment.ts';
 import { authenticateRequest } from '../../../../lib/auth/index.ts';
-import { calculateFines, isValidCalendarDate, sanitizeNotes } from '../route.ts';
+import { isValidCalendarDate, sanitizeNotes } from '../route.ts';
+import {
+  calculateAccountabilityFines,
+  calculateAuthoritativeDebt,
+  calculateDaysPassed,
+  isOverduePrayer,
+  BASE_PLEDGE_AMOUNT,
+  OVERDUE_PENALTY_AMOUNT,
+} from '../../../../lib/accountability.ts';
 import type {
   PrayerId,
   PrayerStatus,
@@ -151,6 +159,9 @@ export async function POST(request: NextRequest) {
       });
 
       if (existingPayment) {
+        const allUserRecords = await PrayerRecord.find({ userId: auth.user.id });
+        const remainingDebt = calculateAuthoritativeDebt(allUserRecords);
+
         return NextResponse.json(
           {
             success: true,
@@ -169,6 +180,8 @@ export async function POST(request: NextRequest) {
               idempotencyKey: existingPayment.idempotencyKey,
               note: existingPayment.note,
               createdAt: existingPayment.createdAt.toISOString(),
+              remainingFinancialDebt: remainingDebt.totalFinancialDebt,
+              remainingPendingQazaCount: remainingDebt.pendingQazaCount,
             },
             message: 'Payment already processed (idempotent replay)',
           },
@@ -187,8 +200,6 @@ export async function POST(request: NextRequest) {
 
     // 4. Verification Pass: verify ownership, eligibility, and calculate legitimate server-side amounts
     const now = new Date();
-    const nowTime = now.getTime();
-    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
 
     interface VerifiedItem {
       record: IPrayerRecord;
@@ -250,15 +261,16 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      // Server-side calculated legitimate amount:
-      // - MISSED: base 15,000 UZS. If > 7 days (> 7 days from record date), +15,000 UZS overdue fine (total 30,000 UZS).
+      // Server-side calculated legitimate amount using authoritative logic:
+      // - MISSED: base 15,000 UZS. If > 7 days (daysPassed > 7), +15,000 UZS overdue fine (total 30,000 UZS).
       // - MADE_UP: base 15,000 UZS (capped, no overdue penalty).
-      const recDate = new Date(`${item.date}T00:00:00Z`).getTime();
-      const isOverdue = nowTime - recDate > sevenDaysMs;
+      const todayStr = now.toISOString().split('T')[0];
+      const daysPassed = calculateDaysPassed(item.date, todayStr);
+      const isOverdue = prayer.status === 'MISSED' && isOverduePrayer(daysPassed);
 
-      let calculatedAmount = 15000;
+      let calculatedAmount = BASE_PLEDGE_AMOUNT;
       if (prayer.status === 'MISSED' && isOverdue) {
-        calculatedAmount = 30000;
+        calculatedAmount = BASE_PLEDGE_AMOUNT + OVERDUE_PENALTY_AMOUNT;
       }
 
       verifiedItems.push({
@@ -271,21 +283,7 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // 4b. Validate confirmedMadeUp requirement: If any prayer in body.items has status 'MISSED', require body.confirmedMadeUp === true
-    const hasMissed = verifiedItems.some((it) => it.status === 'MISSED');
-    if (hasMissed && body.confirmedMadeUp !== true) {
-      return NextResponse.json(
-        {
-          success: false,
-          error:
-            'You must confirm that the selected missed prayers have been made up before settling sadaqah. Sadaqah does not substitute obligatory prayer.',
-          code: 'CONFIRMATION_REQUIRED',
-        },
-        { status: 400 }
-      );
-    }
-
-    // 5. Atomic Update Pass: transition prayers to MADE_UP, mark as paid, and persist
+    // 5. Atomic Update Pass: mark prayers as paid and persist (preserves spiritual status: MISSED remains MISSED until made up by prayer)
     let totalAmount = 0;
     const receiptItems = [];
     const recordsToSave = new Set<IPrayerRecord>();
@@ -293,10 +291,8 @@ export async function POST(request: NextRequest) {
     for (const item of verifiedItems) {
       totalAmount += item.amount;
       const prayerObj = item.record.prayers[item.prayerId];
-      prayerObj.status = 'MADE_UP';
-      if (!prayerObj.madeUpAt) {
-        prayerObj.madeUpAt = now;
-      }
+      // CRITICAL: DO NOT change prayerObj.status to 'MADE_UP'! If the prayer was 'MISSED', it remains 'MISSED'!
+      // Qaza completion and financial settlement must remain separate states.
       prayerObj.isPaid = true;
       prayerObj.paidAt = now;
       prayerObj.paidAmount = item.amount;
@@ -307,7 +303,7 @@ export async function POST(request: NextRequest) {
         prayerRecordId: item.record._id,
         date: item.date,
         prayerId: item.prayerId,
-        status: 'MADE_UP' as PrayerStatus,
+        status: prayerObj.status,
         amount: item.amount,
         isOverdue: item.isOverdue,
       });
@@ -315,7 +311,7 @@ export async function POST(request: NextRequest) {
 
     // Recalculate finesAccrued for all touched records (paid prayers are skipped)
     for (const rec of recordsToSave) {
-      rec.finesAccrued = calculateFines(rec.date, rec.prayers);
+      rec.finesAccrued = calculateAccountabilityFines(rec.date, rec.prayers);
       if (typeof rec.markModified === 'function') {
         rec.markModified('prayers');
         rec.markModified('finesAccrued');
@@ -339,6 +335,9 @@ export async function POST(request: NextRequest) {
       if (err?.code === 11000 && idempotencyKey) {
         const existing = await QazaPayment.findOne({ userId: auth.user.id, idempotencyKey });
         if (existing) {
+          const allUserRecords = await PrayerRecord.find({ userId: auth.user.id });
+          const remainingDebt = calculateAuthoritativeDebt(allUserRecords);
+
           return NextResponse.json(
             {
               success: true,
@@ -357,6 +356,8 @@ export async function POST(request: NextRequest) {
                 idempotencyKey: existing.idempotencyKey,
                 note: existing.note,
                 createdAt: existing.createdAt.toISOString(),
+                remainingFinancialDebt: remainingDebt.totalFinancialDebt,
+                remainingPendingQazaCount: remainingDebt.pendingQazaCount,
               },
               message: 'Payment already processed (idempotent replay)',
             },
@@ -366,6 +367,10 @@ export async function POST(request: NextRequest) {
       }
       throw saveErr;
     }
+
+    // Compute remaining debt and pending qaza count across all user records
+    const allUserRecords = await PrayerRecord.find({ userId: auth.user.id });
+    const remainingDebt = calculateAuthoritativeDebt(allUserRecords);
 
     return NextResponse.json(
       {
@@ -385,6 +390,8 @@ export async function POST(request: NextRequest) {
           idempotencyKey: paymentDoc.idempotencyKey,
           note: paymentDoc.note,
           createdAt: paymentDoc.createdAt ? paymentDoc.createdAt.toISOString() : new Date().toISOString(),
+          remainingFinancialDebt: remainingDebt.totalFinancialDebt,
+          remainingPendingQazaCount: remainingDebt.pendingQazaCount,
         },
         message: 'Qaza fine payment recorded successfully',
       },

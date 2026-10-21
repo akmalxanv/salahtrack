@@ -1,167 +1,340 @@
-import type { PrayerId, PrayerStatus, PrayerHistoryRecord } from '@/types/prayer';
+/**
+ * SalahTrack Authoritative Qaza Accountability & Debt Calculation Service
+ *
+ * Implements pure, canonical debt and fine calculations for both backend and frontend.
+ *
+ * Core Canonical Rules:
+ * - Base Pledge Fine: 15,000 UZS per missed prayer (`BASE_PLEDGE_AMOUNT = 15000`).
+ * - Overdue Penalty: 15,000 UZS (`OVERDUE_PENALTY_AMOUNT = 15000`).
+ * - Overdue Threshold: A missed prayer is overdue ONLY when MORE THAN 7 full days have passed
+ *   from the prayer date (`daysPassed > 7`, i.e., 8 or more days).
+ *   On day 7, it is strictly within the 7-day grace period (not overdue).
+ * - MADE_UP Status: baseAmount = 15,000 UZS, overdueAmount = 0 (permanently capped; no overdue fine).
+ * - Paid Status (`isPaid === true`): 0 UZS outstanding debt (settled).
+ * - Strict Separation:
+ *   * Qaza obligations: `pendingQazaCount` = count of prayers with status === 'MISSED' (spiritual debt, regardless of payment).
+ *   * Financial debt: `totalFinancialDebt` = sum of unpaid base fines + overdue penalties for MISSED and MADE_UP prayers where `!isPaid`.
+ */
+
+import type { PrayerId, PrayerStatus, SinglePrayerEntry, PrayerHistoryRecord } from '../types/prayer.ts';
+import { getZonedDateParts, DEFAULT_TIMEZONE } from './prayer-cycle.ts';
+
+export const BASE_PLEDGE_AMOUNT = 15000;
+export const OVERDUE_PENALTY_AMOUNT = 15000;
+export const GRACE_PERIOD_DAYS = 7;
+export const SEVEN_DAYS_MS = GRACE_PERIOD_DAYS * 24 * 60 * 60 * 1000;
+
+export const PRAYER_ORDER: PrayerId[] = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
 
 export interface PayableQazaItem {
   date: string;
   prayerId: PrayerId;
   status: PrayerStatus;
-  amount: number;
-  totalAmount: number;
+  isQazaCompleted?: boolean;
+  isPaid?: boolean;
   baseAmount: number;
   overdueAmount: number;
+  totalAmount: number;
+  amount: number; // backward compatibility alias for totalAmount
   isOverdue: boolean;
   daysPassed: number;
+  overdueReason?: string;
+  paidAmount?: number;
+  paidAt?: Date | string;
+}
+
+export interface AuthoritativeDebtResult {
+  totalFinancialDebt: number;
+  totalBaseDebt: number;
+  totalOverdueDebt: number;
+  pendingQazaCount: number;      // missed prayers needing make-up
+  completedQazaCount: number;    // made up prayers
+  settledFinancialCount: number; // paid items
+  unpaidFinancialCount: number;  // unpaid items
+  items: PayableQazaItem[];      // itemized breakdown
+}
+
+export interface CalculateAuthoritativeDebtOptions {
+  referenceDate?: string | Date | number;
+  timezone?: string;
+  includeSettled?: boolean;
 }
 
 export interface AccountabilityLedgerResult {
   totalAmount: number;
+  totalFinancialDebt: number;
+  pendingQazaCount: number;
   unpaidCount: number;
   missedCount: number;
   madeUpCount: number;
   items: PayableQazaItem[];
 }
 
-export const BASE_PLEDGE_AMOUNT = 15000;
-export const OVERDUE_PENALTY_AMOUNT = 15000;
-export const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+export interface RawPrayerInput {
+  status?: PrayerStatus;
+  isPaid?: boolean;
+  paidAmount?: number;
+  paidAt?: Date | string;
+  prayedAt?: Date | string;
+  missedAt?: Date | string;
+  madeUpAt?: Date | string;
+  notes?: string;
+}
 
-export const PRAYER_ORDER: PrayerId[] = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
-
-/**
- * Calculates accountability fine for a daily prayer record:
- * - MISSED (Qaza): Base fine 15,000 UZS. If older than 7 days, +15,000 UZS overdue penalty (30,000 UZS).
- * - MADE_UP: Base fine 15,000 UZS without overdue penalty.
- * - Settled (isPaid: true) or PRAYED_ON_TIME / PENDING: 0 UZS.
- */
-export function calculateAccountabilityFines(
-  recordDateStr: string,
-  prayers?: Partial<Record<PrayerId, { status: PrayerStatus; isPaid?: boolean }>> | null
-): number {
-  if (!prayers || typeof prayers !== 'object') return 0;
-  let totalFine = 0;
-  const now = Date.now();
-  const recordDate = new Date(`${recordDateStr}T00:00:00Z`).getTime();
-  const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
-  const isOverdue = !isNaN(recordDate) && now - recordDate > sevenDaysMs;
-
-  for (const prayerId of PRAYER_ORDER) {
-    const prayer = prayers[prayerId];
-    if (!prayer || prayer.isPaid) continue;
-
-    if (prayer.status === 'MISSED') {
-      totalFine += BASE_PLEDGE_AMOUNT;
-      if (isOverdue) {
-        totalFine += OVERDUE_PENALTY_AMOUNT;
-      }
-    } else if (prayer.status === 'MADE_UP') {
-      totalFine += BASE_PLEDGE_AMOUNT;
-    }
-  }
-
-  return totalFine;
+export interface RawRecordInput {
+  date?: string;
+  prayers?: Partial<Record<PrayerId, RawPrayerInput>> | null;
 }
 
 /**
- * Single source of truth calculation function for the Qaza Accountability Ledger.
- *
- * Rules:
- * - 7-day grace period: 7 * 24 * 60 * 60 * 1000 ms.
- * - Skips any prayer where isPaid is true.
- * - For status === 'MISSED':
- *     baseAmount: 15,000 UZS
- *     overdueAmount: diffMs > 7 days ? 15,000 UZS : 0
- *     total: baseAmount + overdueAmount
- *     unpaidCount++, missedCount++
- * - For status === 'MADE_UP':
- *     baseAmount: 15,000 UZS
- *     overdueAmount: 0 (capped, no overdue penalty)
- *     total: 15,000 UZS
- *     unpaidCount++, madeUpCount++
+ * Calculates calendar days elapsed between prayer record date and reference date.
+ * Both dates must be YYYY-MM-DD.
+ * Uses UTC midnight timestamps to eliminate timezone/DST drift.
  */
-export function calculateAccountabilityLedger(
-  history: Record<string, PrayerHistoryRecord> | null | undefined,
-  nowTime: number = Date.now()
-): AccountabilityLedgerResult {
-  if (!history || typeof history !== 'object') {
-    return {
-      totalAmount: 0,
-      unpaidCount: 0,
-      missedCount: 0,
-      madeUpCount: 0,
-      items: [],
-    };
+export function calculateDaysPassed(recordDateStr: string, referenceDateStr: string): number {
+  if (!recordDateStr || !referenceDateStr) return 0;
+  const rParts = recordDateStr.split('-').map(Number);
+  const tParts = referenceDateStr.split('-').map(Number);
+  if (rParts.length !== 3 || tParts.length !== 3) return 0;
+  const [ry, rm, rd] = rParts;
+  const [ty, tm, td] = tParts;
+  if (isNaN(ry) || isNaN(rm) || isNaN(rd) || isNaN(ty) || isNaN(tm) || isNaN(td)) {
+    return 0;
+  }
+  const recUtc = Date.UTC(ry, rm - 1, rd);
+  const refUtc = Date.UTC(ty, tm - 1, td);
+  const diffMs = refUtc - recUtc;
+  return Math.max(0, Math.floor(diffMs / (24 * 60 * 60 * 1000)));
+}
+
+/**
+ * A missed prayer is overdue only when MORE THAN 7 full days have passed (daysPassed > 7, i.e., 8 or more days).
+ * On day 7, it is within the 7-day grace period (not overdue).
+ */
+export function isOverduePrayer(daysPassed: number): boolean {
+  return daysPassed > GRACE_PERIOD_DAYS;
+}
+
+/**
+ * Normalizes any reference date input (YYYY-MM-DD, ISO string, timestamp number, or Date)
+ * into a canonical YYYY-MM-DD string in the target timezone.
+ */
+export function resolveReferenceDateStr(
+  ref?: string | Date | number,
+  timezone: string = DEFAULT_TIMEZONE
+): string {
+  if (typeof ref === 'string') {
+    const trimmed = ref.trim();
+    if (/^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])$/.test(trimmed)) {
+      return trimmed;
+    }
+    const parsed = new Date(trimmed);
+    if (!isNaN(parsed.getTime())) {
+      return getZonedDateParts(parsed, timezone).dateStr;
+    }
+  } else if (typeof ref === 'number' && !isNaN(ref)) {
+    return getZonedDateParts(new Date(ref), timezone).dateStr;
+  } else if (ref instanceof Date && !isNaN(ref.getTime())) {
+    return getZonedDateParts(ref, timezone).dateStr;
+  }
+  return getZonedDateParts(new Date(), timezone).dateStr;
+}
+
+/**
+ * Authoritative Single Source of Truth calculation function for Qaza and Financial Debt.
+ *
+ * Computes deterministic financial debt and separates Qaza counts across any collection of records.
+ * Accepts:
+ * - Array of prayer records (e.g. from MongoDB `PrayerRecord.find()`)
+ * - Date-keyed dictionary (e.g. `Record<string, PrayerHistoryRecord>` from local storage or cache)
+ */
+export function calculateAuthoritativeDebt(
+  records: RawRecordInput[] | Record<string, RawRecordInput> | null | undefined,
+  options?: CalculateAuthoritativeDebtOptions
+): AuthoritativeDebtResult {
+  const timezone = options?.timezone || DEFAULT_TIMEZONE;
+  const refDateStr = resolveReferenceDateStr(options?.referenceDate, timezone);
+  const includeSettled = Boolean(options?.includeSettled);
+
+  const emptyResult: AuthoritativeDebtResult = {
+    totalFinancialDebt: 0,
+    totalBaseDebt: 0,
+    totalOverdueDebt: 0,
+    pendingQazaCount: 0,
+    completedQazaCount: 0,
+    settledFinancialCount: 0,
+    unpaidFinancialCount: 0,
+    items: [],
+  };
+
+  if (!records || typeof records !== 'object') {
+    return emptyResult;
   }
 
-  let totalAmount = 0;
-  let unpaidCount = 0;
-  let missedCount = 0;
-  let madeUpCount = 0;
+  // Normalize input records into an array of { date, prayers }
+  const normalizedRecords: Array<{ date: string; prayers: Partial<Record<PrayerId, RawPrayerInput>> }> = [];
+
+  if (Array.isArray(records)) {
+    for (const rec of records) {
+      if (!rec || typeof rec !== 'object') continue;
+      const date = rec.date;
+      if (typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date) && rec.prayers && typeof rec.prayers === 'object') {
+        normalizedRecords.push({ date, prayers: rec.prayers });
+      }
+    }
+  } else {
+    for (const [key, val] of Object.entries(records)) {
+      if (!val || typeof val !== 'object') continue;
+      const date = (typeof val.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(val.date))
+        ? val.date
+        : (/^\d{4}-\d{2}-\d{2}$/.test(key) ? key : '');
+      if (date && val.prayers && typeof val.prayers === 'object') {
+        normalizedRecords.push({ date, prayers: val.prayers });
+      }
+    }
+  }
+
+  // Sort records descending by date (newest first)
+  normalizedRecords.sort((a, b) => b.date.localeCompare(a.date));
+
+  let totalFinancialDebt = 0;
+  let totalBaseDebt = 0;
+  let totalOverdueDebt = 0;
+  let pendingQazaCount = 0;
+  let completedQazaCount = 0;
+  let settledFinancialCount = 0;
+  let unpaidFinancialCount = 0;
   const items: PayableQazaItem[] = [];
 
-  const sortedDates = Object.keys(history).sort((a, b) => b.localeCompare(a));
-
-  for (const date of sortedDates) {
-    const record = history[date];
-    if (!record || !record.prayers || typeof record.prayers !== 'object') continue;
-
-    const recDate = new Date(`${date}T00:00:00Z`).getTime();
-    const diffMs = !isNaN(recDate) ? nowTime - recDate : 0;
-    const daysPassed = Math.max(0, Math.floor(diffMs / (24 * 60 * 60 * 1000)));
-    const isOverdue = diffMs > SEVEN_DAYS_MS;
+  for (const rec of normalizedRecords) {
+    const daysPassed = calculateDaysPassed(rec.date, refDateStr);
+    const isOverdueThreshold = isOverduePrayer(daysPassed);
 
     for (const prayerId of PRAYER_ORDER) {
-      const prayer = record.prayers[prayerId];
-      if (!prayer) continue;
-      if (prayer.isPaid) continue;
+      const prayer = rec.prayers[prayerId];
+      if (!prayer || typeof prayer !== 'object' || !prayer.status) continue;
 
-      if (prayer.status === 'MISSED') {
-        const baseAmount = BASE_PLEDGE_AMOUNT;
-        const overdueAmount = isOverdue ? OVERDUE_PENALTY_AMOUNT : 0;
-        const itemTotal = baseAmount + overdueAmount;
+      const status = prayer.status;
+      // Only MISSED and MADE_UP prayers accrue fines or represent Qaza obligations
+      if (status !== 'MISSED' && status !== 'MADE_UP') {
+        continue;
+      }
 
-        totalAmount += itemTotal;
-        unpaidCount++;
-        missedCount++;
+      const isPaid = prayer.isPaid === true;
+      const isQazaCompleted = status === 'MADE_UP';
+      const isOverdue = status === 'MISSED' && isOverdueThreshold;
 
-        items.push({
-          date,
-          prayerId,
-          status: 'MISSED',
-          amount: itemTotal,
-          totalAmount: itemTotal,
-          baseAmount,
-          overdueAmount,
-          isOverdue,
-          daysPassed,
-        });
-      } else if (prayer.status === 'MADE_UP') {
-        const baseAmount = BASE_PLEDGE_AMOUNT;
-        const overdueAmount = 0;
-        const itemTotal = baseAmount;
+      if (status === 'MISSED') {
+        pendingQazaCount++;
+      } else if (status === 'MADE_UP') {
+        completedQazaCount++;
+      }
 
-        totalAmount += itemTotal;
-        unpaidCount++;
-        madeUpCount++;
+      if (isPaid) {
+        settledFinancialCount++;
+      } else {
+        unpaidFinancialCount++;
+      }
 
-        items.push({
-          date,
-          prayerId,
-          status: 'MADE_UP',
-          amount: itemTotal,
-          totalAmount: itemTotal,
-          baseAmount,
-          overdueAmount,
-          isOverdue: false,
-          daysPassed,
-        });
+      let baseAmount = 0;
+      let overdueAmount = 0;
+      let totalAmount = 0;
+      let overdueReason = '';
+
+      if (isPaid) {
+        baseAmount = 0;
+        overdueAmount = 0;
+        totalAmount = 0;
+        overdueReason = 'Settled (isPaid)';
+      } else if (status === 'MISSED') {
+        baseAmount = BASE_PLEDGE_AMOUNT;
+        overdueAmount = isOverdue ? OVERDUE_PENALTY_AMOUNT : 0;
+        totalAmount = baseAmount + overdueAmount;
+        overdueReason = isOverdue
+          ? `${daysPassed} days passed (exceeds 7-day grace period)`
+          : `${daysPassed} days passed (within 7-day grace period)`;
+
+        totalBaseDebt += baseAmount;
+        totalOverdueDebt += overdueAmount;
+        totalFinancialDebt += totalAmount;
+      } else if (status === 'MADE_UP') {
+        baseAmount = BASE_PLEDGE_AMOUNT;
+        overdueAmount = 0;
+        totalAmount = baseAmount;
+        overdueReason = 'Qaza completed; overdue penalty permanently waived';
+
+        totalBaseDebt += baseAmount;
+        totalFinancialDebt += totalAmount;
+      }
+
+      const item: PayableQazaItem = {
+        date: rec.date,
+        prayerId,
+        status,
+        isQazaCompleted,
+        isPaid,
+        baseAmount,
+        overdueAmount,
+        totalAmount,
+        amount: totalAmount,
+        isOverdue,
+        daysPassed,
+        overdueReason,
+        paidAmount: prayer.paidAmount,
+        paidAt: prayer.paidAt,
+      };
+
+      if (!isPaid || includeSettled) {
+        items.push(item);
       }
     }
   }
 
   return {
-    totalAmount,
-    unpaidCount,
-    missedCount,
-    madeUpCount,
+    totalFinancialDebt,
+    totalBaseDebt,
+    totalOverdueDebt,
+    pendingQazaCount,
+    completedQazaCount,
+    settledFinancialCount,
+    unpaidFinancialCount,
     items,
+  };
+}
+
+/**
+ * Backward-compatible helper: calculates total accountability fine for a daily prayer record.
+ * Delegates directly to the authoritative calculation engine.
+ */
+export function calculateAccountabilityFines(
+  recordDateStr: string,
+  prayers?: Partial<Record<PrayerId, { status: PrayerStatus; isPaid?: boolean }>> | null,
+  referenceDate?: string | Date | number
+): number {
+  if (!prayers || typeof prayers !== 'object') return 0;
+  const debt = calculateAuthoritativeDebt(
+    [{ date: recordDateStr, prayers: prayers as Record<PrayerId, SinglePrayerEntry> }],
+    { referenceDate }
+  );
+  return debt.totalFinancialDebt;
+}
+
+/**
+ * Backward-compatible helper: calculates ledger result for a history dictionary.
+ * Delegates directly to the authoritative calculation engine.
+ */
+export function calculateAccountabilityLedger(
+  history: Record<string, PrayerHistoryRecord> | null | undefined,
+  nowTime?: number | string | Date
+): AccountabilityLedgerResult {
+  const debt = calculateAuthoritativeDebt(history, { referenceDate: nowTime });
+  return {
+    totalAmount: debt.totalFinancialDebt,
+    totalFinancialDebt: debt.totalFinancialDebt,
+    pendingQazaCount: debt.pendingQazaCount,
+    unpaidCount: debt.unpaidFinancialCount,
+    missedCount: debt.pendingQazaCount,
+    madeUpCount: debt.completedQazaCount,
+    items: debt.items,
   };
 }

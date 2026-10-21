@@ -5,7 +5,13 @@ import { QazaPayment } from '../../../models/QazaPayment.ts';
 import { authenticateRequest } from '../../../lib/auth/index.ts';
 import { calculateStreakFromHistory } from '../../../lib/streak.ts';
 import { getLiturgicalDate } from '../../../lib/prayer-cycle.ts';
-import type { PrayerId, AccountabilityBreakdownItem } from '../../../types/prayer.ts';
+import {
+  calculateAuthoritativeDebt,
+  BASE_PLEDGE_AMOUNT,
+  OVERDUE_PENALTY_AMOUNT,
+  GRACE_PERIOD_DAYS,
+} from '../../../lib/accountability.ts';
+import type { PrayerId } from '../../../types/prayer.ts';
 
 const PRAYER_KEYS: PrayerId[] = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
 
@@ -127,70 +133,11 @@ export async function GET(request: NextRequest) {
 
     const streakData = calculateStreakFromHistory(recordMap, todayStr);
 
-    // 4. Accountability balance & detailed breakdown
-    const fineBreakdown: AccountabilityBreakdownItem[] = [];
-
-    let totalMissedCount = 0;
-    let totalOverdueCount = 0;
-    let totalMadeUpCount = 0;
-    let totalOutstandingAmount = 0;
-    const nowTime = todayUtc;
-    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
-
-    for (const rec of allUserRecords) {
-      const recDate = new Date(`${rec.date}T00:00:00Z`).getTime();
-      const diffMs = nowTime - recDate;
-      const daysPassed = Math.max(0, Math.floor(diffMs / (24 * 60 * 60 * 1000)));
-      const isOverdue = diffMs > sevenDaysMs;
-
-      for (const p of PRAYER_KEYS) {
-        const prayer = rec.prayers?.[p];
-        if (!prayer) continue;
-
-        // Settled/paid prayers are excluded from outstanding fines and breakdown
-        if (prayer.isPaid) {
-          continue;
-        }
-
-        const prayerStatus = prayer.status;
-        if (prayerStatus === 'MISSED') {
-          totalMissedCount++;
-          const base = 15000;
-          const overdue = isOverdue ? 15000 : 0;
-          const total = base + overdue;
-          if (isOverdue) totalOverdueCount++;
-          totalOutstandingAmount += total;
-
-          fineBreakdown.push({
-            date: rec.date,
-            prayerId: p,
-            baseAmount: base,
-            overdueAmount: overdue,
-            totalAmount: total,
-            isOverdue,
-            daysPassed,
-            status: 'MISSED',
-          });
-        } else if (prayerStatus === 'MADE_UP') {
-          totalMadeUpCount++;
-          const base = 15000;
-          const overdue = 0;
-          const total = 15000;
-          totalOutstandingAmount += total;
-
-          fineBreakdown.push({
-            date: rec.date,
-            prayerId: p,
-            baseAmount: base,
-            overdueAmount: overdue,
-            totalAmount: total,
-            isOverdue: false,
-            daysPassed,
-            status: 'MADE_UP',
-          });
-        }
-      }
-    }
+    // 4. Accountability balance & detailed breakdown via Authoritative Debt Service
+    const debtResult = calculateAuthoritativeDebt(allUserRecords, {
+      referenceDate: todayStr,
+      timezone,
+    });
 
     // Compute total settled/paid amount across all completed Qaza payments
     const userPayments = await QazaPayment.find({ userId: auth.user.id });
@@ -231,16 +178,23 @@ export async function GET(request: NextRequest) {
             lastActiveDate: streakData.lastActiveDate,
           },
           accountability: {
-            totalAmount: totalOutstandingAmount,
+            totalAmount: debtResult.totalFinancialDebt,
+            totalFinancialDebt: debtResult.totalFinancialDebt,
+            totalBaseAmount: debtResult.totalBaseDebt,
+            totalOverdueAmount: debtResult.totalOverdueDebt,
             totalPaidAmount,
-            totalMissed: totalMissedCount,
-            totalOverdue: totalOverdueCount,
-            totalMadeUp: totalMadeUpCount,
+            pendingQazaCount: debtResult.pendingQazaCount,
+            completedQazaCount: debtResult.completedQazaCount,
+            settledFinancialCount: debtResult.settledFinancialCount,
+            unpaidFinancialCount: debtResult.unpaidFinancialCount,
+            totalMissed: debtResult.items.filter((it) => it.status === 'MISSED').length,
+            totalOverdue: debtResult.items.filter((it) => it.isOverdue && it.status === 'MISSED').length,
+            totalMadeUp: debtResult.items.filter((it) => it.status === 'MADE_UP').length,
             currency: 'UZS',
-            baseRatePerPrayer: 15000,
-            overdueRatePerPrayer: 15000,
-            gracePeriodDays: 7,
-            breakdown: fineBreakdown,
+            baseRatePerPrayer: BASE_PLEDGE_AMOUNT,
+            overdueRatePerPrayer: OVERDUE_PENALTY_AMOUNT,
+            gracePeriodDays: GRACE_PERIOD_DAYS,
+            breakdown: debtResult.items,
           },
         },
       },

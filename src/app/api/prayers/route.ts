@@ -56,42 +56,17 @@ export function sanitizeNotes(notes: unknown): string | undefined {
   return cleaned.slice(0, 200);
 }
 
+import { calculateAccountabilityFines } from '../../../lib/accountability.ts';
+
 /**
- * Calculates accountability fine for a daily prayer record based on the canonical 3-choice model:
- * - MISSED (Qaza): Base fine 15,000 UZS. If older than 7 days (> 7 days from recordDate), add +15,000 UZS overdue penalty (total 30,000 UZS).
- * - MADE_UP (Made Up): Base fine 15,000 UZS remains, but NO overdue penalty is assessed even after 7 days (capped at 15,000 UZS).
- * - PRAYED_ON_TIME / PRAYED / PRAYED_LATE / PENDING: 0 UZS.
+ * Calculates accountability fine for a daily prayer record based on the canonical model.
+ * Delegates to the authoritative debt-calculation engine in src/lib/accountability.ts.
  */
 export function calculateFines(
   recordDateStr: string,
   prayers?: Partial<Record<PrayerId, { status: PrayerStatus; missedAt?: Date; madeUpAt?: Date; isPaid?: boolean }>> | null
 ): number {
-  if (!prayers || typeof prayers !== 'object') return 0;
-  let totalFine = 0;
-  const now = Date.now();
-  const recordDate = new Date(`${recordDateStr}T00:00:00Z`).getTime();
-  if (isNaN(recordDate)) return 0;
-  const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
-  const isOverdue = now - recordDate > sevenDaysMs;
-
-  for (const prayerId of VALID_PRAYER_IDS) {
-    const prayer = prayers[prayerId];
-    if (!prayer) continue;
-
-    // Settled/paid prayers never accrue fines
-    if (prayer.isPaid) continue;
-
-    if (prayer.status === 'MISSED') {
-      totalFine += 15000;
-      if (isOverdue) {
-        totalFine += 15000;
-      }
-    } else if (prayer.status === 'MADE_UP') {
-      totalFine += 15000;
-    }
-  }
-
-  return totalFine;
+  return calculateAccountabilityFines(recordDateStr, prayers);
 }
 
 /**

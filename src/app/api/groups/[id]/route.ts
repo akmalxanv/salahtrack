@@ -4,6 +4,7 @@ import { authenticateRequest } from '../../../../lib/auth/guard.ts';
 import { Group } from '../../../../models/Group.ts';
 import { User } from '../../../../models/User.ts';
 import { PrayerRecord } from '../../../../models/Prayer.ts';
+import { calculateAuthoritativeDebt, type RawRecordInput } from '../../../../lib/accountability.ts';
 import mongoose from 'mongoose';
 
 const PRAYER_KEYS = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'] as const;
@@ -32,7 +33,8 @@ export async function GET(
 
     await connectDB();
 
-    const group = await Group.findById(id).lean();
+    const groupQuery = Group.findById(id);
+    const group = typeof groupQuery?.lean === 'function' ? await groupQuery.lean() : await groupQuery;
     if (!group) {
       return NextResponse.json(
         { success: false, error: 'Circle not found' },
@@ -94,58 +96,57 @@ export async function GET(
       .lean();
 
     // Map records by userId
+    const memberRecordsMap = new Map<
+      string,
+      Array<{ date: string; prayers?: unknown }>
+    >();
+
+    for (const mId of memberUserIds) {
+      memberRecordsMap.set(mId.toString(), []);
+    }
+
+    for (const rec of records) {
+      const uId = rec.userId.toString();
+      const list = memberRecordsMap.get(uId);
+      if (list) {
+        list.push(rec);
+      }
+    }
+
     const memberStatsMap = new Map<
       string,
       { completedCount: number; onTimeCount: number; sadaqahOwed: number }
     >();
 
     for (const mId of memberUserIds) {
-      memberStatsMap.set(mId.toString(), {
-        completedCount: 0,
-        onTimeCount: 0,
-        sadaqahOwed: 0,
-      });
-    }
+      const uId = mId.toString();
+      const userRecords = memberRecordsMap.get(uId) || [];
+      const debt = calculateAuthoritativeDebt(userRecords as unknown as RawRecordInput[], { referenceDate: todayStr });
 
-    const nowTime = Date.now();
-    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+      let completedCount = 0;
+      let onTimeCount = 0;
 
-    for (const rec of records) {
-      const uId = rec.userId.toString();
-      const stats = memberStatsMap.get(uId);
-      if (!stats) continue;
-
-      const recDate = new Date(`${rec.date}T00:00:00Z`).getTime();
-      const isOverdue = !isNaN(recDate) && nowTime - recDate > sevenDaysMs;
-      const isWithinPeriod = rec.date >= startDateStr && rec.date <= todayStr;
-
-      for (const pKey of PRAYER_KEYS) {
-        const prayer = rec.prayers?.[pKey];
-        if (!prayer) continue;
-
-        // In private circles ONLY:
-        // Compute applicable outstanding sadaqah owed:
-        // - Unpaid MISSED is 15,000 UZS base + 15,000 UZS if >7 days overdue
-        // - Unpaid MADE_UP is 15,000 UZS base
-        // - Exclude paid/settled prayers (prayer.isPaid: true)
-        if (!prayer.isPaid) {
-          if (prayer.status === 'MISSED') {
-            stats.sadaqahOwed += 15000 + (isOverdue ? 15000 : 0);
-          } else if (prayer.status === 'MADE_UP') {
-            stats.sadaqahOwed += 15000;
-          }
-        }
-
-        // Leaderboard stats within active period
-        if (isWithinPeriod) {
-          if (prayer.status === 'PRAYED_ON_TIME' || prayer.status === 'PRAYED') {
-            stats.completedCount++;
-            stats.onTimeCount++;
-          } else if (prayer.status === 'PRAYED_LATE') {
-            stats.completedCount++;
+      for (const rec of userRecords) {
+        const isWithinPeriod = rec.date >= startDateStr && rec.date <= todayStr;
+        if (isWithinPeriod && rec.prayers && typeof rec.prayers === 'object') {
+          for (const pKey of PRAYER_KEYS) {
+            const prayer = (rec.prayers as Record<string, { status: string }>)[pKey];
+            if (!prayer) continue;
+            if (prayer.status === 'PRAYED_ON_TIME' || prayer.status === 'PRAYED') {
+              completedCount++;
+              onTimeCount++;
+            } else if (prayer.status === 'PRAYED_LATE') {
+              completedCount++;
+            }
           }
         }
       }
+
+      memberStatsMap.set(uId, {
+        completedCount,
+        onTimeCount,
+        sadaqahOwed: debt.totalFinancialDebt,
+      });
     }
 
     // Assemble member entries with clean defaults and sadaqahOwed

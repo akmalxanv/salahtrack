@@ -217,7 +217,7 @@ export default function HomeDashboard({
   const [isPayModalOpen, setIsPayModalOpen] = useState(false);
   const [serverAccountability, setServerAccountability] = useState<{
     totalAmount: number;
-    unpaidCount: number;
+    pendingQazaCount: number;
   } | null>(null);
   const [historyVersion, setHistoryVersion] = useState(0);
 
@@ -413,11 +413,14 @@ export default function HomeDashboard({
           }
           if (statsJson.data?.accountability) {
             setServerAccountability({
-              totalAmount: statsJson.data.accountability.totalAmount,
-              unpaidCount:
-                statsJson.data.accountability.breakdown?.length ??
-                ((statsJson.data.accountability.totalMissed || 0) +
-                  (statsJson.data.accountability.totalMadeUp || 0)),
+              totalAmount:
+                statsJson.data.accountability.totalFinancialDebt ??
+                statsJson.data.accountability.totalAmount ??
+                0,
+              pendingQazaCount:
+                statsJson.data.accountability.pendingQazaCount ??
+                statsJson.data.accountability.totalMissed ??
+                0,
             });
           }
         }
@@ -524,17 +527,24 @@ export default function HomeDashboard({
       const normalizedStatus: PrayerStatus = status === 'PRAYED' ? 'PRAYED_ON_TIME' : status;
       const targetDate = activeLiturgicalDate;
 
-      // Fine difference calculation for immediate 0ms UI feedback
-      const getFineAndUnpaid = (st: PrayerStatus) => {
-        if (st === 'MISSED' || st === 'MADE_UP') return { fine: 15000, unpaid: 1 };
-        return { fine: 0, unpaid: 0 };
-      };
+      // Precise optimistic delta calculations:
+      // Qaza count (pending spiritual make-up):
+      // PENDING -> MISSED: +1 Qaza
+      // MISSED -> MADE_UP: -1 Qaza
+      // MADE_UP -> PRAYED_ON_TIME / PENDING: 0 Qaza change
+      // MISSED -> PRAYED_ON_TIME / PENDING: -1 Qaza
+      const getQazaValue = (st: PrayerStatus) => (st === 'MISSED' ? 1 : 0);
       const oldItem = prayers.find((p) => p.id === id);
       const oldStatus = oldItem ? (oldItem.status === 'PRAYED' ? 'PRAYED_ON_TIME' : oldItem.status) : 'PENDING';
-      const oldCalc = getFineAndUnpaid(oldStatus);
-      const newCalc = getFineAndUnpaid(normalizedStatus);
-      const fineDiff = newCalc.fine - oldCalc.fine;
-      const unpaidDiff = newCalc.unpaid - oldCalc.unpaid;
+      const qazaDiff = getQazaValue(normalizedStatus) - getQazaValue(oldStatus);
+
+      // Financial debt:
+      // PENDING -> MISSED: +15,000 UZS debt
+      // MISSED -> MADE_UP: debt remains 15,000 UZS (capped at base, no overdue penalty) (fineDiff = 0)
+      // MADE_UP -> PRAYED_ON_TIME / PENDING: -15,000 UZS debt
+      // MISSED -> PRAYED_ON_TIME / PENDING: -15,000 UZS debt
+      const getFineValue = (st: PrayerStatus) => (st === 'MISSED' || st === 'MADE_UP' ? 15000 : 0);
+      const fineDiff = getFineValue(normalizedStatus) - getFineValue(oldStatus);
 
       // 1. Instant 0ms optimistic UI update
       const updatedPrayers = prayers.map((item) =>
@@ -553,16 +563,19 @@ export default function HomeDashboard({
       ).length === 5;
       setStreak((prevStreak) => calculateStreakTransition(prevStreak, targetDate, isDayCompleted));
 
-      // 4. Optimistically adjust server accountability (if active) so totalSadaqahOwed immediately updates by 15,000 UZS
-      if (serverAccountability !== null && (fineDiff !== 0 || unpaidDiff !== 0)) {
+      // 4. Optimistically adjust server accountability (if active)
+      if (serverAccountability !== null && (fineDiff !== 0 || qazaDiff !== 0)) {
         setServerAccountability((prev) =>
           prev
             ? {
                 totalAmount: Math.max(0, prev.totalAmount + fineDiff),
-                unpaidCount: Math.max(0, prev.unpaidCount + unpaidDiff),
+                pendingQazaCount: Math.max(0, prev.pendingQazaCount + qazaDiff),
               }
             : null
         );
+      }
+      if (qazaDiff !== 0) {
+        setQazaCount((prev) => Math.max(0, prev + qazaDiff));
       }
 
       // 5. Set saving status feedback
@@ -598,11 +611,14 @@ export default function HomeDashboard({
                   }
                   if (statsJson.data?.accountability) {
                     setServerAccountability({
-                      totalAmount: statsJson.data.accountability.totalAmount,
-                      unpaidCount:
-                        statsJson.data.accountability.breakdown?.length ??
-                        ((statsJson.data.accountability.totalMissed || 0) +
-                          (statsJson.data.accountability.totalMadeUp || 0)),
+                      totalAmount:
+                        statsJson.data.accountability.totalFinancialDebt ??
+                        statsJson.data.accountability.totalAmount ??
+                        0,
+                      pendingQazaCount:
+                        statsJson.data.accountability.pendingQazaCount ??
+                        statsJson.data.accountability.totalMissed ??
+                        0,
                     });
                   }
                 }
@@ -631,7 +647,7 @@ export default function HomeDashboard({
         }, 1500);
       }
     },
-    [user, activeLiturgicalDate, prayers, setPrayers, setStreak, serverAccountability]
+    [user, activeLiturgicalDate, prayers, setPrayers, setStreak, serverAccountability, setQazaCount]
   );
 
   // Quick toggle (done / pending)
@@ -647,22 +663,22 @@ export default function HomeDashboard({
 
   // Local accountability ledger calculated from historical prayer records using single source of truth
   const localAccountability = useMemo(() => {
-    if (!isMounted) return { totalAmount: 0, unpaidCount: 0 };
+    if (!isMounted) return { totalAmount: 0, pendingQazaCount: 0 };
     // Track reactive store changes
-    if (historyVersion < 0 || prayers.length < 0) return { totalAmount: 0, unpaidCount: 0 };
+    if (historyVersion < 0 || prayers.length < 0) return { totalAmount: 0, pendingQazaCount: 0 };
 
     const history = getStoredHistoryRecords();
     const ledger = calculateAccountabilityLedger(history, now.getTime());
     return {
       totalAmount: ledger.totalAmount,
-      unpaidCount: ledger.unpaidCount,
+      pendingQazaCount: ledger.pendingQazaCount ?? ledger.missedCount,
     };
   }, [isMounted, prayers, historyVersion, now]);
 
   const unpaidQazaCount =
     serverAccountability !== null
-      ? serverAccountability.unpaidCount
-      : localAccountability.unpaidCount;
+      ? serverAccountability.pendingQazaCount
+      : localAccountability.pendingQazaCount;
 
   const totalSadaqahOwed =
     serverAccountability !== null
@@ -681,11 +697,14 @@ export default function HomeDashboard({
             }
             if (statsJson.data?.accountability) {
               setServerAccountability({
-                totalAmount: statsJson.data.accountability.totalAmount,
-                unpaidCount:
-                  statsJson.data.accountability.breakdown?.length ??
-                  ((statsJson.data.accountability.totalMissed || 0) +
-                    (statsJson.data.accountability.totalMadeUp || 0)),
+                totalAmount:
+                  statsJson.data.accountability.totalFinancialDebt ??
+                  statsJson.data.accountability.totalAmount ??
+                  0,
+                pendingQazaCount:
+                  statsJson.data.accountability.pendingQazaCount ??
+                  statsJson.data.accountability.totalMissed ??
+                  0,
               });
             }
           }
@@ -1088,7 +1107,7 @@ export default function HomeDashboard({
           <button
             type="button"
             onClick={() => setIsPayModalOpen(true)}
-            disabled={unpaidQazaCount === 0}
+            disabled={totalSadaqahOwed === 0}
             className="self-start sm:self-auto min-h-[44px] flex items-center gap-2 px-4 py-2 rounded-xl bg-white hover:bg-emerald-50 text-emerald-900 text-xs font-bold transition-all active:scale-95 cursor-pointer shadow-xs disabled:opacity-50 disabled:cursor-not-allowed"
             title={t.accountability.payQaza}
           >
@@ -1105,7 +1124,7 @@ export default function HomeDashboard({
               </span>
             </div>
             <p className="text-xs text-emerald-100 font-medium mt-0.5">
-              {t.accountability.qazaBalance}
+              {t.accountability.spiritualPendingCount}
             </p>
           </div>
           <div className="text-right">
@@ -1113,7 +1132,7 @@ export default function HomeDashboard({
               {formatCurrency(totalSadaqahOwed, lang)}
             </span>
             <p className="text-xs text-emerald-100 font-medium mt-0.5">
-              {t.accountability.pledgeAmount}
+              {t.accountability.totalFinancialDebt}
             </p>
           </div>
         </div>
