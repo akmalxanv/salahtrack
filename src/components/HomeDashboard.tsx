@@ -719,8 +719,8 @@ export default function HomeDashboard({
 
   const completionPercentage = Math.round((completedCount / 5) * 100);
 
-  // SVG Progress Ring calculations (radius = 42, perimeter = ~263.89)
-  const ringRadius = 42;
+  // SVG Progress Ring calculations: larger, prominent, and vibrant (radius = 46, circumference = ~289.03)
+  const ringRadius = 46;
   const ringCircumference = 2 * Math.PI * ringRadius;
   const ringOffset = ringCircumference - (completedCount / 5) * ringCircumference;
 
@@ -961,45 +961,52 @@ export default function HomeDashboard({
               {t.dashboard.dailyProgressTitle}
             </span>
             <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400">
-              {completedCount === 5 ? t.calendar.legend.perfect : `${completedCount}/5`}
+              {completedCount === 5 ? t.calendar.legend.perfect : `${completionPercentage}%`}
             </span>
           </div>
 
           <div className="my-3 flex items-center gap-4 sm:gap-6">
             {/* Visual Prominent SVG Progress Ring */}
-            <div className="relative w-24 h-24 sm:w-26 sm:h-26 shrink-0 flex items-center justify-center">
-              <svg className="w-24 h-24 sm:w-26 sm:h-26 -rotate-90 transform" viewBox="0 0 100 100">
+            <div className="relative w-28 h-28 sm:w-32 sm:h-32 shrink-0 flex items-center justify-center">
+              <svg className="w-28 h-28 sm:w-32 sm:h-32 -rotate-90 transform" viewBox="0 0 108 108">
+                <defs>
+                  <linearGradient id="emeraldProgressGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stopColor="#34d399" />
+                    <stop offset="100%" stopColor="#059669" />
+                  </linearGradient>
+                </defs>
                 {/* Background Track Ring */}
                 <circle
-                  cx="50"
-                  cy="50"
+                  cx="54"
+                  cy="54"
                   r={ringRadius}
                   stroke="currentColor"
-                  strokeWidth="7.5"
-                  className="text-slate-100 dark:text-slate-800"
+                  strokeWidth="8.5"
+                  className="text-slate-100 dark:text-slate-800/80"
                   fill="transparent"
                 />
                 {/* Foreground Active Ring */}
                 <circle
-                  cx="50"
-                  cy="50"
+                  cx="54"
+                  cy="54"
                   r={ringRadius}
-                  stroke="currentColor"
-                  strokeWidth="7.5"
+                  stroke={completedCount > 0 ? "url(#emeraldProgressGradient)" : "currentColor"}
+                  strokeWidth="8.5"
                   strokeDasharray={ringCircumference}
                   strokeDashoffset={ringOffset}
                   strokeLinecap="round"
-                  className="text-emerald-600 dark:text-emerald-500 transition-all duration-700 ease-out"
+                  className={`transition-all duration-700 ease-out ${
+                    completedCount > 0
+                      ? 'drop-shadow-[0_2px_10px_rgba(16,185,129,0.45)]'
+                      : 'text-transparent'
+                  }`}
                   fill="transparent"
                 />
               </svg>
-              <div className="absolute inset-0 flex flex-col items-center justify-center text-center select-none pointer-events-none">
-                <span className="text-lg sm:text-xl font-black text-slate-900 dark:text-slate-100 leading-none">
+              <div className="absolute inset-0 flex items-center justify-center text-center select-none pointer-events-none">
+                <span className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-slate-100 leading-none tracking-tight">
                   {completedCount}
-                  <span className="text-xs text-slate-400 dark:text-slate-500 font-semibold">/5</span>
-                </span>
-                <span className="text-[11px] sm:text-xs font-bold text-emerald-600 dark:text-emerald-400 mt-1">
-                  {completionPercentage}%
+                  <span className="text-sm sm:text-base text-slate-400 dark:text-slate-500 font-bold ml-0.5">/5</span>
                 </span>
               </div>
             </div>
