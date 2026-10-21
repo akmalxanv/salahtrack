@@ -1011,54 +1011,64 @@ export default function HomeDashboard({
               </div>
             </div>
 
-            {/* Subtle, Balanced Status Breakdown Pills */}
-            <div className="flex-1 grid grid-cols-2 gap-2 text-xs">
-              <div className="py-1.5 px-2.5 rounded-xl bg-slate-50/70 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800/60 flex items-center justify-between">
-                <div className="flex items-center gap-1.5 min-w-0">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
-                  <span className="text-[10px] font-medium text-slate-500 dark:text-slate-400 truncate">
-                    {t.statuses.PRAYED}
+            {/* Structured Visible Status Table */}
+            <div className="flex-1 rounded-2xl border border-slate-200/90 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 overflow-hidden divide-y divide-slate-200/80 dark:divide-slate-800/80 shadow-2xs">
+              {/* Row 1: Prayed & Pending */}
+              <div className="grid grid-cols-2 divide-x divide-slate-200/80 dark:divide-slate-800/80">
+                {/* Prayed Cell */}
+                <div className="p-2 sm:p-2.5 bg-emerald-50/40 dark:bg-emerald-950/20 flex items-center justify-between gap-1.5">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0 shadow-2xs" />
+                    <span className="text-[11px] sm:text-xs font-semibold text-slate-700 dark:text-slate-300 truncate">
+                      {t.statuses.PRAYED}
+                    </span>
+                  </div>
+                  <span className="text-sm sm:text-base font-extrabold text-emerald-700 dark:text-emerald-400 shrink-0">
+                    {completedCount}
                   </span>
                 </div>
-                <span className="text-xs font-semibold text-slate-800 dark:text-slate-200 ml-1">
-                  {completedCount}
-                </span>
+
+                {/* Pending Cell */}
+                <div className="p-2 sm:p-2.5 flex items-center justify-between gap-1.5">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span className="w-2 h-2 rounded-full bg-slate-400 shrink-0" />
+                    <span className="text-[11px] sm:text-xs font-semibold text-slate-700 dark:text-slate-300 truncate">
+                      {t.statuses.PENDING}
+                    </span>
+                  </div>
+                  <span className="text-sm sm:text-base font-extrabold text-slate-800 dark:text-slate-200 shrink-0">
+                    {pendingCount}
+                  </span>
+                </div>
               </div>
 
-              <div className="py-1.5 px-2.5 rounded-xl bg-slate-50/70 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800/60 flex items-center justify-between">
-                <div className="flex items-center gap-1.5 min-w-0">
-                  <span className="w-1.5 h-1.5 rounded-full bg-slate-400 shrink-0" />
-                  <span className="text-[10px] font-medium text-slate-500 dark:text-slate-400 truncate">
-                    {t.statuses.PENDING}
+              {/* Row 2: Missed & Made Up */}
+              <div className="grid grid-cols-2 divide-x divide-slate-200/80 dark:divide-slate-800/80">
+                {/* Missed Cell */}
+                <div className="p-2 sm:p-2.5 bg-rose-50/40 dark:bg-rose-950/20 flex items-center justify-between gap-1.5">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span className="w-2 h-2 rounded-full bg-rose-500 shrink-0 shadow-2xs" />
+                    <span className="text-[11px] sm:text-xs font-semibold text-slate-700 dark:text-slate-300 truncate">
+                      {t.statuses.MISSED}
+                    </span>
+                  </div>
+                  <span className="text-sm sm:text-base font-extrabold text-rose-700 dark:text-rose-400 shrink-0">
+                    {missedCount}
                   </span>
                 </div>
-                <span className="text-xs font-semibold text-slate-800 dark:text-slate-200 ml-1">
-                  {pendingCount}
-                </span>
-              </div>
 
-              <div className="py-1.5 px-2.5 rounded-xl bg-slate-50/70 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800/60 flex items-center justify-between">
-                <div className="flex items-center gap-1.5 min-w-0">
-                  <span className="w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0" />
-                  <span className="text-[10px] font-medium text-slate-500 dark:text-slate-400 truncate">
-                    {t.statuses.MISSED}
+                {/* Made-Up Cell */}
+                <div className="p-2 sm:p-2.5 bg-sky-50/40 dark:bg-sky-950/20 flex items-center justify-between gap-1.5">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span className="w-2 h-2 rounded-full bg-sky-500 shrink-0 shadow-2xs" />
+                    <span className="text-[11px] sm:text-xs font-semibold text-slate-700 dark:text-slate-300 truncate">
+                      {t.statuses.MADE_UP}
+                    </span>
+                  </div>
+                  <span className="text-sm sm:text-base font-extrabold text-sky-700 dark:text-sky-400 shrink-0">
+                    {madeUpCount}
                   </span>
                 </div>
-                <span className="text-xs font-semibold text-slate-800 dark:text-slate-200 ml-1">
-                  {missedCount}
-                </span>
-              </div>
-
-              <div className="py-1.5 px-2.5 rounded-xl bg-slate-50/70 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800/60 flex items-center justify-between">
-                <div className="flex items-center gap-1.5 min-w-0">
-                  <span className="w-1.5 h-1.5 rounded-full bg-sky-500 shrink-0" />
-                  <span className="text-[10px] font-medium text-slate-500 dark:text-slate-400 truncate">
-                    {t.statuses.MADE_UP}
-                  </span>
-                </div>
-                <span className="text-xs font-semibold text-slate-800 dark:text-slate-200 ml-1">
-                  {madeUpCount}
-                </span>
               </div>
             </div>
           </div>
