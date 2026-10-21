@@ -166,6 +166,18 @@ export async function PUT(request: NextRequest, props: RouteContext) {
         if (pStatus && VALID_STATUSES.includes(pStatus as PrayerStatus)) {
           const norm: PrayerStatus = pStatus === 'PRAYED' ? 'PRAYED_ON_TIME' : pStatus;
           const existing = record.prayers[pId] || { status: 'PENDING' };
+
+          if (existing.isPaid && norm !== existing.status && norm !== 'MADE_UP') {
+            return NextResponse.json(
+              {
+                success: false,
+                error: `Cannot alter settled/paid prayer '${pId}' to '${norm}'. Settled Qaza prayers may only be updated to MADE_UP.`,
+                code: 'PAID_PRAYER_LOCKED',
+              },
+              { status: 400 }
+            );
+          }
+
           let prayedAt = existing.prayedAt;
           let missedAt = existing.missedAt;
           let madeUpAt = existing.madeUpAt;
@@ -184,6 +196,9 @@ export async function PUT(request: NextRequest, props: RouteContext) {
             missedAt,
             madeUpAt,
             notes: existing.notes,
+            isPaid: existing.isPaid ?? false,
+            paidAt: existing.paidAt,
+            paidAmount: existing.paidAmount ?? 0,
           };
         }
       }
@@ -208,6 +223,18 @@ export async function PUT(request: NextRequest, props: RouteContext) {
 
       const normalizedStatus: PrayerStatus = status === 'PRAYED' ? 'PRAYED_ON_TIME' : status;
       const existing = record.prayers[prayerId as PrayerId] || { status: 'PENDING' };
+
+      if (existing.isPaid && normalizedStatus !== existing.status && normalizedStatus !== 'MADE_UP') {
+        return NextResponse.json(
+          {
+            success: false,
+            error: `Cannot alter settled/paid prayer '${prayerId}' to '${normalizedStatus}'. Settled Qaza prayers may only be updated to MADE_UP.`,
+            code: 'PAID_PRAYER_LOCKED',
+          },
+          { status: 400 }
+        );
+      }
+
       let prayedAt = existing.prayedAt;
       let missedAt = existing.missedAt;
       let madeUpAt = existing.madeUpAt;
@@ -226,6 +253,9 @@ export async function PUT(request: NextRequest, props: RouteContext) {
         missedAt,
         madeUpAt,
         notes: sanitizedNotes !== undefined ? sanitizedNotes : existing.notes,
+        isPaid: existing.isPaid ?? false,
+        paidAt: existing.paidAt,
+        paidAmount: existing.paidAmount ?? 0,
       };
     } else {
       return NextResponse.json(

@@ -75,12 +75,28 @@ export function evaluateRolloverStreak(streak: StreakData, todayStr: string): St
  * 5. Best streak accurately tracks the all-time highest record.
  * 6. When hasCompletedPrayer is false and actionDate was lastActiveDate, reverts lastActiveDate and decrements current.
  */
+/**
+ * Calculates deterministic streak transition when prayer completion changes on actionDate.
+ *
+ * Rules:
+ * 1. Starting new streak (0 -> 1 when all 5 daily prayers are completed: completedCount === 5).
+ * 2. Maintaining streak on same day (actions on already-completed 5/5 date don't redundantly increment).
+ * 3. Incrementing streak on consecutive qualifying day (yesterday 5/5 -> today 5/5: N -> N + 1).
+ * 4. Breaking streak when full calendar day skipped (>1 day difference resets current to 1 for this 5/5 day).
+ * 5. Best streak accurately tracks the all-time highest record of consecutive 5/5 days.
+ * 6. When day is not/no longer completed (< 5) and actionDate was lastActiveDate, reverts lastActiveDate and decrements current.
+ */
 export function calculateStreakTransition(
   currentStreak: StreakData,
   actionDate: string,
-  hasCompletedPrayer: boolean
+  completedPrayers: boolean | number
 ): StreakData {
-  if (hasCompletedPrayer) {
+  const isDayCompleted =
+    typeof completedPrayers === 'number'
+      ? completedPrayers === 5
+      : Boolean(completedPrayers);
+
+  if (isDayCompleted) {
     // Starting a new streak if current is 0 or no previous active date
     if (!currentStreak.lastActiveDate || currentStreak.current === 0) {
       const newCurrent = 1;
@@ -130,7 +146,7 @@ export function calculateStreakTransition(
     };
   }
 
-  // When prayer was uncompleted (hasCompletedPrayer === false)
+  // When day is NOT completed (< 5 prayers)
   if (currentStreak.lastActiveDate === actionDate) {
     if (currentStreak.current > 1) {
       return {
@@ -153,6 +169,16 @@ export function calculateStreakTransition(
 /**
  * Calculates deterministic streak metrics across user's complete prayer history relative to referenceDateStr.
  *
+ * Rules:
+ * - A day counts toward streak ONLY when all 5 daily prayers are completed (count === 5).
+ * - Consecutive qualifying days (5/5) increment the streak.
+ * - If any finished day (days strictly before referenceDateStr) has count < 5, streak resets to 0.
+ * - If referenceDateStr (today) has count === 5, today increments streak.
+ * - If referenceDateStr (today) has count < 5, but yesterday had count === 5,
+ *   the streak up to yesterday is preserved (today is in progress and has not finished yet).
+ * - If yesterday had count < 5 (and today < 5), current streak is 0.
+ * - Best streak is the maximum consecutive run of 5/5 days across all history.
+ *
  * @param recordMap Map of date (YYYY-MM-DD) to count of completed prayers on that date
  * @param referenceDateStr Anchor date for "today" (YYYY-MM-DD)
  */
@@ -160,21 +186,22 @@ export function calculateStreakFromHistory(
   recordMap: Map<string, number>,
   referenceDateStr: string
 ): StreakData {
-  const activeDates = Array.from(recordMap.entries())
-    .filter(([, count]) => count > 0)
+  // A day qualifies toward a streak ONLY when all 5 daily prayers are completed (count === 5)
+  const qualifyingDates = Array.from(recordMap.entries())
+    .filter(([, count]) => count === 5)
     .map(([date]) => date)
     .sort();
 
-  if (activeDates.length === 0) {
+  if (qualifyingDates.length === 0) {
     return { ...DEFAULT_STREAK };
   }
 
-  // 1. Calculate best streak across entire history
+  // 1. Calculate best streak across entire history (maximum consecutive run of 5/5 days)
   let bestStreak = 0;
   let tempStreak = 0;
   let prevDateStr: string | null = null;
 
-  for (const dateStr of activeDates) {
+  for (const dateStr of qualifyingDates) {
     if (prevDateStr === null) {
       tempStreak = 1;
     } else {
@@ -192,26 +219,40 @@ export function calculateStreakFromHistory(
   }
 
   // 2. Identify latest active date up to referenceDateStr
-  const activeDatesUpToReference = activeDates.filter((d) => d <= referenceDateStr);
-  const mostRecentActiveDate = activeDatesUpToReference.length > 0
-    ? activeDatesUpToReference[activeDatesUpToReference.length - 1]
-    : '';
+  const qualifyingUpToReference = qualifyingDates.filter((d) => d <= referenceDateStr);
+  const mostRecentActiveDate =
+    qualifyingUpToReference.length > 0
+      ? qualifyingUpToReference[qualifyingUpToReference.length - 1]
+      : '';
 
   // 3. Calculate current streak backwards from referenceDateStr
-  let currentStreak = 0;
+  // - If referenceDateStr (today) has count === 5, today increments streak.
+  // - If referenceDateStr (today) has count < 5, but yesterday had count === 5,
+  //   the streak up to yesterday is preserved (today is in progress).
+  // - If yesterday had count < 5, current streak is 0.
   const todayCount = recordMap.get(referenceDateStr) || 0;
+  const yesterdayStr = getYesterdayString(referenceDateStr);
+  const yesterdayCount = recordMap.get(yesterdayStr) || 0;
 
-  let checkDateStr: string;
-  if (todayCount > 0) {
+  let checkDateStr: string | null = null;
+
+  if (todayCount === 5) {
     checkDateStr = referenceDateStr;
+  } else if (yesterdayCount === 5) {
+    checkDateStr = yesterdayStr;
   } else {
-    // Today has no completed prayers yet; check if yesterday was active
-    checkDateStr = getYesterdayString(referenceDateStr);
+    // Both today and yesterday failed to reach 5/5 -> current streak is 0
+    return {
+      current: 0,
+      best: Math.max(bestStreak, 0),
+      lastActiveDate: mostRecentActiveDate,
+    };
   }
 
-  while (true) {
+  let currentStreak = 0;
+  while (checkDateStr !== null) {
     const count = recordMap.get(checkDateStr) || 0;
-    if (count > 0) {
+    if (count === 5) {
       currentStreak++;
       checkDateStr = getYesterdayString(checkDateStr);
     } else {

@@ -260,6 +260,22 @@ export interface TranslationContent {
     cancel: string;
     baseRateNote: string;
     overdueNote: string;
+    payQaza: string;
+    payModalTitle: string;
+    payModalDesc: string;
+    selectAll: string;
+    deselectAll: string;
+    noOutstanding: string;
+    confirmPayment: string;
+    confirming: string;
+    selectedTotal: string;
+    paymentSuccess: string;
+    paymentError: string;
+    unpaid: string;
+    paid: string;
+    paymentHistory: string;
+    noPaymentsYet: string;
+    receiptId: string;
   };
   leaderboard: {
     title: string;
@@ -754,7 +770,7 @@ export const translations: Record<Language, TranslationContent> = {
       overnightIshaBadge: 'Иша продолжается',
     },
     accountability: {
-      title: 'Учёт Каза и обязательств',
+      title: 'Общая задолженность по садака (Штрафы за каза)',
       disclaimer: 'Внимание: Данный механизм учета является личным инструментом самодисциплины и ответственности, а не религиозной фетвой или шариатским постановлением.',
       qazaBalance: 'Остаток Каза',
       prayersCount: 'намазов',
@@ -766,6 +782,22 @@ export const translations: Record<Language, TranslationContent> = {
       cancel: 'Отмена',
       baseRateNote: 'Базовая ставка: 15 000 UZS за пропущенный намаз',
       overdueNote: 'Период восполнения: 7 дней, далее +15 000 UZS за просрочку. Отметка «Восполнен» навсегда фиксирует штраф на 15 000 UZS.',
+      payQaza: '+ Погасить каза',
+      payModalTitle: 'Погашение долгов каза',
+      payModalDesc: 'Выберите пропущенные намазы (каза) для погашения задолженности по садака.',
+      selectAll: 'Выбрать все',
+      deselectAll: 'Снять выбор',
+      noOutstanding: 'Задолженностей по каза нет! Альхамдулиллах.',
+      confirmPayment: 'Подтвердить погашение',
+      confirming: 'Обработка...',
+      selectedTotal: 'Итого выбрано',
+      paymentSuccess: 'Оплата успешно сохранена! Баланс обновлен.',
+      paymentError: 'Ошибка платежа. Пожалуйста, попробуйте еще раз.',
+      unpaid: 'Не оплачено',
+      paid: 'Оплачено',
+      paymentHistory: 'История погашений',
+      noPaymentsYet: 'Платежей пока не зарегистрировано.',
+      receiptId: 'Квитанция',
     },
     leaderboard: {
       title: 'Рейтинг постоянства',
@@ -1259,7 +1291,7 @@ export const translations: Record<Language, TranslationContent> = {
       overnightIshaBadge: 'Isha is active',
     },
     accountability: {
-      title: 'Qaza & Accountability Tracker',
+      title: 'Total Sadaqah Owed (Qaza Fines)',
       disclaimer: 'Notice: This accountability system is strictly a personal self-discipline mechanism, not a religious fatwa or sharia ruling.',
       qazaBalance: 'Qaza Balance',
       prayersCount: 'prayers',
@@ -1271,6 +1303,22 @@ export const translations: Record<Language, TranslationContent> = {
       cancel: 'Cancel',
       baseRateNote: 'Base pledge: 15,000 UZS per missed prayer',
       overdueNote: '7-day grace period, then +15,000 UZS overdue penalty. Marking Made Up permanently caps fine at 15,000 UZS.',
+      payQaza: '+ Pay Qaza',
+      payModalTitle: 'Pay Outstanding Qaza',
+      payModalDesc: 'Select outstanding Qaza prayers to settle the accountability sadaqah.',
+      selectAll: 'Select All',
+      deselectAll: 'Deselect All',
+      noOutstanding: 'No outstanding Qaza fines owed! Alhamdu lillah.',
+      confirmPayment: 'Confirm Settlement',
+      confirming: 'Processing...',
+      selectedTotal: 'Total Selected',
+      paymentSuccess: 'Payment recorded successfully! Balance updated.',
+      paymentError: 'Payment failed. Please try again.',
+      unpaid: 'Unpaid',
+      paid: 'Settled',
+      paymentHistory: 'Payment History',
+      noPaymentsYet: 'No payments recorded yet.',
+      receiptId: 'Receipt',
     },
     leaderboard: {
       title: 'Consistency Leaderboard',
@@ -1764,7 +1812,7 @@ export const translations: Record<Language, TranslationContent> = {
       overnightIshaBadge: 'Xufton davom etmoqda',
     },
     accountability: {
-      title: 'Qazo va shaxsiy intizom hisobi',
+      title: 'Umumiy sadaqa qarzi (Qazo jarimalari)',
       disclaimer: 'Eslatma: Ushbu intizom tizimi faqat shaxsiy mas’uliyat va o‘z-o‘zini nazorat qilish vositasi bo‘lib, diniy fatvo emas.',
       qazaBalance: 'Qazo qoldig‘i',
       prayersCount: 'namoz',
@@ -1776,6 +1824,22 @@ export const translations: Record<Language, TranslationContent> = {
       cancel: 'Bekor qilish',
       baseRateNote: 'Asosiy stavka: har bir qazo uchun 15 000 UZS',
       overdueNote: 'Qazo o‘tash muddati: 7 kun, undan keyin +15 000 UZS jarima. «Qazo o‘tildi» deb belgilash jarimani 15 000 UZS bilan cheklaydi.',
+      payQaza: '+ Qazo to‘lash',
+      payModalTitle: 'Qazo qarzlarini to‘lash',
+      payModalDesc: 'Kafillik sadaqasini to‘lash uchun qazo namozlarini tanlang.',
+      selectAll: 'Barchasini tanlash',
+      deselectAll: 'Barchasini bekor qilish',
+      noOutstanding: 'Qazo qarzi mavjud emas! Alhamdulillah.',
+      confirmPayment: 'To‘lovni tasdiqlash',
+      confirming: 'Bajarilmoqda...',
+      selectedTotal: 'Tanlangan jami',
+      paymentSuccess: 'To‘lov muvaffaqiyatli saqlandi! Balans yangilandi.',
+      paymentError: 'To‘lovda xatolik yuz berdi. Iltimos, qaytadan urinib ko‘ring.',
+      unpaid: 'To‘lanmagan',
+      paid: 'To‘langan',
+      paymentHistory: 'To‘lovlar tarixi',
+      noPaymentsYet: 'Hozircha hech qanday to‘lov amalga oshirilmagan.',
+      receiptId: 'Kvitansiya',
     },
     leaderboard: {
       title: 'Muntazamlik reytingi',

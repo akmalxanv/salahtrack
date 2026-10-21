@@ -14,6 +14,7 @@ import {
 import { DEFAULT_STREAK, type StreakData, type PrayerId, type PrayerStatus } from '../../src/types/prayer.ts';
 import { GET as getStatsHandler } from '../../src/app/api/stats/route.ts';
 import { PrayerRecord } from '../../src/models/Prayer.ts';
+import { QazaPayment } from '../../src/models/QazaPayment.ts';
 import { User } from '../../src/models/User.ts';
 import { Session } from '../../src/models/Session.ts';
 
@@ -223,7 +224,7 @@ describe('Deterministic Prayer Streak Engine', () => {
 
     it('calculates single active day streak when today is completed', () => {
       const recordMap = new Map<string, number>([
-        ['2026-10-11', 3],
+        ['2026-10-11', 5],
       ]);
       const result = calculateStreakFromHistory(recordMap, '2026-10-11');
 
@@ -236,7 +237,7 @@ describe('Deterministic Prayer Streak Engine', () => {
 
     it('preserves streak when today is pending and yesterday is completed', () => {
       const recordMap = new Map<string, number>([
-        ['2026-10-09', 2],
+        ['2026-10-09', 5],
         ['2026-10-10', 5],
         ['2026-10-11', 0], // Today: not completed yet
       ]);
@@ -249,11 +250,41 @@ describe('Deterministic Prayer Streak Engine', () => {
       });
     });
 
+    it('strictly requires all 5 prayers (count === 5) to qualify for a streak day', () => {
+      const recordMap = new Map<string, number>([
+        ['2026-10-10', 4], // yesterday had 4/5
+        ['2026-10-11', 4], // today has 4/5
+      ]);
+      const result = calculateStreakFromHistory(recordMap, '2026-10-11');
+
+      assert.deepEqual(result, {
+        current: 0,
+        best: 0,
+        lastActiveDate: '',
+      });
+    });
+
+    it('resets streak to 0 if yesterday had < 5 prayers even if older days had 5/5', () => {
+      const recordMap = new Map<string, number>([
+        ['2026-10-08', 5],
+        ['2026-10-09', 5],
+        ['2026-10-10', 4], // yesterday was incomplete (< 5)
+        ['2026-10-11', 2], // today in progress (< 5)
+      ]);
+      const result = calculateStreakFromHistory(recordMap, '2026-10-11');
+
+      assert.deepEqual(result, {
+        current: 0,
+        best: 2, // preserved best streak of 2 days (Oct 8-9)
+        lastActiveDate: '2026-10-09',
+      });
+    });
+
     it('increments streak when today is also completed on consecutive sequence', () => {
       const recordMap = new Map<string, number>([
-        ['2026-10-09', 1],
-        ['2026-10-10', 2],
-        ['2026-10-11', 1],
+        ['2026-10-09', 5],
+        ['2026-10-10', 5],
+        ['2026-10-11', 5],
       ]);
       const result = calculateStreakFromHistory(recordMap, '2026-10-11');
 
@@ -267,11 +298,11 @@ describe('Deterministic Prayer Streak Engine', () => {
     it('resets current to 0 when yesterday was missed, preserving best streak', () => {
       // 5-day streak in past, then 2026-10-10 missed, today 2026-10-11 pending
       const recordMap = new Map<string, number>([
-        ['2026-10-05', 4],
+        ['2026-10-05', 5],
         ['2026-10-06', 5],
         ['2026-10-07', 5],
         ['2026-10-08', 5],
-        ['2026-10-09', 3],
+        ['2026-10-09', 5],
         ['2026-10-10', 0], // missed yesterday
         ['2026-10-11', 0], // today pending
       ]);
@@ -289,12 +320,12 @@ describe('Deterministic Prayer Streak Engine', () => {
       // Gap: 2026-09-05 to 2026-09-19
       // Second cycle: 2 days (2026-09-20 to 2026-09-21)
       const recordMap = new Map<string, number>([
-        ['2026-09-01', 1],
-        ['2026-09-02', 1],
-        ['2026-09-03', 1],
-        ['2026-09-04', 1],
-        ['2026-09-20', 1],
-        ['2026-09-21', 1],
+        ['2026-09-01', 5],
+        ['2026-09-02', 5],
+        ['2026-09-03', 5],
+        ['2026-09-04', 5],
+        ['2026-09-20', 5],
+        ['2026-09-21', 5],
       ]);
       const result = calculateStreakFromHistory(recordMap, '2026-09-21');
 
@@ -303,6 +334,61 @@ describe('Deterministic Prayer Streak Engine', () => {
         best: 4,
         lastActiveDate: '2026-09-21',
       });
+    });
+
+    it('rejects partial days (1/5, 2/5, 3/5, 4/5) from streak qualification', () => {
+      for (const count of [1, 2, 3, 4]) {
+        const recordMap = new Map<string, number>([
+          ['2026-10-10', count],
+          ['2026-10-11', 0],
+        ]);
+        const result = calculateStreakFromHistory(recordMap, '2026-10-11');
+        assert.equal(result.current, 0, `Count ${count}/5 must not count toward streak`);
+        assert.equal(result.best, 0);
+      }
+    });
+
+    it('increments streak across 10 consecutive qualifying 5/5 days', () => {
+      const recordMap = new Map<string, number>();
+      for (let i = 1; i <= 10; i++) {
+        const d = `2026-10-${String(i).padStart(2, '0')}`;
+        recordMap.set(d, 5);
+      }
+      const result = calculateStreakFromHistory(recordMap, '2026-10-10');
+      assert.equal(result.current, 10);
+      assert.equal(result.best, 10);
+      assert.equal(result.lastActiveDate, '2026-10-10');
+    });
+
+    it('resets streak to 0 if an intervening finished day completed only 4/5 prayers', () => {
+      // Days 1-5: 5/5, Day 6: 4/5 (missed 1), Days 7-8: 5/5
+      const recordMap = new Map<string, number>([
+        ['2026-10-01', 5],
+        ['2026-10-02', 5],
+        ['2026-10-03', 5],
+        ['2026-10-04', 5],
+        ['2026-10-05', 5],
+        ['2026-10-06', 4], // Failed to complete 5/5
+        ['2026-10-07', 5],
+        ['2026-10-08', 5],
+      ]);
+      const result = calculateStreakFromHistory(recordMap, '2026-10-08');
+      assert.equal(result.current, 2, 'Current streak should restart from day 7 (2 days)');
+      assert.equal(result.best, 5, 'Best streak should retain the 5-day streak from days 1-5');
+      assert.equal(result.lastActiveDate, '2026-10-08');
+    });
+
+    it('preserves yesterday streak when today is in progress with partial prayers (e.g. 3/5)', () => {
+      const recordMap = new Map<string, number>([
+        ['2026-10-08', 5],
+        ['2026-10-09', 5],
+        ['2026-10-10', 5], // yesterday finished with 5/5
+        ['2026-10-11', 3], // today in progress (3/5 so far)
+      ]);
+      const result = calculateStreakFromHistory(recordMap, '2026-10-11');
+      assert.equal(result.current, 3, 'Streak achieved through yesterday (3 days) must be preserved while today is ongoing');
+      assert.equal(result.best, 3);
+      assert.equal(result.lastActiveDate, '2026-10-10');
     });
   });
 
@@ -340,6 +426,9 @@ describe('Deterministic Prayer Streak Engine', () => {
       const userModel = User as unknown as Record<string, unknown>;
       const sessionModel = Session as unknown as Record<string, unknown>;
       const prayerModel = PrayerRecord as unknown as Record<string, unknown>;
+      const qazaPaymentModel = QazaPayment as unknown as Record<string, unknown>;
+
+      qazaPaymentModel.find = async () => [];
 
       userModel.findById = async (id: mongoose.Types.ObjectId | string) => {
         return mockUsers.find((u) => u._id.toString() === id.toString()) || null;
@@ -368,10 +457,10 @@ describe('Deterministic Prayer Streak Engine', () => {
       // Setup consecutive prayer records for test user
       const createPrayers = (status: PrayerStatus) => ({
         fajr: { status },
-        dhuhr: { status: 'PENDING' as PrayerStatus },
-        asr: { status: 'PENDING' as PrayerStatus },
-        maghrib: { status: 'PENDING' as PrayerStatus },
-        isha: { status: 'PENDING' as PrayerStatus },
+        dhuhr: { status },
+        asr: { status },
+        maghrib: { status },
+        isha: { status },
       });
 
       mockRecords.push({
@@ -407,10 +496,10 @@ describe('Deterministic Prayer Streak Engine', () => {
     it('increments streak when client query includes prayer on ?today=', async () => {
       const createPrayers = (status: PrayerStatus) => ({
         fajr: { status },
-        dhuhr: { status: 'PENDING' as PrayerStatus },
-        asr: { status: 'PENDING' as PrayerStatus },
-        maghrib: { status: 'PENDING' as PrayerStatus },
-        isha: { status: 'PENDING' as PrayerStatus },
+        dhuhr: { status },
+        asr: { status },
+        maghrib: { status },
+        isha: { status },
       });
 
       mockRecords.push({
@@ -455,10 +544,10 @@ describe('Deterministic Prayer Streak Engine', () => {
       const otherUserId = new mongoose.Types.ObjectId();
       const createPrayers = (status: PrayerStatus) => ({
         fajr: { status },
-        dhuhr: { status: 'PENDING' as PrayerStatus },
-        asr: { status: 'PENDING' as PrayerStatus },
-        maghrib: { status: 'PENDING' as PrayerStatus },
-        isha: { status: 'PENDING' as PrayerStatus },
+        dhuhr: { status },
+        asr: { status },
+        maghrib: { status },
+        isha: { status },
       });
 
       // User A (testUserId) has 1 record
@@ -493,16 +582,16 @@ describe('Deterministic Prayer Streak Engine', () => {
       // Test user should ONLY have streak of 1, completely isolated from User B's 10-day streak
       assert.equal(json.data.streaks.current, 1);
       assert.equal(json.data.streaks.best, 1);
-      assert.equal(json.data.today.completed, 1);
+      assert.equal(json.data.today.completed, 5);
     });
 
     it('safely handles malformed and tampering payloads on ?today= query param', async () => {
       const createPrayers = (status: PrayerStatus) => ({
         fajr: { status },
-        dhuhr: { status: 'PENDING' as PrayerStatus },
-        asr: { status: 'PENDING' as PrayerStatus },
-        maghrib: { status: 'PENDING' as PrayerStatus },
-        isha: { status: 'PENDING' as PrayerStatus },
+        dhuhr: { status },
+        asr: { status },
+        maghrib: { status },
+        isha: { status },
       });
 
       mockRecords.push({

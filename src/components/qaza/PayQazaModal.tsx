@@ -1,0 +1,567 @@
+'use client';
+
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import {
+  X,
+  Check,
+  AlertCircle,
+  CheckCircle2,
+  Loader2,
+} from 'lucide-react';
+import { useLanguage } from '@/context/LanguageContext';
+import { useAuth } from '@/context/AuthContext';
+import type {
+  PrayerId,
+  PrayerStatus,
+  AccountabilityBreakdownItem,
+  OutstandingQazaItem,
+} from '@/types/prayer';
+import { formatCurrency } from '@/lib/formatters';
+import {
+  getStoredHistoryRecords,
+  saveStoredHistoryRecords,
+  dispatchStorageUpdate,
+} from '@/lib/storage-sync';
+
+export interface PayableQazaItem {
+  date: string;
+  prayerId: PrayerId;
+  status: PrayerStatus;
+  amount: number;
+  baseAmount: number;
+  overdueAmount: number;
+  isOverdue: boolean;
+  daysPassed: number;
+}
+
+export interface PayQazaModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onSuccess?: () => void;
+  initialItems?: OutstandingQazaItem[] | AccountabilityBreakdownItem[];
+}
+
+export default function PayQazaModal({
+  isOpen,
+  onClose,
+  onSuccess,
+  initialItems,
+}: PayQazaModalProps) {
+  const { t, lang } = useLanguage();
+  const { user } = useAuth();
+
+  const [items, setItems] = useState<PayableQazaItem[]>([]);
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
+  const [loading, setLoading] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  const modalRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+
+  const getItemKey = (item: { date: string; prayerId: PrayerId }): string =>
+    `${item.date}:${item.prayerId}`;
+
+  // Helper to derive payable items from local storage history
+  const loadLocalPayableItems = useCallback((): PayableQazaItem[] => {
+    const history = getStoredHistoryRecords();
+    const result: PayableQazaItem[] = [];
+    const nowTime = Date.now();
+    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+    const prayerOrder: PrayerId[] = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
+
+    const sortedDates = Object.keys(history).sort((a, b) => b.localeCompare(a));
+
+    for (const date of sortedDates) {
+      const record = history[date];
+      if (!record?.prayers) continue;
+
+      const recDate = new Date(`${date}T00:00:00Z`).getTime();
+      const diffMs = nowTime - recDate;
+      const daysPassed = Math.max(0, Math.floor(diffMs / (24 * 60 * 60 * 1000)));
+      const isOverdue = diffMs > sevenDaysMs;
+
+      for (const p of prayerOrder) {
+        const prayer = record.prayers[p];
+        if (!prayer) continue;
+
+        if (prayer.isPaid) continue;
+
+        if (prayer.status === 'MISSED') {
+          const base = 15000;
+          const overdue = isOverdue ? 15000 : 0;
+          result.push({
+            date,
+            prayerId: p,
+            status: 'MISSED',
+            baseAmount: base,
+            overdueAmount: overdue,
+            amount: base + overdue,
+            isOverdue,
+            daysPassed,
+          });
+        } else if (prayer.status === 'MADE_UP') {
+          result.push({
+            date,
+            prayerId: p,
+            status: 'MADE_UP',
+            baseAmount: 15000,
+            overdueAmount: 0,
+            amount: 15000,
+            isOverdue: false,
+            daysPassed,
+          });
+        }
+      }
+    }
+
+    return result;
+  }, []);
+
+  // Fetch or populate items whenever modal opens
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    let isCancelled = false;
+
+    async function populateItems() {
+      await Promise.resolve();
+      if (isCancelled) return;
+      setLoading(true);
+      setErrorMessage(null);
+      setSuccessMessage(null);
+
+      // If initial items were supplied and non-empty, normalize them
+      if (initialItems && initialItems.length > 0) {
+        const mapped: PayableQazaItem[] = initialItems.map((it) => {
+          const totalAmount = 'totalAmount' in it ? it.totalAmount : it.amount;
+          const baseAmount = 'baseAmount' in it ? it.baseAmount : 15000;
+          const overdueAmount = 'overdueAmount' in it ? it.overdueAmount : totalAmount - baseAmount;
+          return {
+            date: it.date,
+            prayerId: it.prayerId,
+            status: it.status || 'MISSED',
+            amount: totalAmount,
+            baseAmount,
+            overdueAmount,
+            isOverdue: it.isOverdue,
+            daysPassed: it.daysPassed,
+          };
+        });
+        if (!isCancelled) {
+          setItems(mapped);
+          setSelectedKeys(new Set(mapped.map(getItemKey)));
+          setLoading(false);
+        }
+        return;
+      }
+
+      // If user is authenticated, query /api/stats to get server breakdown
+      if (user) {
+        try {
+          const res = await fetch('/api/stats');
+          if (res.ok) {
+            const json = await res.json();
+            if (json.success && Array.isArray(json.data?.accountability?.breakdown)) {
+              const breakdown: AccountabilityBreakdownItem[] = json.data.accountability.breakdown;
+              const mapped: PayableQazaItem[] = breakdown.map((it) => ({
+                date: it.date,
+                prayerId: it.prayerId,
+                status: it.status || 'MISSED',
+                amount: it.totalAmount,
+                baseAmount: it.baseAmount,
+                overdueAmount: it.overdueAmount,
+                isOverdue: it.isOverdue,
+                daysPassed: it.daysPassed,
+              }));
+
+              if (!isCancelled) {
+                setItems(mapped);
+                setSelectedKeys(new Set(mapped.map(getItemKey)));
+                setLoading(false);
+                return;
+              }
+            }
+          }
+        } catch (err) {
+          console.warn('Could not fetch server stats for qaza payment modal, falling back to local:', err);
+        }
+      }
+
+      // Fallback: derive from local storage
+      const localItems = loadLocalPayableItems();
+      if (!isCancelled) {
+        setItems(localItems);
+        setSelectedKeys(new Set(localItems.map(getItemKey)));
+        setLoading(false);
+      }
+    }
+
+    populateItems();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [isOpen, initialItems, user, loadLocalPayableItems]);
+
+  // Lock body scroll and focus management
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    // Focus close button on open
+    setTimeout(() => {
+      closeButtonRef.current?.focus();
+    }, 50);
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isOpen, onClose]);
+
+  // Select all / deselect all
+  const isAllSelected = useMemo(() => {
+    return items.length > 0 && selectedKeys.size === items.length;
+  }, [items, selectedKeys]);
+
+  const handleToggleSelectAll = () => {
+    if (isAllSelected) {
+      setSelectedKeys(new Set());
+    } else {
+      setSelectedKeys(new Set(items.map(getItemKey)));
+    }
+  };
+
+  const handleToggleItem = (key: string) => {
+    setSelectedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
+
+  // Selected fine amount total
+  const selectedTotal = useMemo(() => {
+    return items
+      .filter((it) => selectedKeys.has(getItemKey(it)))
+      .reduce((sum, it) => sum + it.amount, 0);
+  }, [items, selectedKeys]);
+
+  const selectedCount = selectedKeys.size;
+
+  // Confirm payment settlement
+  const handleConfirmSettlement = async () => {
+    if (selectedCount === 0 || isSubmitting) return;
+
+    setIsSubmitting(true);
+    setErrorMessage(null);
+    setSuccessMessage(null);
+
+    const selectedItems = items.filter((it) => selectedKeys.has(getItemKey(it)));
+
+    try {
+      if (user) {
+        // Authenticated: submit to server
+        const res = await fetch('/api/prayers/qaza-payment', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            items: selectedItems.map((it) => ({
+              date: it.date,
+              prayerId: it.prayerId,
+            })),
+            idempotencyKey: `qaza-pay-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+          }),
+        });
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => null);
+          throw new Error(errData?.error || t.accountability.paymentError);
+        }
+      }
+
+      // Update local storage history records
+      const history = getStoredHistoryRecords();
+      const nowIso = new Date().toISOString();
+
+      for (const item of selectedItems) {
+        const dateRecord = history[item.date];
+        if (dateRecord?.prayers?.[item.prayerId]) {
+          dateRecord.prayers[item.prayerId] = {
+            ...dateRecord.prayers[item.prayerId],
+            isPaid: true,
+            paidAt: nowIso,
+            paidAmount: item.amount,
+          };
+        }
+      }
+      saveStoredHistoryRecords(history);
+
+      // Update local settled donations accumulator
+      try {
+        const rawSettled = window.localStorage.getItem('salahtrack_settled_donations');
+        const currentSettled = rawSettled ? JSON.parse(rawSettled) : 0;
+        const newSettled = (typeof currentSettled === 'number' ? currentSettled : 0) + selectedTotal;
+        window.localStorage.setItem('salahtrack_settled_donations', JSON.stringify(newSettled));
+      } catch {
+        // ignore
+      }
+
+      // Decrement local qaza count if tracked
+      try {
+        const rawQaza = window.localStorage.getItem('salahtrack_qaza_count');
+        const currentQaza = rawQaza ? JSON.parse(rawQaza) : 0;
+        if (typeof currentQaza === 'number' && currentQaza > 0) {
+          const newQaza = Math.max(0, currentQaza - selectedItems.length);
+          window.localStorage.setItem('salahtrack_qaza_count', JSON.stringify(newQaza));
+        }
+      } catch {
+        // ignore
+      }
+
+      // Notify other components & tabs
+      dispatchStorageUpdate();
+
+      setSuccessMessage(t.accountability.paymentSuccess);
+      onSuccess?.();
+
+      setTimeout(() => {
+        onClose();
+      }, 1200);
+    } catch (err: unknown) {
+      console.error('Payment error:', err);
+      setErrorMessage((err as Error)?.message || t.accountability.paymentError);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/70 backdrop-blur-xs transition-opacity duration-200"
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="pay-qaza-modal-title"
+      aria-describedby="pay-qaza-modal-desc"
+    >
+      <div
+        ref={modalRef}
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-lg rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl flex flex-col max-h-[90vh] overflow-hidden animate-in fade-in zoom-in-95 duration-150"
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between p-5 border-b border-slate-100 dark:border-slate-800 shrink-0">
+          <div>
+            <h2
+              id="pay-qaza-modal-title"
+              className="text-lg font-bold text-slate-900 dark:text-slate-100"
+            >
+              {t.accountability.payModalTitle}
+            </h2>
+            <p
+              id="pay-qaza-modal-desc"
+              className="text-xs text-slate-500 dark:text-slate-400 mt-0.5"
+            >
+              {t.accountability.payModalDesc}
+            </p>
+          </div>
+          <button
+            ref={closeButtonRef}
+            type="button"
+            onClick={onClose}
+            aria-label={t.common.cancel}
+            className="min-h-[44px] min-w-[44px] -mr-2 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center transition-colors cursor-pointer"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Content Body */}
+        <div className="flex-1 overflow-y-auto p-5 space-y-4">
+          {/* Status Banners */}
+          {errorMessage && (
+            <div className="p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 text-rose-800 dark:text-rose-300 text-xs flex items-center gap-2.5">
+              <AlertCircle className="w-4 h-4 shrink-0 text-rose-600 dark:text-rose-400" />
+              <span>{errorMessage}</span>
+            </div>
+          )}
+
+          {successMessage && (
+            <div className="p-3.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900/60 text-emerald-800 dark:text-emerald-300 text-xs flex items-center gap-2.5">
+              <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+              <span>{successMessage}</span>
+            </div>
+          )}
+
+          {loading ? (
+            <div className="py-12 flex flex-col items-center justify-center text-slate-400 gap-2">
+              <Loader2 className="w-6 h-6 animate-spin text-emerald-600" />
+              <span className="text-xs">{t.common.loading}</span>
+            </div>
+          ) : items.length === 0 ? (
+            <div className="py-12 text-center rounded-xl bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-100 dark:border-emerald-900/40 p-6">
+              <CheckCircle2 className="w-10 h-10 text-emerald-600 dark:text-emerald-400 mx-auto mb-2" />
+              <p className="text-sm font-semibold text-emerald-900 dark:text-emerald-200">
+                {t.accountability.noOutstanding}
+              </p>
+            </div>
+          ) : (
+            <>
+              {/* Select All Toggle Bar */}
+              <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800">
+                <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">
+                  {selectedCount} / {items.length} {t.accountability.prayersCount}
+                </span>
+                <button
+                  type="button"
+                  onClick={handleToggleSelectAll}
+                  className="min-h-[44px] px-3 py-1.5 rounded-lg text-xs font-semibold text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition-colors cursor-pointer"
+                >
+                  {isAllSelected ? t.accountability.deselectAll : t.accountability.selectAll}
+                </button>
+              </div>
+
+              {/* Items List */}
+              <div className="space-y-2">
+                {items.map((item) => {
+                  const key = getItemKey(item);
+                  const isSelected = selectedKeys.has(key);
+                  const isMadeUp = item.status === 'MADE_UP';
+
+                  return (
+                    <label
+                      key={key}
+                      className={`min-h-[44px] flex items-center justify-between p-3 rounded-xl border transition-all cursor-pointer select-none ${
+                        isSelected
+                          ? 'border-emerald-500/80 bg-emerald-50/40 dark:bg-emerald-950/20 dark:border-emerald-700/80'
+                          : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 hover:border-slate-300 dark:hover:border-slate-700'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="relative flex items-center justify-center">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => handleToggleItem(key)}
+                            className="w-5 h-5 rounded-md border-slate-300 dark:border-slate-700 text-emerald-600 focus:ring-emerald-500 cursor-pointer accent-emerald-600"
+                          />
+                        </div>
+
+                        <div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-bold text-xs text-slate-900 dark:text-slate-100">
+                              {item.date}
+                            </span>
+                            <span className="text-xs font-semibold px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 capitalize">
+                              {t.prayers[item.prayerId]}
+                            </span>
+                            {isMadeUp ? (
+                              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-sky-50 dark:bg-sky-950/80 text-sky-800 dark:text-sky-300 border border-sky-200 dark:border-sky-800">
+                                {t.statuses.MADE_UP}
+                              </span>
+                            ) : (
+                              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-rose-50 dark:bg-rose-950/80 text-rose-800 dark:text-rose-300 border border-rose-200 dark:border-rose-800">
+                                {t.statuses.MISSED}
+                              </span>
+                            )}
+                            {!isMadeUp && item.isOverdue && (
+                              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-300">
+                                +{item.daysPassed}d
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-0.5">
+                            {formatCurrency(item.baseAmount, lang)}
+                            {item.overdueAmount > 0 &&
+                              ` + ${formatCurrency(item.overdueAmount, lang)}`}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="text-right pl-3">
+                        <span
+                          className={`text-sm font-black tracking-tight ${
+                            isMadeUp
+                              ? 'text-sky-700 dark:text-sky-400'
+                              : 'text-rose-700 dark:text-rose-400'
+                          }`}
+                        >
+                          {formatCurrency(item.amount, lang)}
+                        </span>
+                      </div>
+                    </label>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Footer with Summary and Action Button */}
+        {items.length > 0 && (
+          <div className="p-4 sm:p-5 border-t border-slate-100 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-900/80 shrink-0 space-y-3">
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-slate-600 dark:text-slate-400 font-medium">
+                {t.accountability.selectedTotal} ({selectedCount}):
+              </span>
+              <span className="text-base font-black text-slate-900 dark:text-slate-100">
+                {formatCurrency(selectedTotal, lang)}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={isSubmitting}
+                className="min-h-[44px] flex-1 py-2.5 px-4 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-semibold cursor-pointer transition-colors disabled:opacity-50"
+              >
+                {t.common.cancel}
+              </button>
+
+              <button
+                type="button"
+                onClick={handleConfirmSettlement}
+                disabled={selectedCount === 0 || isSubmitting}
+                className="min-h-[44px] flex-[2] py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isSubmitting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>{t.accountability.confirming}</span>
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-4 h-4" />
+                    <span>{t.accountability.confirmPayment}</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

@@ -18,14 +18,21 @@ import {
   ChevronRight,
   Award,
   Check,
-  X,
   Info,
   RotateCcw,
 } from 'lucide-react';
 import { useLanguage } from '@/context/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
 import { useLocalStorage } from '@/hooks/useLocalStorage';
-import type { PrayerId, PrayerStatus, AccountabilityBreakdownItem, PrayerHistoryRecord, PrayerItem } from '@/types/prayer';
+import type {
+  PrayerId,
+  PrayerStatus,
+  AccountabilityBreakdownItem,
+  PrayerHistoryRecord,
+  PrayerItem,
+  QazaPaymentReceipt,
+} from '@/types/prayer';
+import PayQazaModal from '@/components/qaza/PayQazaModal';
 import MonthlyHistoryCalendar from '@/components/calendar/MonthlyHistoryCalendar';
 import { formatCurrency } from '@/lib/formatters';
 import { getCalendarDate, getLiturgicalDate } from '@/lib/prayer-cycle';
@@ -80,6 +87,7 @@ interface StatsData {
   };
   accountability: {
     totalAmount: number;
+    totalPaidAmount?: number;
     totalMissed?: number;
     totalOverdue?: number;
     currency: string;
@@ -134,9 +142,10 @@ function ProgressContent() {
 
   // Local fallback Qaza state & settled donations with stable defaults
   const [localQaza, setLocalQaza] = useLocalStorage<number>('salahtrack_qaza_count', 0);
-  const [settledDonations, setSettledDonations] = useLocalStorage<number>('salahtrack_settled_donations', 0);
-  const [isAddingSettlement, setIsAddingSettlement] = useState(false);
-  const [settlementInput, setSettlementInput] = useState('');
+  const [settledDonations] = useLocalStorage<number>('salahtrack_settled_donations', 0);
+  const [paymentHistory, setPaymentHistory] = useState<QazaPaymentReceipt[]>([]);
+  const [loadingPayments, setLoadingPayments] = useState(false);
+  const [isPayModalOpen, setIsPayModalOpen] = useState(false);
 
   const [qazaByPrayer, setQazaByPrayer] = useLocalStorage<Record<PrayerId, number>>(
     'salahtrack_qaza_prayers',
@@ -163,6 +172,57 @@ function ProgressContent() {
       setLoadingStats(false);
     }
   }, [userId]);
+
+  const fetchPaymentHistory = useCallback(async () => {
+    if (!userId) return;
+    try {
+      const res = await fetch('/api/prayers/qaza-payment');
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && Array.isArray(json.data)) {
+          setPaymentHistory(json.data);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to fetch payment history:', err);
+    } finally {
+      setLoadingPayments(false);
+    }
+  }, [userId]);
+
+  useEffect(() => {
+    if (!userId) return;
+    const abortController = new AbortController();
+
+    async function loadPayments() {
+      await Promise.resolve();
+      setLoadingPayments(true);
+      try {
+        const res = await fetch('/api/prayers/qaza-payment', { signal: abortController.signal });
+        if (res.ok) {
+          const json = await res.json();
+          if (json.success && Array.isArray(json.data)) {
+            setPaymentHistory(json.data);
+          }
+        }
+      } catch (err: unknown) {
+        if ((err as Error)?.name !== 'AbortError') {
+          console.error('Failed to fetch payment history:', err);
+        }
+      } finally {
+        setLoadingPayments(false);
+      }
+    }
+
+    loadPayments();
+    return () => {
+      abortController.abort();
+    };
+  }, [userId]);
+
+  const handlePaymentModalSuccess = useCallback(async () => {
+    await Promise.all([fetchStats(), fetchPaymentHistory()]);
+  }, [fetchStats, fetchPaymentHistory]);
 
   useEffect(() => {
     if (!userId) return;
@@ -408,15 +468,6 @@ function ProgressContent() {
     setLocalQaza((prev) => Math.max(0, (prev || 0) + delta));
   };
 
-  // Record a settled donation payment
-  const handleSaveSettlement = () => {
-    const val = parseInt(settlementInput, 10);
-    if (!isNaN(val) && val > 0) {
-      setSettledDonations((prev) => (prev || 0) + val);
-    }
-    setSettlementInput('');
-    setIsAddingSettlement(false);
-  };
 
   // Sorted list of historical records (descending date)
   const sortedHistoryRecords = useMemo(() => {
@@ -884,47 +935,23 @@ function ProgressContent() {
                 {t.progress.settledAmount}
               </span>
               <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-0.5">
-                {formatCurrency(settledDonations || 0, lang)}
+                {formatCurrency(
+                  stats?.accountability?.totalPaidAmount ?? (settledDonations || 0),
+                  lang
+                )}
               </p>
             </div>
 
-            <div className="flex items-center gap-2">
-              {isAddingSettlement ? (
-                <div className="flex items-center gap-2">
-                  <input
-                    type="number"
-                    min="1000"
-                    step="5000"
-                    placeholder={t.progress.settlementPlaceholder}
-                    value={settlementInput}
-                    onChange={(e) => setSettlementInput(e.target.value)}
-                    className="w-36 px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs text-slate-900 dark:text-slate-100"
-                  />
-                  <button
-                    type="button"
-                    onClick={handleSaveSettlement}
-                    className="p-2 rounded-xl bg-emerald-600 text-white text-xs font-semibold cursor-pointer"
-                  >
-                    <Check className="w-4 h-4" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setIsAddingSettlement(false)}
-                    className="p-2 rounded-xl bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-xs cursor-pointer"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setIsAddingSettlement(true)}
-                  className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>{t.progress.recordPayment}</span>
-                </button>
-              )}
+            <div>
+              <button
+                type="button"
+                onClick={() => setIsPayModalOpen(true)}
+                disabled={fineItems.length === 0}
+                className="min-h-[44px] px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Plus className="w-4 h-4" />
+                <span>{t.accountability.payQaza}</span>
+              </button>
             </div>
           </div>
 
@@ -1067,8 +1094,121 @@ function ProgressContent() {
               </div>
             </div>
           </div>
+
+          {/* Payment History Section */}
+          <div className="rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 shadow-xs p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                <span>{t.accountability.paymentHistory}</span>
+              </h3>
+              {paymentHistory.length > 0 && (
+                <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-800/60">
+                  {paymentHistory.length}
+                </span>
+              )}
+            </div>
+
+            {loadingPayments ? (
+              <div className="py-8 flex justify-center text-slate-400">
+                <Loader2 className="w-6 h-6 animate-spin text-emerald-600" />
+              </div>
+            ) : paymentHistory.length === 0 ? (
+              <div className="p-8 text-center rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800 text-slate-500 dark:text-slate-400 text-xs">
+                <p>{t.accountability.noPaymentsYet}</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {paymentHistory.map((receipt) => {
+                  const receiptDate = new Date(receipt.createdAt);
+                  const formattedDate = !isNaN(receiptDate.getTime())
+                    ? receiptDate.toLocaleDateString(
+                        lang === 'uz' ? 'uz-UZ' : lang === 'ru' ? 'ru-RU' : 'en-US',
+                        {
+                          year: 'numeric',
+                          month: 'short',
+                          day: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        }
+                      )
+                    : receipt.createdAt;
+
+                  return (
+                    <div
+                      key={receipt.id}
+                      className="p-4 rounded-xl border border-slate-100 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-850/60 space-y-3"
+                    >
+                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 border-b border-slate-200/60 dark:border-slate-700/60 pb-2.5">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-xs font-bold text-slate-900 dark:text-slate-100">
+                            {t.accountability.receiptId}: #{receipt.id.slice(-6).toUpperCase()}
+                          </span>
+                          <span className="text-[11px] text-slate-400 dark:text-slate-500">
+                            • {formattedDate}
+                          </span>
+                        </div>
+                        <span className="text-sm font-black text-emerald-600 dark:text-emerald-400">
+                          {formatCurrency(receipt.totalAmount, lang)}
+                        </span>
+                      </div>
+
+                      {/* Items in this payment */}
+                      <div className="space-y-1.5">
+                        {receipt.items.map((it, idx) => (
+                          <div
+                            key={`${receipt.id}-${it.date}-${it.prayerId}-${idx}`}
+                            className="flex items-center justify-between text-xs py-1 px-2 rounded-lg bg-white/70 dark:bg-slate-900/70 border border-slate-100/80 dark:border-slate-800/80"
+                          >
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-medium text-slate-700 dark:text-slate-300">
+                                {it.date}
+                              </span>
+                              <span className="font-semibold text-slate-900 dark:text-slate-100 capitalize">
+                                {t.prayers[it.prayerId]}
+                              </span>
+                              <span
+                                className={`text-[10px] font-bold px-1.5 py-0.2 rounded ${
+                                  it.status === 'MADE_UP'
+                                    ? 'bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-300'
+                                    : 'bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300'
+                                }`}
+                              >
+                                {t.statuses[it.status] || it.status}
+                              </span>
+                              {it.isOverdue && (
+                                <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300">
+                                  Overdue
+                                </span>
+                              )}
+                            </div>
+                            <span className="font-bold text-slate-800 dark:text-slate-200">
+                              {formatCurrency(it.amount, lang)}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+
+                      {receipt.note && (
+                        <p className="text-[11px] italic text-slate-500 dark:text-slate-400">
+                          {receipt.note}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </div>
       )}
+
+      {/* Pay Qaza Settlement Modal */}
+      <PayQazaModal
+        isOpen={isPayModalOpen}
+        onClose={() => setIsPayModalOpen(false)}
+        onSuccess={handlePaymentModalSuccess}
+        initialItems={fineItems}
+      />
     </div>
   );
 }

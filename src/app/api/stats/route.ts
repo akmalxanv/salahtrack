@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server.js';
 import { connectDB } from '../../../lib/mongodb.ts';
 import { PrayerRecord } from '../../../models/Prayer.ts';
+import { QazaPayment } from '../../../models/QazaPayment.ts';
 import { authenticateRequest } from '../../../lib/auth/index.ts';
 import { calculateStreakFromHistory } from '../../../lib/streak.ts';
 import { getLiturgicalDate } from '../../../lib/prayer-cycle.ts';
@@ -120,7 +121,8 @@ export async function GET(request: NextRequest) {
           comp++;
         }
       }
-      recordMap.set(rec.date, comp);
+      // A day qualifies for streak only when all five daily prayers are completed (comp === 5)
+      recordMap.set(rec.date, comp === 5 ? 5 : 0);
     }
 
     const streakData = calculateStreakFromHistory(recordMap, todayStr);
@@ -132,7 +134,7 @@ export async function GET(request: NextRequest) {
     let totalOverdueCount = 0;
     let totalMadeUpCount = 0;
     let totalOutstandingAmount = 0;
-    const nowTime = Date.now();
+    const nowTime = todayUtc;
     const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
 
     for (const rec of allUserRecords) {
@@ -142,7 +144,15 @@ export async function GET(request: NextRequest) {
       const isOverdue = diffMs > sevenDaysMs;
 
       for (const p of PRAYER_KEYS) {
-        const prayerStatus = rec.prayers?.[p]?.status;
+        const prayer = rec.prayers?.[p];
+        if (!prayer) continue;
+
+        // Settled/paid prayers are excluded from outstanding fines and breakdown
+        if (prayer.isPaid) {
+          continue;
+        }
+
+        const prayerStatus = prayer.status;
         if (prayerStatus === 'MISSED') {
           totalMissedCount++;
           const base = 15000;
@@ -182,6 +192,19 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    // Compute total settled/paid amount across all completed Qaza payments
+    let totalPaidAmount = 0;
+    try {
+      if (typeof QazaPayment?.find === 'function') {
+        const userPayments = await QazaPayment.find({ userId: auth.user.id });
+        if (Array.isArray(userPayments)) {
+          totalPaidAmount = userPayments.reduce((sum, payment) => sum + (payment.totalAmount || 0), 0);
+        }
+      }
+    } catch {
+      totalPaidAmount = 0;
+    }
+
     return NextResponse.json(
       {
         success: true,
@@ -218,6 +241,7 @@ export async function GET(request: NextRequest) {
           },
           accountability: {
             totalAmount: totalOutstandingAmount,
+            totalPaidAmount,
             totalMissed: totalMissedCount,
             totalOverdue: totalOverdueCount,
             totalMadeUp: totalMadeUpCount,

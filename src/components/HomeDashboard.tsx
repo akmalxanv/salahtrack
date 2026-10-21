@@ -9,9 +9,7 @@ import {
   Calendar as CalendarIcon,
   ChevronDown,
   Timer,
-  Pencil,
   Check,
-  X,
   MapPin,
   Bell,
   BellOff,
@@ -23,10 +21,11 @@ import { useLocalStorage, useIsMounted } from '@/hooks/useLocalStorage';
 import { useLanguage } from '@/context/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
 import LanguageSelector from '@/components/LanguageSelector';
+import PayQazaModal from '@/components/qaza/PayQazaModal';
 import { PrayerItem, PrayerStatus, PrayerId, StreakData, DEFAULT_STREAK } from '@/types/prayer';
 import { calculateStreakTransition, evaluateRolloverStreak } from '@/lib/streak';
 import { validateCoordinates } from '@/lib/qibla';
-import { formatLocalizedDate, formatLocalizedHijriDate } from '@/lib/formatters';
+import { formatLocalizedDate, formatLocalizedHijriDate, formatCurrency } from '@/lib/formatters';
 import {
   getLiturgicalDate,
   resolvePrayerCycle,
@@ -38,6 +37,7 @@ import {
   loadPrayersForLiturgicalDate,
   archiveLiturgicalDay,
   mirrorDailyPrayersToHistory,
+  getStoredHistoryRecords,
 } from '@/lib/storage-sync';
 
 export const DEFAULT_PRAYERS: PrayerItem[] = [
@@ -196,7 +196,7 @@ export default function HomeDashboard({
     getLiturgicalDate(new Date())
   );
 
-  const [qazaCount, setQazaCount] = useLocalStorage<number>(
+  const [, setQazaCount] = useLocalStorage<number>(
     'salahtrack_qaza_count',
     initialQazaCount ?? 0
   );
@@ -207,8 +207,20 @@ export default function HomeDashboard({
   );
 
   const [activeMenuPrayerId, setActiveMenuPrayerId] = useState<string | null>(null);
-  const [isEditingQaza, setIsEditingQaza] = useState(false);
-  const [customQazaInput, setCustomQazaInput] = useState<string>('');
+  const [isPayModalOpen, setIsPayModalOpen] = useState(false);
+  const [serverAccountability, setServerAccountability] = useState<{
+    totalAmount: number;
+    unpaidCount: number;
+  } | null>(null);
+  const [historyVersion, setHistoryVersion] = useState(0);
+
+  useEffect(() => {
+    const handleStorageUpdate = () => {
+      setHistoryVersion((v) => v + 1);
+    };
+    window.addEventListener('local-storage-update', handleStorageUpdate);
+    return () => window.removeEventListener('local-storage-update', handleStorageUpdate);
+  }, []);
   
   // Real-time ticking clock for live countdown and auto-advance
   const [now, setNow] = useState<Date>(() => new Date());
@@ -369,8 +381,19 @@ export default function HomeDashboard({
         const statsRes = await fetch(`/api/stats?today=${activeLiturgicalDate}`);
         if (!statsRes.ok) return;
         const statsJson = await statsRes.json();
-        if (!isCancelled && statsJson?.success && statsJson?.data?.streaks) {
-          setStreak(statsJson.data.streaks);
+        if (!isCancelled && statsJson?.success) {
+          if (statsJson.data?.streaks) {
+            setStreak(statsJson.data.streaks);
+          }
+          if (statsJson.data?.accountability) {
+            setServerAccountability({
+              totalAmount: statsJson.data.accountability.totalAmount,
+              unpaidCount:
+                statsJson.data.accountability.breakdown?.length ??
+                ((statsJson.data.accountability.totalMissed || 0) +
+                  (statsJson.data.accountability.totalMadeUp || 0)),
+            });
+          }
         }
       } catch (err) {
         console.warn('Could not sync initial streak stats:', err);
@@ -486,11 +509,11 @@ export default function HomeDashboard({
       // 2. Synchronize to localStorage, cookie, and mirror to salahtrack_history_records[targetDate]
       saveDailyPrayersSync(targetDate, updatedPrayers);
 
-      // 3. Optimistic streak transition calculation
-      const hasCompletedPrayer = updatedPrayers.some(
+      // 3. Optimistic streak transition calculation (strictly 5/5 completed prayers)
+      const isDayCompleted = updatedPrayers.filter(
         (p) => p.status === 'PRAYED' || p.status === 'PRAYED_ON_TIME' || p.status === 'PRAYED_LATE'
-      );
-      setStreak((prevStreak) => calculateStreakTransition(prevStreak, targetDate, hasCompletedPrayer));
+      ).length === 5;
+      setStreak((prevStreak) => calculateStreakTransition(prevStreak, targetDate, isDayCompleted));
 
       // 4. Set saving status feedback
       setSavingStatus((prev) => ({ ...prev, [id]: 'saving' }));
@@ -514,13 +537,24 @@ export default function HomeDashboard({
               setSavingStatus((prev) => ({ ...prev, [id]: 'idle' }));
             }, 2000);
 
-            // Background sync stats to reconcile streak with MongoDB Atlas
+            // Background sync stats to reconcile streak & accountability with MongoDB Atlas
             try {
               const statsRes = await fetch(`/api/stats?today=${targetDate}`);
               if (statsRes.ok) {
                 const statsJson = await statsRes.json();
-                if (statsJson?.success && statsJson?.data?.streaks) {
-                  setStreak(statsJson.data.streaks);
+                if (statsJson?.success) {
+                  if (statsJson.data?.streaks) {
+                    setStreak(statsJson.data.streaks);
+                  }
+                  if (statsJson.data?.accountability) {
+                    setServerAccountability({
+                      totalAmount: statsJson.data.accountability.totalAmount,
+                      unpaidCount:
+                        statsJson.data.accountability.breakdown?.length ??
+                        ((statsJson.data.accountability.totalMissed || 0) +
+                          (statsJson.data.accountability.totalMadeUp || 0)),
+                    });
+                  }
                 }
               }
             } catch (statsErr) {
@@ -561,31 +595,79 @@ export default function HomeDashboard({
     handleSetStatus(id, nextStatus);
   };
 
-  // Qaza count helpers
-  const handleFulfillQaza = () => {
-    if (qazaCount > 0) setQazaCount((prev) => prev - 1);
-  };
+  // Local accountability ledger calculated from historical prayer records
+  const localAccountability = useMemo(() => {
+    if (!isMounted) return { totalAmount: 0, unpaidCount: 0 };
+    // Track reactive store changes
+    if (historyVersion < 0 || prayers.length < 0) return { totalAmount: 0, unpaidCount: 0 };
 
-  const handleAddMissed = () => {
-    setQazaCount((prev) => prev + 1);
-  };
+    const history = getStoredHistoryRecords();
+    let totalAmount = 0;
+    let unpaidCount = 0;
+    const nowTime = now.getTime();
+    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
 
-  const handleStartEditing = () => {
-    setCustomQazaInput(String(qazaCount));
-    setIsEditingQaza(true);
-  };
+    for (const date of Object.keys(history)) {
+      const rec = history[date];
+      if (!rec?.prayers) continue;
 
-  const handleSaveCustomQaza = () => {
-    const parsed = parseInt(customQazaInput, 10);
-    if (!isNaN(parsed) && parsed >= 0) {
-      setQazaCount(parsed);
+      const recDate = new Date(`${date}T00:00:00Z`).getTime();
+      const diffMs = nowTime - recDate;
+      const isOverdue = diffMs > sevenDaysMs;
+
+      for (const p of (['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'] as PrayerId[])) {
+        const entry = rec.prayers[p];
+        if (!entry || entry.isPaid) continue;
+
+        if (entry.status === 'MISSED') {
+          unpaidCount++;
+          totalAmount += 15000 + (isOverdue ? 15000 : 0);
+        } else if (entry.status === 'MADE_UP') {
+          unpaidCount++;
+          totalAmount += 15000;
+        }
+      }
     }
-    setIsEditingQaza(false);
-  };
 
-  const handleCancelEditing = () => {
-    setIsEditingQaza(false);
-  };
+    return { totalAmount, unpaidCount };
+  }, [isMounted, prayers, historyVersion, now]);
+
+  const unpaidQazaCount =
+    serverAccountability !== null
+      ? serverAccountability.unpaidCount
+      : localAccountability.unpaidCount;
+
+  const totalSadaqahOwed =
+    serverAccountability !== null
+      ? serverAccountability.totalAmount
+      : localAccountability.totalAmount;
+
+  const handlePaymentSuccess = useCallback(async () => {
+    if (user) {
+      try {
+        const statsRes = await fetch(`/api/stats?today=${activeLiturgicalDate}`);
+        if (statsRes.ok) {
+          const statsJson = await statsRes.json();
+          if (statsJson?.success) {
+            if (statsJson.data?.streaks) {
+              setStreak(statsJson.data.streaks);
+            }
+            if (statsJson.data?.accountability) {
+              setServerAccountability({
+                totalAmount: statsJson.data.accountability.totalAmount,
+                unpaidCount:
+                  statsJson.data.accountability.breakdown?.length ??
+                  ((statsJson.data.accountability.totalMissed || 0) +
+                    (statsJson.data.accountability.totalMadeUp || 0)),
+              });
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to refresh stats after payment:', err);
+      }
+    }
+  }, [user, activeLiturgicalDate, setStreak]);
 
   // Daily Obligatory Prayer Performance metrics:
   // Strictly counts original-day performance: on-time or late.
@@ -614,9 +696,6 @@ export default function HomeDashboard({
   const ringRadius = 34;
   const ringCircumference = 2 * Math.PI * ringRadius;
   const ringOffset = ringCircumference - (completedCount / 5) * ringCircumference;
-
-  // Accountability fine calculation: 15,000 UZS base pledge per unfulfilled Qaza
-  const totalFineUZS = qazaCount * 15000;
 
   return (
     <div className="space-y-6">
@@ -897,92 +976,33 @@ export default function HomeDashboard({
           <span className="text-xs font-semibold uppercase tracking-wider text-emerald-200">
             {t.accountability.title}
           </span>
-          <div className="flex items-center gap-2 flex-wrap">
-            <button
-              type="button"
-              onClick={handleAddMissed}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/20 hover:bg-white/30 text-white text-xs font-semibold backdrop-blur-xs transition-transform active:scale-95 cursor-pointer shadow-xs"
-              title={t.accountability.addMissed}
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>{t.accountability.addMissed}</span>
-            </button>
-            <button
-              type="button"
-              onClick={handleFulfillQaza}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/20 hover:bg-white/30 text-white text-xs font-semibold backdrop-blur-xs transition-transform active:scale-95 cursor-pointer shadow-xs"
-              title={t.accountability.fulfillOne}
-            >
-              <Check className="w-3.5 h-3.5" />
-              <span>{t.accountability.fulfillOne}</span>
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => setIsPayModalOpen(true)}
+            disabled={unpaidQazaCount === 0}
+            className="self-start sm:self-auto flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white hover:bg-emerald-50 text-emerald-900 text-xs font-bold transition-all active:scale-95 cursor-pointer shadow-xs disabled:opacity-50 disabled:cursor-not-allowed"
+            title={t.accountability.payQaza}
+          >
+            <Plus className="w-3.5 h-3.5 text-emerald-700" />
+            <span>{t.accountability.payQaza}</span>
+          </button>
         </div>
 
         <div className="mt-4 flex items-baseline justify-between">
           <div>
-            {isEditingQaza ? (
-              <div className="flex items-center gap-2 my-1">
-                <input
-                  type="number"
-                  min="0"
-                  autoFocus
-                  value={customQazaInput}
-                  onChange={(e) => setCustomQazaInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') handleSaveCustomQaza();
-                    if (e.key === 'Escape') handleCancelEditing();
-                  }}
-                  className="w-24 px-2.5 py-0.5 rounded-lg bg-emerald-950/70 text-white font-black text-2xl border border-white/50 focus:outline-hidden focus:ring-2 focus:ring-white [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                />
-                <button
-                  type="button"
-                  onClick={handleSaveCustomQaza}
-                  title={t.accountability.save}
-                  className="p-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-white cursor-pointer transition-colors shadow-xs"
-                >
-                  <Check className="w-4 h-4" />
-                </button>
-                <button
-                  type="button"
-                  onClick={handleCancelEditing}
-                  title={t.accountability.cancel}
-                  className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-emerald-100 cursor-pointer transition-colors"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2">
-                {isMounted || initialQazaCount !== null ? (
-                  <span className="text-3xl font-black tracking-tight">
-                    {qazaCount}
-                  </span>
-                ) : (
-                  <span className="inline-block w-12 h-9 bg-white/20 animate-pulse rounded-md" />
-                )}
-                <button
-                  type="button"
-                  onClick={handleStartEditing}
-                  title={t.accountability.editCount}
-                  className="p-1 rounded-md text-emerald-200 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
-                >
-                  <Pencil className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            )}
+            <div className="flex items-center gap-2">
+              <span className="text-3xl font-black tracking-tight">
+                {unpaidQazaCount}
+              </span>
+            </div>
             <p className="text-xs text-emerald-100 font-medium mt-0.5">
               {t.accountability.qazaBalance}
             </p>
           </div>
           <div className="text-right">
-            {isMounted || initialQazaCount !== null ? (
-              <span className="text-2xl font-black tracking-tight">
-                {totalFineUZS.toLocaleString()} <span className="text-xs font-normal">{t.common.currency}</span>
-              </span>
-            ) : (
-              <span className="inline-block w-28 h-8 bg-white/20 animate-pulse rounded-md" />
-            )}
+            <span className="text-2xl font-black tracking-tight">
+              {formatCurrency(totalSadaqahOwed, lang)}
+            </span>
             <p className="text-xs text-emerald-100 font-medium mt-0.5">
               {t.accountability.pledgeAmount}
             </p>
@@ -1148,6 +1168,13 @@ export default function HomeDashboard({
           })}
         </div>
       </div>
+
+      {/* Pay Qaza Modal */}
+      <PayQazaModal
+        isOpen={isPayModalOpen}
+        onClose={() => setIsPayModalOpen(false)}
+        onSuccess={handlePaymentSuccess}
+      />
     </div>
   );
 }

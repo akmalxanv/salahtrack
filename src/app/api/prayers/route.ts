@@ -64,7 +64,7 @@ export function sanitizeNotes(notes: unknown): string | undefined {
  */
 export function calculateFines(
   recordDateStr: string,
-  prayers?: Partial<Record<PrayerId, { status: PrayerStatus; missedAt?: Date; madeUpAt?: Date }>> | null
+  prayers?: Partial<Record<PrayerId, { status: PrayerStatus; missedAt?: Date; madeUpAt?: Date; isPaid?: boolean }>> | null
 ): number {
   if (!prayers || typeof prayers !== 'object') return 0;
   let totalFine = 0;
@@ -77,6 +77,9 @@ export function calculateFines(
   for (const prayerId of VALID_PRAYER_IDS) {
     const prayer = prayers[prayerId];
     if (!prayer) continue;
+
+    // Settled/paid prayers never accrue fines
+    if (prayer.isPaid) continue;
 
     if (prayer.status === 'MISSED') {
       totalFine += 15000;
@@ -255,6 +258,46 @@ export async function POST(request: NextRequest) {
 
     await connectDB();
 
+    const existingRecord = await PrayerRecord.findOne({
+      userId: auth.user.id,
+      date: targetDate,
+    });
+
+    if (existingRecord) {
+      if (isBatch && typeof batchPrayers === 'object') {
+        for (const pId of VALID_PRAYER_IDS) {
+          const pStatus = batchPrayers[pId];
+          if (pStatus && VALID_STATUSES.includes(pStatus as PrayerStatus)) {
+            const norm: PrayerStatus = pStatus === 'PRAYED' ? 'PRAYED_ON_TIME' : pStatus;
+            const existingPrayer = existingRecord.prayers?.[pId];
+            if (existingPrayer?.isPaid && norm !== existingPrayer.status && norm !== 'MADE_UP') {
+              return NextResponse.json(
+                {
+                  success: false,
+                  error: `Cannot alter settled/paid prayer '${pId}' to '${norm}'. Settled Qaza prayers may only be updated to MADE_UP.`,
+                  code: 'PAID_PRAYER_LOCKED',
+                },
+                { status: 400 }
+              );
+            }
+          }
+        }
+      } else if (prayerId && status) {
+        const normalizedStatus: PrayerStatus = status === 'PRAYED' ? 'PRAYED_ON_TIME' : status;
+        const existingPrayer = existingRecord.prayers?.[prayerId as PrayerId];
+        if (existingPrayer?.isPaid && normalizedStatus !== existingPrayer.status && normalizedStatus !== 'MADE_UP') {
+          return NextResponse.json(
+            {
+              success: false,
+              error: `Cannot alter settled/paid prayer '${prayerId}' to '${normalizedStatus}'. Settled Qaza prayers may only be updated to MADE_UP.`,
+              code: 'PAID_PRAYER_LOCKED',
+            },
+            { status: 400 }
+          );
+        }
+      }
+    }
+
     const now = new Date();
     const filter = {
       userId: auth.user.id,
@@ -420,3 +463,12 @@ export async function POST(request: NextRequest) {
     );
   }
 }
+
+/**
+ * PUT /api/prayers
+ * Alias for POST /api/prayers supporting idempotent full-update requests.
+ */
+export async function PUT(request: NextRequest) {
+  return POST(request);
+}
+

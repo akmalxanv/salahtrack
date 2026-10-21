@@ -39,6 +39,20 @@ export interface SinglePrayerEntry {
   missedAt?: string;
   madeUpAt?: string;
   notes?: string;
+  isPaid?: boolean;
+  paidAt?: string;
+  paidAmount?: number;
+}
+
+export interface ISinglePrayerRecord {
+  status: PrayerStatus;
+  prayedAt?: Date | string;
+  missedAt?: Date | string;
+  madeUpAt?: Date | string;
+  notes?: string;
+  isPaid?: boolean;
+  paidAt?: Date | string;
+  paidAmount?: number;
 }
 
 export interface PrayerHistoryRecord {
@@ -59,6 +73,48 @@ export interface AccountabilityBreakdownItem {
   isOverdue: boolean;
   daysPassed: number;
   status?: PrayerStatus;
+}
+
+export interface OutstandingQazaItem {
+  prayerRecordId?: string;
+  date: string;
+  prayerId: PrayerId;
+  status: PrayerStatus;
+  amount: number;
+  isOverdue: boolean;
+  daysPassed: number;
+  missedAt?: string;
+  madeUpAt?: string;
+}
+
+export interface PayQazaRequestItem {
+  date: string;
+  prayerId: PrayerId;
+}
+
+export interface PayQazaRequestBody {
+  items: PayQazaRequestItem[];
+  idempotencyKey?: string;
+  note?: string;
+}
+
+export interface QazaPaymentReceiptItem {
+  prayerRecordId?: string;
+  date: string;
+  prayerId: PrayerId;
+  status: PrayerStatus;
+  amount: number;
+  isOverdue: boolean;
+}
+
+export interface QazaPaymentReceipt {
+  id: string;
+  userId: string;
+  items: QazaPaymentReceiptItem[];
+  totalAmount: number;
+  idempotencyKey?: string;
+  note?: string;
+  createdAt: string;
 }
 
 export interface AccountabilitySummary {

@@ -7,6 +7,9 @@ export interface ISinglePrayerRecord {
   missedAt?: Date;
   madeUpAt?: Date;
   notes?: string;
+  isPaid?: boolean;
+  paidAt?: Date;
+  paidAmount?: number;
 }
 
 export interface IPrayerRecord extends Document {
@@ -33,6 +36,9 @@ const SinglePrayerSchema = new Schema<ISinglePrayerRecord>(
     missedAt: { type: Date },
     madeUpAt: { type: Date },
     notes: { type: String, maxlength: 200 },
+    isPaid: { type: Boolean, default: false },
+    paidAt: { type: Date },
+    paidAmount: { type: Number, default: 0, min: 0 },
   },
   { _id: false }
 );
@@ -50,11 +56,11 @@ const PrayerRecordSchema = new Schema<IPrayerRecord>(
       match: /^\d{4}-\d{2}-\d{2}$/,
     },
     prayers: {
-      fajr: { type: SinglePrayerSchema, default: () => ({ status: 'PENDING' }) },
-      dhuhr: { type: SinglePrayerSchema, default: () => ({ status: 'PENDING' }) },
-      asr: { type: SinglePrayerSchema, default: () => ({ status: 'PENDING' }) },
-      maghrib: { type: SinglePrayerSchema, default: () => ({ status: 'PENDING' }) },
-      isha: { type: SinglePrayerSchema, default: () => ({ status: 'PENDING' }) },
+      fajr: { type: SinglePrayerSchema, default: () => ({ status: 'PENDING', isPaid: false, paidAmount: 0 }) },
+      dhuhr: { type: SinglePrayerSchema, default: () => ({ status: 'PENDING', isPaid: false, paidAmount: 0 }) },
+      asr: { type: SinglePrayerSchema, default: () => ({ status: 'PENDING', isPaid: false, paidAmount: 0 }) },
+      maghrib: { type: SinglePrayerSchema, default: () => ({ status: 'PENDING', isPaid: false, paidAmount: 0 }) },
+      isha: { type: SinglePrayerSchema, default: () => ({ status: 'PENDING', isPaid: false, paidAmount: 0 }) },
     },
     finesAccrued: {
       type: Number,
