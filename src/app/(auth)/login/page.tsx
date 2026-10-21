@@ -7,6 +7,7 @@ import { Eye, EyeOff, Loader2, Lock, User, AlertCircle, CheckCircle2, UserCheck 
 import { useLanguage } from '@/context/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
 import GuestModeModal from '@/components/auth/GuestModeModal';
+import ContactCreator from '@/components/ContactCreator';
 
 export default function LoginPage() {
   const { t } = useLanguage();
@@ -60,8 +61,9 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-xl p-6 sm:p-8 space-y-6">
-      {/* Title & Subtitle */}
+    <div className="space-y-6">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-xl p-6 sm:p-8 space-y-6">
+        {/* Title & Subtitle */}
       <div className="space-y-1 text-center">
         <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
           {t.auth.login.title}
@@ -230,6 +232,9 @@ export default function LoginPage() {
           router.push(redirectParam);
         }}
       />
+      </div>
+
+      <ContactCreator />
     </div>
   );
 }

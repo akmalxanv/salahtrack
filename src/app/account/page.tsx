@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { useLanguage } from '@/context/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
+import ContactCreator from '@/components/ContactCreator';
 
 const CALCULATION_METHODS = [
   { id: 'MWL', name: 'Muslim World League (MWL)' },
@@ -224,7 +225,7 @@ function AccountContent() {
           </div>
         </div>
 
-        <ContactCreatorSection />
+        <ContactCreator className="pt-2" />
       </div>
     );
   }
@@ -578,28 +579,8 @@ function AccountContent() {
         </div>
       </div>
 
-      <ContactCreatorSection />
+      <ContactCreator className="pt-2" />
     </div>
-  );
-}
-
-function ContactCreatorSection() {
-  const { t } = useLanguage();
-  return (
-    <footer className="pt-2 text-center text-xs text-slate-500 dark:text-slate-400">
-      <p>
-        {t.account.contactPrompt}{' '}
-        <a
-          href="https://akmalxanv.ru"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-emerald-600 dark:text-emerald-400 hover:underline font-medium transition-colors"
-        >
-          {t.account.contactLink}
-        </a>
-        .
-      </p>
-    </footer>
   );
 }
 
