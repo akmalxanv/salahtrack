@@ -607,6 +607,8 @@ export interface TranslationContent {
     hidePassword: string;
     secureSessionTitle: string;
     secureSessionDesc: string;
+    contactPrompt: string;
+    contactLink: string;
     tabs: {
       profile: string;
       preferences: string;
@@ -1171,6 +1173,8 @@ export const translations: Record<Language, TranslationContent> = {
       hidePassword: 'Скрыть пароли',
       secureSessionTitle: 'Защищенная серверная сессия',
       secureSessionDesc: 'Ваша сессия хранится в защищенной базе данных на сервере (MongoDB) и защищена файлом cookie HttpOnly, SameSite=Lax. При закрытии браузера или выходе из системы сессия немедленно аннулируется сервером.',
+      contactPrompt: 'Есть проблема, вопрос или отзыв?',
+      contactLink: 'Связаться с создателем',
       tabs: {
         profile: 'Профиль',
         preferences: 'Настройки',
@@ -1734,6 +1738,8 @@ export const translations: Record<Language, TranslationContent> = {
       hidePassword: 'Hide passwords',
       secureSessionTitle: 'Secure Server-Side Session',
       secureSessionDesc: 'Your session is stored securely in the server database (MongoDB) and protected with an HttpOnly, SameSite=Lax cookie. It is immediately invalidated by the server when you log out or your session expires.',
+      contactPrompt: 'Have a problem, question, or feedback?',
+      contactLink: 'Contact the creator',
       tabs: {
         profile: 'Profile',
         preferences: 'Preferences',
@@ -2297,6 +2303,8 @@ export const translations: Record<Language, TranslationContent> = {
       hidePassword: 'Parollarni yashirish',
       secureSessionTitle: 'Himoyalangan server seansi',
       secureSessionDesc: 'Sizning sessiyangiz xavfsiz server bazasida (MongoDB) saqlanadi va HttpOnly, SameSite=Lax cookie orqali himoyalangan. Brauzer yopilganda yoki tizimdan chiqqaningizda sessiya server tomonidan darhol bekor qilinadi.',
+      contactPrompt: 'Muammo, savol yoki taklifingiz bormi?',
+      contactLink: 'Dasturchi bilan bog‘lanish',
       tabs: {
         profile: 'Profil',
         preferences: 'Sozlamalar',
