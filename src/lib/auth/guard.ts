@@ -1,6 +1,6 @@
 import { cookies } from 'next/headers.js';
 import { NextRequest } from 'next/server.js';
-import { connectDB } from '../mongodb.ts';
+import { connectDB, execLean } from '../mongodb.ts';
 import { User, type IUser } from '../../models/User.ts';
 import { Session, type ISession } from '../../models/Session.ts';
 import { PRIMARY_SESSION_COOKIE, LEGACY_SESSION_COOKIE } from './session.ts';
@@ -34,15 +34,15 @@ export interface AuthContext {
 }
 
 /**
- * Sanitizes a Mongoose User document into a SafeUser object.
+ * Sanitizes a Mongoose User document or lean user record into a SafeUser object.
  */
-export function sanitizeUser(user: IUser): SafeUser {
+export function sanitizeUser(user: IUser | (Partial<IUser> & { _id: { toString(): string } | string })): SafeUser {
   return {
     id: user._id.toString(),
-    name: user.name,
-    email: user.email,
-    username: user.username,
-    role: user.role,
+    name: user.name || '',
+    email: user.email || '',
+    username: user.username || '',
+    role: (user.role as 'user' | 'admin') || 'user',
     preferences: {
       language: user.preferences?.language || 'uz',
       calculationMethod: user.preferences?.calculationMethod || 'MWL',
@@ -52,8 +52,8 @@ export function sanitizeUser(user: IUser): SafeUser {
       longitude: user.preferences?.longitude,
       timezone: user.preferences?.timezone,
     },
-    createdAt: user.createdAt,
-    updatedAt: user.updatedAt,
+    createdAt: user.createdAt ? new Date(user.createdAt) : new Date(),
+    updatedAt: user.updatedAt ? new Date(user.updatedAt) : new Date(),
   };
 }
 
@@ -71,20 +71,21 @@ export async function validateSessionToken(token: string): Promise<AuthContext |
 
   await connectDB();
 
-  const session = await Session.findOne({ sessionToken: token });
+  const session = await execLean<ISession | null>(Session.findOne({ sessionToken: token }));
   if (!session) {
     return null;
   }
 
   // Check TTL expiration
-  if (session.expiresAt.getTime() <= Date.now()) {
+  const expiresAtMs = session.expiresAt ? new Date(session.expiresAt).getTime() : 0;
+  if (expiresAtMs <= Date.now()) {
     // Session is expired; delete immediately from database
     await Session.deleteOne({ _id: session._id }).catch(() => {});
     return null;
   }
 
   // Find user associated with session (passwordHash excluded by default)
-  const user = await User.findById(session.userId);
+  const user = await execLean<IUser | null>(User.findById(session.userId));
   if (!user) {
     // Dangling session for deleted user; clean up
     await Session.deleteOne({ _id: session._id }).catch(() => {});
@@ -92,15 +93,16 @@ export async function validateSessionToken(token: string): Promise<AuthContext |
   }
 
   // Touch lastActiveAt if more than 15 minutes since last update (reduces write load)
+  // Non-blocking / fire-and-forget: do NOT await this update on every single authenticated request!
   const now = Date.now();
-  if (now - session.lastActiveAt.getTime() > 15 * 60 * 1000) {
-    session.lastActiveAt = new Date(now);
-    await session.save().catch(() => {});
+  const lastActiveMs = session.lastActiveAt ? new Date(session.lastActiveAt).getTime() : 0;
+  if (now - lastActiveMs > 15 * 60 * 1000) {
+    Session.updateOne({ _id: session._id }, { $set: { lastActiveAt: new Date(now) } }).catch(() => {});
   }
 
   return {
     user: sanitizeUser(user),
-    session,
+    session: session as unknown as ISession,
   };
 }
 

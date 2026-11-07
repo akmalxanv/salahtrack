@@ -428,6 +428,7 @@ export async function GET(request: NextRequest) {
         return NextResponse.json(cached, {
           headers: {
             'X-Cache': 'HIT',
+            'Cache-Control': 'public, max-age=3600, s-maxage=3600, stale-while-revalidate=86400',
           },
         });
       }
@@ -533,6 +534,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json(payload, {
       headers: {
         'X-Cache': isDeduped ? 'DEDUPED' : 'MISS',
+        'Cache-Control': 'public, max-age=3600, s-maxage=3600, stale-while-revalidate=86400',
       },
     });
   } catch (error) {

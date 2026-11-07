@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server.js';
 import mongoose from 'mongoose';
-import { connectDB } from '../../../../lib/mongodb.ts';
+import { connectDB, execLean } from '../../../../lib/mongodb.ts';
 import { PrayerRecord, type IPrayerRecord } from '../../../../models/Prayer.ts';
-import { QazaPayment } from '../../../../models/QazaPayment.ts';
+import { QazaPayment, type IQazaPayment, type IQazaPaymentItem } from '../../../../models/QazaPayment.ts';
 import { authenticateRequest } from '../../../../lib/auth/index.ts';
 import { isValidCalendarDate, sanitizeNotes } from '../route.ts';
 import {
@@ -39,14 +39,16 @@ export async function GET(request: NextRequest) {
 
     await connectDB();
 
-    const payments = await QazaPayment.find({
-      userId: auth.user.id,
-    }).sort({ createdAt: -1 });
+    const payments = await execLean<IQazaPayment[]>(
+      QazaPayment.find({
+        userId: auth.user.id,
+      }).sort({ createdAt: -1 })
+    );
 
     const formatted = payments.map((p) => ({
       id: p._id.toString(),
       userId: p.userId.toString(),
-      items: p.items.map((it) => ({
+      items: p.items.map((it: IQazaPaymentItem) => ({
         prayerRecordId: it.prayerRecordId ? it.prayerRecordId.toString() : undefined,
         date: it.date,
         prayerId: it.prayerId,
@@ -57,7 +59,7 @@ export async function GET(request: NextRequest) {
       totalAmount: p.totalAmount,
       idempotencyKey: p.idempotencyKey,
       note: p.note,
-      createdAt: p.createdAt.toISOString(),
+      createdAt: p.createdAt instanceof Date ? p.createdAt.toISOString() : new Date(p.createdAt).toISOString(),
     }));
 
     return NextResponse.json(
@@ -153,13 +155,17 @@ export async function POST(request: NextRequest) {
         : undefined;
 
     if (idempotencyKey) {
-      const existingPayment = await QazaPayment.findOne({
-        userId: auth.user.id,
-        idempotencyKey,
-      });
+      const existingPayment = await execLean<IQazaPayment | null>(
+        QazaPayment.findOne({
+          userId: auth.user.id,
+          idempotencyKey,
+        })
+      );
 
       if (existingPayment) {
-        const allUserRecords = await PrayerRecord.find({ userId: auth.user.id });
+        const allUserRecords = await execLean<IPrayerRecord[]>(
+          PrayerRecord.find({ userId: auth.user.id })
+        );
         const remainingDebt = calculateAuthoritativeDebt(allUserRecords);
 
         return NextResponse.json(
@@ -168,7 +174,7 @@ export async function POST(request: NextRequest) {
             data: {
               id: existingPayment._id.toString(),
               userId: existingPayment.userId.toString(),
-              items: existingPayment.items.map((it) => ({
+              items: existingPayment.items.map((it: IQazaPaymentItem) => ({
                 prayerRecordId: it.prayerRecordId ? it.prayerRecordId.toString() : undefined,
                 date: it.date,
                 prayerId: it.prayerId,
@@ -179,7 +185,7 @@ export async function POST(request: NextRequest) {
               totalAmount: existingPayment.totalAmount,
               idempotencyKey: existingPayment.idempotencyKey,
               note: existingPayment.note,
-              createdAt: existingPayment.createdAt.toISOString(),
+              createdAt: existingPayment.createdAt instanceof Date ? existingPayment.createdAt.toISOString() : new Date(existingPayment.createdAt).toISOString(),
               remainingFinancialDebt: remainingDebt.totalFinancialDebt,
               remainingPendingQazaCount: remainingDebt.pendingQazaCount,
             },
@@ -333,9 +339,13 @@ export async function POST(request: NextRequest) {
     } catch (saveErr: unknown) {
       const err = saveErr as { code?: number };
       if (err?.code === 11000 && idempotencyKey) {
-        const existing = await QazaPayment.findOne({ userId: auth.user.id, idempotencyKey });
+        const existing = await execLean<IQazaPayment | null>(
+          QazaPayment.findOne({ userId: auth.user.id, idempotencyKey })
+        );
         if (existing) {
-          const allUserRecords = await PrayerRecord.find({ userId: auth.user.id });
+          const allUserRecords = await execLean<IPrayerRecord[]>(
+            PrayerRecord.find({ userId: auth.user.id })
+          );
           const remainingDebt = calculateAuthoritativeDebt(allUserRecords);
 
           return NextResponse.json(
@@ -344,7 +354,7 @@ export async function POST(request: NextRequest) {
               data: {
                 id: existing._id.toString(),
                 userId: existing.userId.toString(),
-                items: existing.items.map((it) => ({
+                items: existing.items.map((it: IQazaPaymentItem) => ({
                   prayerRecordId: it.prayerRecordId ? it.prayerRecordId.toString() : undefined,
                   date: it.date,
                   prayerId: it.prayerId,
@@ -355,7 +365,7 @@ export async function POST(request: NextRequest) {
                 totalAmount: existing.totalAmount,
                 idempotencyKey: existing.idempotencyKey,
                 note: existing.note,
-                createdAt: existing.createdAt.toISOString(),
+                createdAt: existing.createdAt instanceof Date ? existing.createdAt.toISOString() : new Date(existing.createdAt).toISOString(),
                 remainingFinancialDebt: remainingDebt.totalFinancialDebt,
                 remainingPendingQazaCount: remainingDebt.pendingQazaCount,
               },
@@ -369,7 +379,9 @@ export async function POST(request: NextRequest) {
     }
 
     // Compute remaining debt and pending qaza count across all user records
-    const allUserRecords = await PrayerRecord.find({ userId: auth.user.id });
+    const allUserRecords = await execLean<IPrayerRecord[]>(
+      PrayerRecord.find({ userId: auth.user.id })
+    );
     const remainingDebt = calculateAuthoritativeDebt(allUserRecords);
 
     return NextResponse.json(

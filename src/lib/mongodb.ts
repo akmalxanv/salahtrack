@@ -67,5 +67,17 @@ export async function connectDB(): Promise<typeof mongoose> {
   return cached.conn;
 }
 
+/**
+ * Safely executes a Mongoose query with .lean() in production while
+ * gracefully falling back to awaiting the raw promise in test mocks.
+ */
+export async function execLean<T>(queryOrPromise: unknown): Promise<T> {
+  const q = queryOrPromise as { lean?: () => Promise<T> };
+  if (q && typeof q.lean === 'function') {
+    return await q.lean();
+  }
+  return (await (queryOrPromise as Promise<T>));
+}
+
 export const connectToDatabase = connectDB;
 export default connectDB;

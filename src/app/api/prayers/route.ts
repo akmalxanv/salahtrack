@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server.js';
-import { connectDB } from '../../../lib/mongodb.ts';
+import { connectDB, execLean } from '../../../lib/mongodb.ts';
 import { PrayerRecord, type IPrayerRecord } from '../../../models/Prayer.ts';
 import { authenticateRequest } from '../../../lib/auth/index.ts';
 import { getLiturgicalDate } from '../../../lib/prayer-cycle.ts';
@@ -92,10 +92,12 @@ export async function GET(request: NextRequest) {
 
     await connectDB();
 
-    const record = await PrayerRecord.findOne({
-      userId: auth.user.id,
-      date: targetDate,
-    });
+    const record = await execLean<IPrayerRecord | null>(
+      PrayerRecord.findOne({
+        userId: auth.user.id,
+        date: targetDate,
+      })
+    );
 
     if (!record) {
       // Return a virtual default representation for 0ms clean consumption
@@ -123,12 +125,6 @@ export async function GET(request: NextRequest) {
     const currentFines = calculateFines(record.date, record.prayers);
     if (record.finesAccrued !== currentFines) {
       record.finesAccrued = currentFines;
-      if (typeof record.save === 'function') {
-        if (typeof record.markModified === 'function') {
-          record.markModified('finesAccrued');
-        }
-        await record.save();
-      }
       if (typeof PrayerRecord.updateOne === 'function') {
         await PrayerRecord.updateOne(
           { _id: record._id, userId: auth.user.id },
@@ -233,10 +229,12 @@ export async function POST(request: NextRequest) {
 
     await connectDB();
 
-    const existingRecord = await PrayerRecord.findOne({
-      userId: auth.user.id,
-      date: targetDate,
-    });
+    const existingRecord = await execLean<IPrayerRecord | null>(
+      PrayerRecord.findOne({
+        userId: auth.user.id,
+        date: targetDate,
+      })
+    );
 
     if (existingRecord) {
       if (isBatch && typeof batchPrayers === 'object') {

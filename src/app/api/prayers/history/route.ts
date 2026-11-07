@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server.js';
-import { connectDB } from '../../../../lib/mongodb.ts';
+import { connectDB, execLean } from '../../../../lib/mongodb.ts';
 import { PrayerRecord } from '../../../../models/Prayer.ts';
 import { authenticateRequest } from '../../../../lib/auth/index.ts';
 
@@ -39,10 +39,12 @@ export async function GET(request: NextRequest) {
 
     await connectDB();
 
-    const records = await PrayerRecord.find({
-      userId: auth.user.id,
-      date: { $gte: startDate, $lte: endDate },
-    }).sort({ date: -1 });
+    const records = await execLean<unknown[]>(
+      PrayerRecord.find({
+        userId: auth.user.id,
+        date: { $gte: startDate, $lte: endDate },
+      }).sort({ date: -1 })
+    );
 
     return NextResponse.json(
       {

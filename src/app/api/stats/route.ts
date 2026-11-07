@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server.js';
-import { connectDB } from '../../../lib/mongodb.ts';
+import { connectDB, execLean } from '../../../lib/mongodb.ts';
 import { PrayerRecord } from '../../../models/Prayer.ts';
 import { QazaPayment } from '../../../models/QazaPayment.ts';
 import { authenticateRequest } from '../../../lib/auth/index.ts';
@@ -11,7 +11,7 @@ import {
   OVERDUE_PENALTY_AMOUNT,
   GRACE_PERIOD_DAYS,
 } from '../../../lib/accountability.ts';
-import type { PrayerId } from '../../../types/prayer.ts';
+import type { PrayerId, PrayerStatus } from '../../../types/prayer.ts';
 
 const PRAYER_KEYS: PrayerId[] = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
 
@@ -56,11 +56,24 @@ export async function GET(request: NextRequest) {
     const sevenDaysAgo = new Date(todayUtc - 6 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
     const thirtyDaysAgo = new Date(todayUtc - 29 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
-    // Query records for the last 30 days
-    const recentRecords = await PrayerRecord.find({
-      userId: auth.user.id,
-      date: { $gte: thirtyDaysAgo, $lte: todayStr },
-    }).sort({ date: -1 });
+    // Consolidate MongoDB queries using parallel Promise.all with .lean()
+    const prayerQuery = PrayerRecord.find({ userId: auth.user.id });
+    const selectedPrayerQuery = typeof (prayerQuery as { select?: (fields: string) => unknown })?.select === 'function'
+      ? (prayerQuery as { select: (fields: string) => unknown }).select('date prayers')
+      : prayerQuery;
+    const sortedPrayerQuery = typeof (selectedPrayerQuery as { sort?: (order: unknown) => unknown })?.sort === 'function'
+      ? (selectedPrayerQuery as { sort: (order: unknown) => unknown }).sort({ date: -1 })
+      : selectedPrayerQuery;
+
+    const [allUserRecords, userPayments] = await Promise.all([
+      execLean<Array<{ date: string; prayers: Record<PrayerId, { status: PrayerStatus }> }>>(sortedPrayerQuery),
+      execLean<Array<{ totalAmount?: number }>>(QazaPayment.find({ userId: auth.user.id })),
+    ]);
+
+    // In-memory slicing for 7-day and 30-day metrics (eliminates redundant collection scan)
+    const recentRecords = allUserRecords.filter(
+      (r) => r.date >= thirtyDaysAgo && r.date <= todayStr
+    );
 
     // 1. Today's metrics
     const todayRecord = recentRecords.find((r) => r.date === todayStr);
@@ -113,11 +126,6 @@ export async function GET(request: NextRequest) {
     }
 
     // 3. Streak Calculation
-    // Query all records for user sorted by date descending to calculate current and best streak
-    const allUserRecords = await PrayerRecord.find({
-      userId: auth.user.id,
-    }).sort({ date: -1 });
-
     const recordMap = new Map<string, number>();
     for (const rec of allUserRecords) {
       let comp = 0;
@@ -140,7 +148,6 @@ export async function GET(request: NextRequest) {
     });
 
     // Compute total settled/paid amount across all completed Qaza payments
-    const userPayments = await QazaPayment.find({ userId: auth.user.id });
     const totalPaidAmount = userPayments.reduce((sum, p) => sum + (p.totalAmount || 0), 0);
 
     return NextResponse.json(

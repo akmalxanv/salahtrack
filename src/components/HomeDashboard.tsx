@@ -229,12 +229,17 @@ interface HomeDashboardProps {
   initialQazaCount: number | null;
   initialPrayers: PrayerItem[] | null;
   initialStreak?: StreakData | null;
+  initialAccountability?: {
+    totalAmount: number;
+    pendingQazaCount: number;
+  } | null;
 }
 
 export default function HomeDashboard({
   initialQazaCount,
   initialPrayers,
   initialStreak,
+  initialAccountability,
 }: HomeDashboardProps) {
   const isMounted = useIsMounted();
   const { t, lang } = useLanguage();
@@ -265,7 +270,27 @@ export default function HomeDashboard({
   const [serverAccountability, setServerAccountability] = useState<{
     totalAmount: number;
     pendingQazaCount: number;
-  } | null>(null);
+  }>(() => {
+    if (initialAccountability) return initialAccountability;
+    if (typeof window !== 'undefined') {
+      try {
+        const stored = localStorage.getItem('salahtrack_accountability_cache');
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (typeof parsed?.totalAmount === 'number' && typeof parsed?.pendingQazaCount === 'number') {
+            return parsed;
+          }
+        }
+      } catch {
+        // Storage access blocked or unavailable
+      }
+    }
+    const qazaFallback = initialQazaCount ?? 0;
+    return {
+      totalAmount: qazaFallback * 15000,
+      pendingQazaCount: qazaFallback,
+    };
+  });
   const [historyVersion, setHistoryVersion] = useState(0);
 
   useEffect(() => {
@@ -284,7 +309,24 @@ export default function HomeDashboard({
   const [locationName, setLocationName] = useState<string>(() =>
     getInitialLocationName(user?.preferences?.city)
   );
-  const [apiStatus, setApiStatus] = useState<'loading' | 'live' | 'fallback' | 'error'>('loading');
+  const [apiStatus, setApiStatus] = useState<'loading' | 'live' | 'fallback' | 'error'>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const today = getLiturgicalDate(new Date());
+        const loc = getInitialLocationName(user?.preferences?.city);
+        const cached = localStorage.getItem(`salahtrack_timings_${today}_${loc}`);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (parsed?.timings) {
+            return parsed.source === 'fallback' ? 'fallback' : 'live';
+          }
+        }
+      } catch {
+        // Storage access blocked or unavailable
+      }
+    }
+    return 'loading';
+  });
 
   // Synchronize location when component mounts or user preferences load
   useEffect(() => {
@@ -563,7 +605,7 @@ export default function HomeDashboard({
               setStreak(statsJson.data.streaks);
             }
             if (statsJson.data?.accountability) {
-              setServerAccountability({
+              const acct = {
                 totalAmount:
                   statsJson.data.accountability.totalFinancialDebt ??
                   statsJson.data.accountability.totalAmount ??
@@ -572,7 +614,13 @@ export default function HomeDashboard({
                   statsJson.data.accountability.pendingQazaCount ??
                   statsJson.data.accountability.totalMissed ??
                   0,
-              });
+              };
+              setServerAccountability(acct);
+              try {
+                localStorage.setItem('salahtrack_accountability_cache', JSON.stringify(acct));
+              } catch {
+                // Storage access blocked or quota exceeded
+              }
             } else {
               setServerAccountability({ totalAmount: 0, pendingQazaCount: 0 });
             }
@@ -743,6 +791,29 @@ export default function HomeDashboard({
           return;
         }
 
+        // Check persistent localStorage cache for instant 0ms reload
+        const storageCacheKey = `salahtrack_timings_${activeLiturgicalDate}_${resolvedCityName || 'Tashkent'}`;
+        if (typeof window !== 'undefined') {
+          try {
+            const rawStored = localStorage.getItem(storageCacheKey);
+            if (rawStored) {
+              const parsed = JSON.parse(rawStored);
+              if (parsed?.timings) {
+                prayerTimesCache.set(currentKey, {
+                  data: parsed,
+                  timestamp: Date.now(),
+                });
+                if (!isCancelled) {
+                  applyTimings(parsed);
+                }
+                return;
+              }
+            }
+          } catch {
+            // Storage access blocked or invalid JSON
+          }
+        }
+
         // 2. Not in cache: show loading and prepare network request
         setApiStatus('loading');
         lastSyncedStatusRef.current = 'loading';
@@ -779,6 +850,14 @@ export default function HomeDashboard({
                     data,
                     timestamp: Date.now(),
                   });
+                  if (typeof window !== 'undefined') {
+                    try {
+                      const timingsStorageKey = `salahtrack_timings_${activeLiturgicalDate}_${resolvedCityName || data.city || 'Tashkent'}`;
+                      localStorage.setItem(timingsStorageKey, JSON.stringify(data));
+                    } catch {
+                      // Storage access blocked or quota exceeded
+                    }
+                  }
                 }
                 return data;
               }
@@ -837,11 +916,14 @@ export default function HomeDashboard({
     user?.preferences?.longitude,
     activeLiturgicalDate,
     locationRevision,
-    apiStatus,
   ]);
 
   // Live Next Prayer Countdown (calculated dynamically from current ticking time)
   const nextPrayer = useMemo(() => calculateNextPrayerCountdown(prayers, now), [prayers, now]);
+  const nextPrayerItem = useMemo(
+    () => prayers.find((p) => p.id === nextPrayer.prayerId),
+    [prayers, nextPrayer.prayerId]
+  );
 
   // Status Change Handler with visual save state and backend sync
   const handleSetStatus = useCallback(
@@ -886,15 +968,11 @@ export default function HomeDashboard({
       setStreak((prevStreak) => calculateStreakTransition(prevStreak, targetDate, isDayCompleted));
 
       // 4. Optimistically adjust server accountability (if active)
-      if (serverAccountability !== null && (fineDiff !== 0 || qazaDiff !== 0)) {
-        setServerAccountability((prev) =>
-          prev
-            ? {
-                totalAmount: Math.max(0, prev.totalAmount + fineDiff),
-                pendingQazaCount: Math.max(0, prev.pendingQazaCount + qazaDiff),
-              }
-            : null
-        );
+      if (fineDiff !== 0 || qazaDiff !== 0) {
+        setServerAccountability((prev) => ({
+          totalAmount: Math.max(0, prev.totalAmount + fineDiff),
+          pendingQazaCount: Math.max(0, prev.pendingQazaCount + qazaDiff),
+        }));
       }
       if (qazaDiff !== 0) {
         setQazaCount((prev) => Math.max(0, prev + qazaDiff));
@@ -932,7 +1010,7 @@ export default function HomeDashboard({
                     setStreak(statsJson.data.streaks);
                   }
                   if (statsJson.data?.accountability) {
-                    setServerAccountability({
+                    const acct = {
                       totalAmount:
                         statsJson.data.accountability.totalFinancialDebt ??
                         statsJson.data.accountability.totalAmount ??
@@ -941,7 +1019,13 @@ export default function HomeDashboard({
                         statsJson.data.accountability.pendingQazaCount ??
                         statsJson.data.accountability.totalMissed ??
                         0,
-                    });
+                    };
+                    setServerAccountability(acct);
+                    try {
+                      localStorage.setItem('salahtrack_accountability_cache', JSON.stringify(acct));
+                    } catch {
+                      // Storage access blocked or quota exceeded
+                    }
                   }
                 }
               }
@@ -969,7 +1053,7 @@ export default function HomeDashboard({
         }, 1500);
       }
     },
-    [user, activeLiturgicalDate, prayers, setPrayers, setStreak, serverAccountability, setQazaCount]
+    [user, activeLiturgicalDate, prayers, setPrayers, setStreak, setQazaCount]
   );
 
   // Quick toggle (done / pending)
@@ -990,21 +1074,21 @@ export default function HomeDashboard({
     if (historyVersion < 0 || prayers.length < 0) return { totalAmount: 0, pendingQazaCount: 0 };
 
     const history = getStoredHistoryRecords();
-    const ledger = calculateAccountabilityLedger(history, now.getTime());
+    const ledger = calculateAccountabilityLedger(history, activeLiturgicalDate);
     return {
       totalAmount: ledger.totalAmount,
       pendingQazaCount: ledger.pendingQazaCount ?? ledger.missedCount,
     };
-  }, [isMounted, prayers, historyVersion, now]);
+  }, [isMounted, prayers, historyVersion, activeLiturgicalDate]);
 
-  const isStatsLoading = Boolean(user && serverAccountability === null);
+  const isStatsLoading = false;
 
   const unpaidQazaCount = user
-    ? (serverAccountability ? serverAccountability.pendingQazaCount : 0)
+    ? serverAccountability.pendingQazaCount
     : localAccountability.pendingQazaCount;
 
   const totalSadaqahOwed = user
-    ? (serverAccountability ? serverAccountability.totalAmount : 0)
+    ? serverAccountability.totalAmount
     : localAccountability.totalAmount;
 
   const handlePaymentSuccess = useCallback(async () => {
@@ -1018,7 +1102,7 @@ export default function HomeDashboard({
               setStreak(statsJson.data.streaks);
             }
             if (statsJson.data?.accountability) {
-              setServerAccountability({
+              const acct = {
                 totalAmount:
                   statsJson.data.accountability.totalFinancialDebt ??
                   statsJson.data.accountability.totalAmount ??
@@ -1027,7 +1111,13 @@ export default function HomeDashboard({
                   statsJson.data.accountability.pendingQazaCount ??
                   statsJson.data.accountability.totalMissed ??
                   0,
-              });
+              };
+              setServerAccountability(acct);
+              try {
+                localStorage.setItem('salahtrack_accountability_cache', JSON.stringify(acct));
+              } catch {
+                // Storage access blocked or quota exceeded
+              }
             }
           }
         }
@@ -1193,12 +1283,12 @@ export default function HomeDashboard({
         {/* Card A: Next Prayer Card */}
         <div className="rounded-2xl bg-gradient-to-br from-slate-900 via-slate-850 to-slate-800 text-white p-5 shadow-sm border border-slate-700/80 flex flex-col justify-between">
           <div>
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-2">
-                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-500/20 text-emerald-400">
-                  <Timer className="w-4 h-4" />
-                </div>
-                <span className="text-xs font-semibold uppercase tracking-wider text-slate-300">
+            {/* Header pill & Status indicator dot balanced with City Badge */}
+            <div className="flex items-center justify-between mb-4">
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 shadow-2xs">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+                <Timer className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <span className="text-xs font-bold uppercase tracking-wider text-slate-300">
                   {t.dashboard.nextPrayer}
                 </span>
               </div>
@@ -1231,30 +1321,28 @@ export default function HomeDashboard({
               </div>
             </div>
 
-            <div className="flex items-baseline justify-between mt-2">
-              <div>
-                <p className="text-2xl font-black tracking-tight text-white">
-                  {t.prayers[nextPrayer.prayerId]}
-                </p>
-                <div className="flex items-center gap-1.5 text-xs text-slate-400 mt-0.5">
-                  <Clock className="w-3.5 h-3.5" />
-                  <span>{nextPrayer.prayerTime}</span>
-                  {nextPrayer.isTomorrow && (
-                    <span className="text-[10px] px-1.5 py-0.2 rounded-md bg-white/10 text-slate-300 font-medium">
-                      {t.dashboard.tomorrowPrayer}
-                    </span>
-                  )}
-                </div>
+            {/* Centered, prominent, heroic display */}
+            <div className="py-2 text-center">
+              <h3 className="text-3xl sm:text-4xl font-black text-white text-center tracking-tight">
+                {t.prayers[nextPrayer.prayerId]}
+              </h3>
+
+              <div className="text-sm sm:text-base font-semibold text-slate-300 flex items-center justify-center gap-1.5 mt-1">
+                <Clock className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span className="tabular-nums">
+                  {nextPrayerItem?.endTime
+                    ? `${nextPrayer.prayerTime} – ${nextPrayerItem.endTime}`
+                    : nextPrayer.prayerTime}
+                </span>
               </div>
 
-              {/* Live Ticking Countdown */}
-              <div className="text-right">
-                <span className="text-[11px] font-medium text-slate-400 block mb-0.5">
+              <div className="my-3 flex flex-col items-center justify-center">
+                <span className="text-xs font-medium uppercase tracking-widest text-slate-400 mb-1">
                   {t.dashboard.in}
                 </span>
                 <p
                   suppressHydrationWarning
-                  className="text-xl sm:text-2xl font-black text-emerald-400 font-mono tracking-tight"
+                  className="text-4xl sm:text-5xl font-mono font-black text-emerald-400 tracking-tight text-center my-3"
                 >
                   {String(nextPrayer.hours).padStart(2, '0')}:
                   {String(nextPrayer.mins).padStart(2, '0')}:
@@ -1264,8 +1352,8 @@ export default function HomeDashboard({
             </div>
           </div>
 
-          <div className="mt-4 pt-3 border-t border-slate-700/60 flex items-center justify-between text-xs text-slate-400 flex-wrap gap-2">
-            <div className="flex items-center gap-2 flex-wrap">
+          <div className="mt-4 pt-3 border-t border-slate-700/60 flex items-center justify-center sm:justify-start text-xs text-slate-400 flex-wrap gap-2">
+            <div className="flex items-center gap-2 flex-wrap justify-center sm:justify-start w-full sm:w-auto">
               {notificationPermission === 'granted' ? (
                 <div className="flex items-center gap-2 flex-wrap">
                   <button
@@ -1533,23 +1621,23 @@ export default function HomeDashboard({
             return (
               <div
                 key={prayer.id}
-                className={`relative rounded-2xl border p-3.5 sm:p-4 transition-all shadow-xs select-none ${config.bgClass} ${config.borderClass}`}
+                className={`relative rounded-2xl border p-3 sm:p-4 transition-all shadow-xs select-none ${config.bgClass} ${config.borderClass}`}
               >
                 {/* Main Prayer Row: Rigid identical alignment for all 5 prayers */}
-                <div className="flex items-center justify-between gap-3 min-w-0">
+                <div className="flex items-center justify-between gap-2 sm:gap-3 min-w-0">
                   {/* Left: Checkmark quick-toggle + Prayer Info */}
                   <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1">
                     <button
                       type="button"
                       onClick={() => handleQuickToggle(prayer.id)}
-                      className="min-h-[44px] min-w-[44px] flex items-center justify-center -ml-1 sm:ml-0 cursor-pointer focus:outline-hidden focus-visible:ring-2 focus-visible:ring-emerald-500 rounded-xl shrink-0"
+                      className="min-h-[44px] min-w-[36px] sm:min-w-[44px] flex items-center justify-center -ml-1 sm:ml-0 cursor-pointer focus:outline-hidden focus-visible:ring-2 focus-visible:ring-emerald-500 rounded-xl shrink-0"
                       aria-label={`${t.dashboard.markPrayed}: ${prayerLabel}`}
                     >
                       <CheckCircle2 className={`w-6 h-6 transition-transform active:scale-90 ${config.iconClass}`} />
                     </button>
 
                     <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2 flex-wrap">
+                      <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
                         <span className="font-bold text-sm sm:text-base text-slate-900 dark:text-slate-100 truncate">
                           {prayerLabel}
                         </span>
@@ -1579,114 +1667,78 @@ export default function HomeDashboard({
                     </div>
                   </div>
 
-                  {/* Right: Status badge button + dropdown trigger (opens correction menu) */}
+                  {/* Right: EXACTLY ONE set of action buttons, displayed INLINE on the SAME ROW */}
                   <div className="flex items-center shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => setActiveMenuPrayerId(isMenuOpen ? null : prayer.id)}
-                      className="min-h-[44px] inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl border border-transparent hover:border-slate-300 dark:hover:border-slate-700 bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 transition-colors cursor-pointer focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:outline-none"
-                      title={t.dashboard.changeStatus}
-                      aria-label={`${t.dashboard.changeStatus}: ${prayerLabel}`}
-                      aria-expanded={isMenuOpen}
-                      aria-controls={`prayer-menu-${prayer.id}`}
-                    >
-                      <span className={`text-[11px] sm:text-xs font-semibold px-2 py-0.5 rounded-full border ${config.badgeClass}`}>
-                        {statusLabel}
-                      </span>
-                      <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform ${isMenuOpen ? 'rotate-180' : ''}`} />
-                    </button>
-                  </div>
-                </div>
-
-                {/* Overdue inline actions: Rendered cleanly below main row without distorting row alignment */}
-                {isOverdue && (
-                  <div className="mt-2.5 pt-2.5 border-t border-slate-200/60 dark:border-slate-800/60 grid grid-cols-3 gap-1.5 sm:gap-2">
-                    <button
-                      type="button"
-                      onClick={() => handleSetStatus(prayer.id, 'PRAYED_ON_TIME')}
-                      className="min-h-[44px] px-2 py-1.5 rounded-xl text-[11px] sm:text-xs font-semibold leading-tight text-center transition-all duration-150 flex items-center justify-center cursor-pointer bg-emerald-50 hover:bg-emerald-100 active:bg-emerald-200 text-emerald-800 border border-emerald-300 dark:bg-emerald-950/50 dark:hover:bg-emerald-900/60 dark:text-emerald-300 dark:border-emerald-700/80 shadow-2xs focus-visible:ring-2 focus-visible:ring-emerald-500"
-                      aria-label={`${t.dashboard.markPrayed}: ${prayerLabel}`}
-                    >
-                      {t.dashboard.markPrayed}
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => handleSetStatus(prayer.id, 'MADE_UP')}
-                      className="min-h-[44px] px-2 py-1.5 rounded-xl text-[11px] sm:text-xs font-semibold leading-tight text-center transition-all duration-150 flex items-center justify-center cursor-pointer bg-sky-50 hover:bg-sky-100 active:bg-sky-200 text-sky-800 border border-sky-300 dark:bg-sky-950/50 dark:hover:bg-sky-900/60 dark:text-sky-300 dark:border-sky-700/80 shadow-2xs focus-visible:ring-2 focus-visible:ring-sky-500"
-                      aria-label={`${t.dashboard.markMadeUp}: ${prayerLabel}`}
-                    >
-                      {t.dashboard.markMadeUp}
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => handleSetStatus(prayer.id, 'MISSED')}
-                      className="min-h-[44px] px-2 py-1.5 rounded-xl text-[11px] sm:text-xs font-semibold leading-tight text-center transition-all duration-150 flex items-center justify-center cursor-pointer bg-rose-50 hover:bg-rose-100 active:bg-rose-200 text-rose-800 border border-rose-300 dark:bg-rose-950/50 dark:hover:bg-rose-900/60 dark:text-rose-300 dark:border-rose-700/80 shadow-2xs focus-visible:ring-2 focus-visible:ring-rose-500"
-                      aria-label={`${t.dashboard.markMissed}: ${prayerLabel}`}
-                    >
-                      {t.dashboard.markMissed}
-                    </button>
-                  </div>
-                )}
-
-                {/* Correction Menu Dropdown (Triggered by status badge / chevron button) */}
-                {isMenuOpen && (
-                  <div
-                    id={`prayer-menu-${prayer.id}`}
-                    className="mt-3 pt-3 border-t border-slate-200 dark:border-slate-800 space-y-2 animate-in fade-in duration-150"
-                  >
-                    <div className="grid grid-cols-3 gap-2">
+                    {!isMenuOpen ? (
                       <button
                         type="button"
-                        onClick={() => handleSetStatus(prayer.id, 'PRAYED_ON_TIME')}
-                        className={`min-h-[44px] px-1.5 sm:px-2 py-2 rounded-xl text-[11px] sm:text-xs md:text-sm font-semibold leading-tight text-center transition-colors duration-150 flex items-center justify-center cursor-pointer focus-visible:ring-2 focus-visible:ring-emerald-500 ${
-                          prayer.status === 'PRAYED_ON_TIME' || prayer.status === 'PRAYED' || prayer.status === 'PRAYED_LATE'
-                            ? 'bg-emerald-600 text-white font-bold shadow-xs border border-emerald-600 dark:bg-emerald-500 dark:border-emerald-500'
-                            : 'bg-emerald-50 hover:bg-emerald-100/90 text-emerald-800 border border-emerald-200/80 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/60 dark:text-emerald-300 dark:border-emerald-800/60'
+                        onClick={() => setActiveMenuPrayerId(prayer.id)}
+                        className={`min-h-[44px] inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl border transition-all cursor-pointer focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:outline-none ${
+                          isOverdue
+                            ? 'border-amber-400/80 bg-amber-500/10 text-amber-700 dark:text-amber-300 dark:border-amber-600/70 hover:bg-amber-500/20'
+                            : 'border-transparent hover:border-slate-300 dark:hover:border-slate-700 bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10'
                         }`}
+                        title={t.dashboard.changeStatus}
+                        aria-label={`${t.dashboard.changeStatus}: ${prayerLabel}`}
+                        aria-expanded={false}
                       >
-                        {t.dashboard.markPrayed}
+                        <span className={`text-[11px] sm:text-xs font-semibold px-2 py-0.5 rounded-full border ${config.badgeClass} inline-flex items-center gap-1`}>
+                          {isOverdue && <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse shrink-0" />}
+                          {statusLabel}
+                        </span>
+                        <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                       </button>
-
-                      <button
-                        type="button"
-                        onClick={() => handleSetStatus(prayer.id, 'MADE_UP')}
-                        className={`min-h-[44px] px-1.5 sm:px-2 py-2 rounded-xl text-[11px] sm:text-xs md:text-sm font-semibold leading-tight text-center transition-colors duration-150 flex items-center justify-center cursor-pointer focus-visible:ring-2 focus-visible:ring-sky-500 ${
-                          prayer.status === 'MADE_UP'
-                            ? 'bg-sky-600 text-white font-bold shadow-xs border border-sky-600 dark:bg-sky-500 dark:border-sky-500'
-                            : 'bg-sky-50 hover:bg-sky-100/90 text-sky-800 border border-sky-200/80 dark:bg-sky-950/40 dark:hover:bg-sky-900/60 dark:text-sky-300 dark:border-sky-800/60'
-                        }`}
-                      >
-                        {t.dashboard.markMadeUp}
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => handleSetStatus(prayer.id, 'MISSED')}
-                        className={`min-h-[44px] px-1.5 sm:px-2 py-2 rounded-xl text-[11px] sm:text-xs md:text-sm font-semibold leading-tight text-center transition-colors duration-150 flex items-center justify-center cursor-pointer focus-visible:ring-2 focus-visible:ring-rose-500 ${
-                          prayer.status === 'MISSED'
-                            ? 'bg-rose-600 text-white font-bold shadow-xs border border-rose-600 dark:bg-rose-500 dark:border-rose-500'
-                            : 'bg-rose-50 hover:bg-rose-100/90 text-rose-800 border border-rose-200/80 dark:bg-rose-950/40 dark:hover:bg-rose-900/60 dark:text-rose-300 dark:border-rose-800/60'
-                        }`}
-                      >
-                        {t.dashboard.markMissed}
-                      </button>
-                    </div>
-
-                    {prayer.status !== 'PENDING' && (
-                      <div className="flex justify-end pt-1">
+                    ) : (
+                      <div className="flex items-center gap-1 sm:gap-1.5">
                         <button
                           type="button"
-                          onClick={() => handleSetStatus(prayer.id, 'PENDING')}
-                          className="min-h-[44px] px-3 py-1 text-xs text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 underline cursor-pointer flex items-center gap-1 focus-visible:ring-2 focus-visible:ring-emerald-500 rounded-lg font-medium"
+                          onClick={() => {
+                            handleSetStatus(prayer.id, 'PRAYED_ON_TIME');
+                            setActiveMenuPrayerId(null);
+                          }}
+                          className="min-h-[38px] sm:min-h-[44px] px-2 py-1 sm:px-2.5 sm:py-1.5 rounded-xl text-xs font-semibold leading-tight text-center transition-all duration-150 flex items-center justify-center cursor-pointer bg-emerald-50 hover:bg-emerald-100 active:bg-emerald-200 text-emerald-800 border border-emerald-300 dark:bg-emerald-950/60 dark:hover:bg-emerald-900/80 dark:text-emerald-300 dark:border-emerald-700/80 shadow-2xs focus-visible:ring-2 focus-visible:ring-emerald-500 whitespace-nowrap"
+                          aria-label={`${t.dashboard.markPrayed}: ${prayerLabel}`}
                         >
-                          {t.dashboard.resetToPending}
+                          {t.statuses.PRAYED}
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            handleSetStatus(prayer.id, 'MADE_UP');
+                            setActiveMenuPrayerId(null);
+                          }}
+                          className="min-h-[38px] sm:min-h-[44px] px-2 py-1 sm:px-2.5 sm:py-1.5 rounded-xl text-xs font-semibold leading-tight text-center transition-all duration-150 flex items-center justify-center cursor-pointer bg-sky-50 hover:bg-sky-100 active:bg-sky-200 text-sky-800 border border-sky-300 dark:bg-sky-950/60 dark:hover:bg-sky-900/80 dark:text-sky-300 dark:border-sky-700/80 shadow-2xs focus-visible:ring-2 focus-visible:ring-sky-500 whitespace-nowrap"
+                          aria-label={`${t.dashboard.markMadeUp}: ${prayerLabel}`}
+                        >
+                          {t.statuses.MADE_UP}
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            handleSetStatus(prayer.id, 'MISSED');
+                            setActiveMenuPrayerId(null);
+                          }}
+                          className="min-h-[38px] sm:min-h-[44px] px-2 py-1 sm:px-2.5 sm:py-1.5 rounded-xl text-xs font-semibold leading-tight text-center transition-all duration-150 flex items-center justify-center cursor-pointer bg-rose-50 hover:bg-rose-100 active:bg-rose-200 text-rose-800 border border-rose-300 dark:bg-rose-950/60 dark:hover:bg-rose-900/80 dark:text-rose-300 dark:border-rose-700/80 shadow-2xs focus-visible:ring-2 focus-visible:ring-rose-500 whitespace-nowrap"
+                          aria-label={`${t.dashboard.markMissed}: ${prayerLabel}`}
+                        >
+                          {t.statuses.MISSED}
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setActiveMenuPrayerId(null)}
+                          className="min-h-[38px] sm:min-h-[44px] w-8 sm:w-9 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors flex items-center justify-center cursor-pointer focus-visible:ring-2 focus-visible:ring-slate-400 shrink-0"
+                          aria-label={t.common.cancel}
+                          title={t.common.cancel}
+                        >
+                          <X className="w-4 h-4" />
                         </button>
                       </div>
                     )}
                   </div>
-                )}
+                </div>
               </div>
             );
           })}
