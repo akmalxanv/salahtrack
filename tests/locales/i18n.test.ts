@@ -1,5 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   translations,
   isValidLanguage,
@@ -801,6 +803,84 @@ describe('SalahTrack Localization Engine (i18n) QA Suite', () => {
       assert.equal(headerMap.get('Cross-Origin-Opener-Policy'), 'same-origin');
       assert.equal(headerMap.get('Cross-Origin-Resource-Policy'), 'same-origin');
       assert.equal(headerMap.get('X-Permitted-Cross-Domain-Policies'), 'none');
+    });
+  });
+
+  describe('6. Sidebar Typography, Subtitle Natural Word Wrapping & Responsive Navigation', () => {
+    it('verifies appSubtitle structure, length, and word wrapping metrics across uz, ru, en', () => {
+      const subtitles: Record<Language, string> = {
+        en: translations.en.appSubtitle,
+        uz: translations.uz.appSubtitle,
+        ru: translations.ru.appSubtitle,
+      };
+
+      for (const [lang, subtitle] of Object.entries(subtitles)) {
+        assert.ok(subtitle, `appSubtitle for ${lang} must exist`);
+        assert.ok(subtitle.trim().length > 0, `appSubtitle for ${lang} must not be empty`);
+
+        // Subtitle must contain multiple words separated by whitespace to enable natural wrapping
+        const words = subtitle.trim().split(/\s+/);
+        assert.ok(
+          words.length >= 3,
+          `appSubtitle for ${lang} must have at least 3 words for natural multi-line wrapping, got ${words.length}: "${subtitle}"`
+        );
+
+        // Individual words must not exceed 18 chars to prevent awkward container overflow or mid-word hyphenation
+        for (const word of words) {
+          assert.ok(
+            word.length <= 18,
+            `Word "${word}" in ${lang} appSubtitle exceeds 18 chars (actual: ${word.length})`
+          );
+        }
+
+        // Subtitle total character length must remain within ergonomic bounds (20-55 chars)
+        assert.ok(
+          subtitle.length >= 20 && subtitle.length <= 55,
+          `appSubtitle for ${lang} length should be 20-55 chars (actual: ${subtitle.length})`
+        );
+      }
+    });
+
+    it('verifies Sidebar component markup ensures clean multi-line wrapping without truncation', () => {
+      const sidebarPath = path.resolve(process.cwd(), 'src/components/Sidebar.tsx');
+      assert.ok(fs.existsSync(sidebarPath), 'src/components/Sidebar.tsx must exist');
+      const sidebarSource = fs.readFileSync(sidebarPath, 'utf8');
+
+      // 1. Must use items-start on header container so multi-line subtitle aligns neatly with BrandLogo
+      assert.ok(
+        sidebarSource.includes('items-start'),
+        'Sidebar header container must use items-start to support multi-line subtitle wrapping'
+      );
+
+      // 2. BrandLogo must have shrink-0 so it is never compressed when subtitle wraps
+      assert.ok(
+        sidebarSource.includes('shrink-0'),
+        'BrandLogo must include shrink-0 to prevent compression during multi-line layout'
+      );
+
+      // 3. Subtitle element must have break-words and leading-snug for clean typography
+      assert.ok(
+        sidebarSource.includes('break-words'),
+        'appSubtitle element must use break-words to wrap cleanly across languages'
+      );
+      assert.ok(
+        sidebarSource.includes('leading-snug'),
+        'appSubtitle element must use leading-snug for readable line height'
+      );
+
+      // 4. Subtitle element must NOT use truncate (which would crop Uzbek or Russian text)
+      // Extract the span rendering t.appSubtitle
+      const subtitleSpanMatch = sidebarSource.match(/<span[^>]*>\s*\{t\.appSubtitle\}\s*<\/span>/);
+      assert.ok(subtitleSpanMatch, 'Sidebar must render {t.appSubtitle} in a span');
+      assert.ok(
+        !subtitleSpanMatch[0].includes('truncate'),
+        'appSubtitle span must NOT have truncate class so full localized text is visible'
+      );
+
+      // 5. Zero hardcoded display text: uses t.appTitle, t.appSubtitle, t.nav, t.auth
+      assert.ok(sidebarSource.includes('{t.appTitle}'));
+      assert.ok(sidebarSource.includes('{t.appSubtitle}'));
+      assert.ok(sidebarSource.includes('t.nav[item.key]'));
     });
   });
 });

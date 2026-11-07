@@ -34,6 +34,7 @@ import { formatLocalizedDate, formatLocalizedHijriDate, formatCurrency } from '@
 import {
   getLiturgicalDate,
   resolvePrayerCycle,
+  isPrayerOverdue,
   DEFAULT_FAJR_TIME,
   DEFAULT_ISHA_TIME,
 } from '@/lib/prayer-cycle';
@@ -1499,82 +1500,182 @@ export default function HomeDashboard({
             const prayerLabel = t.prayers[prayer.id] || prayer.name;
             const statusLabel = prayer.status === 'PRAYED_LATE' ? t.statuses.PRAYED : t.statuses[prayer.status];
             const itemSaveStatus = savingStatus[prayer.id];
+            const isOverdue = prayer.status === 'PENDING' && isPrayerOverdue(prayer.id, prayers, now);
 
             return (
               <div
                 key={prayer.id}
-                className={`relative rounded-2xl border p-4 transition-all shadow-xs ${config.bgClass} ${config.borderClass}`}
+                onClick={(e) => {
+                  const target = e.target as HTMLElement | null;
+                  if (target?.closest('button') || target?.closest('[data-no-card-toggle]')) {
+                    return;
+                  }
+                  handleQuickToggle(prayer.id);
+                }}
+                className={`relative rounded-2xl border p-3.5 sm:p-4 transition-all shadow-xs cursor-pointer select-none ${config.bgClass} ${config.borderClass}`}
               >
-                <div className="flex items-center justify-between">
-                  {/* Left: Quick toggle button & prayer name */}
-                  <div className="flex items-center gap-3">
-                    <button
-                      type="button"
-                      onClick={() => handleQuickToggle(prayer.id)}
-                      className="min-h-[44px] min-w-[44px] flex items-center justify-center -ml-2 cursor-pointer focus:outline-hidden"
-                      aria-label={`${t.dashboard.markPrayed}: ${prayerLabel}`}
-                    >
-                      <CheckCircle2 className={`w-6 h-6 transition-transform active:scale-90 ${config.iconClass}`} />
-                    </button>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-bold text-sm text-slate-900 dark:text-slate-100">
-                          {prayerLabel}
-                        </span>
-                        {itemSaveStatus === 'saving' && (
-                          <span className="inline-flex items-center gap-1 text-[10px] text-slate-400">
-                            <Loader2 className="w-2.5 h-2.5 animate-spin" />
-                            <span>{t.dashboard.saving}</span>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  {/* Left: Quick toggle button & prayer name / time */}
+                  <div className="flex items-center justify-between sm:justify-start gap-3 min-w-0">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleQuickToggle(prayer.id);
+                        }}
+                        className="min-h-[44px] min-w-[44px] flex items-center justify-center -ml-2 cursor-pointer focus:outline-hidden focus-visible:ring-2 focus-visible:ring-emerald-500 rounded-xl"
+                        aria-label={`${t.dashboard.markPrayed}: ${prayerLabel}`}
+                      >
+                        <CheckCircle2 className={`w-6 h-6 transition-transform active:scale-90 ${config.iconClass}`} />
+                      </button>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-bold text-sm text-slate-900 dark:text-slate-100">
+                            {prayerLabel}
                           </span>
-                        )}
-                        {itemSaveStatus === 'saved' && (
-                          <span className="inline-flex items-center gap-0.5 text-[10px] text-emerald-600 font-medium">
-                            <Check className="w-3 h-3" />
-                            <span>{t.dashboard.saved}</span>
-                          </span>
-                        )}
-                        {itemSaveStatus === 'error' && (
-                          <span className="inline-flex items-center gap-0.5 text-[10px] text-rose-500 font-medium">
-                            <AlertTriangle className="w-3 h-3" />
-                            <span>{t.dashboard.saveFailed}</span>
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-1.5 text-xs text-slate-400 mt-0.5">
-                        <Clock className="w-3 h-3" />
-                        <span>{prayer.time} – {prayer.endTime}</span>
+                          {itemSaveStatus === 'saving' && (
+                            <span className="inline-flex items-center gap-1 text-[10px] text-slate-400">
+                              <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                              <span>{t.dashboard.saving}</span>
+                            </span>
+                          )}
+                          {itemSaveStatus === 'saved' && (
+                            <span className="inline-flex items-center gap-0.5 text-[10px] text-emerald-600 font-medium">
+                              <Check className="w-3 h-3" />
+                              <span>{t.dashboard.saved}</span>
+                            </span>
+                          )}
+                          {itemSaveStatus === 'error' && (
+                            <span className="inline-flex items-center gap-0.5 text-[10px] text-rose-500 font-medium">
+                              <AlertTriangle className="w-3 h-3" />
+                              <span>{t.dashboard.saveFailed}</span>
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1.5 text-xs text-slate-400 mt-0.5">
+                          <Clock className="w-3 h-3 shrink-0" />
+                          <span className="truncate">{prayer.time} – {prayer.endTime}</span>
+                        </div>
                       </div>
                     </div>
+
+                    {/* Mobile-only status badge & chevron dropdown when overdue */}
+                    {isOverdue && (
+                      <div className="flex sm:hidden items-center gap-1 shrink-0">
+                        <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full border ${config.badgeClass}`}>
+                          {statusLabel}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setActiveMenuPrayerId(isMenuOpen ? null : prayer.id);
+                          }}
+                          className="min-h-[44px] min-w-[44px] flex items-center justify-center -mr-2 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 dark:hover:text-slate-200 cursor-pointer transition-colors focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:outline-none"
+                          title={t.dashboard.changeStatus}
+                          aria-label={t.dashboard.changeStatus}
+                          aria-expanded={isMenuOpen}
+                          aria-controls={`prayer-menu-${prayer.id}`}
+                        >
+                          <ChevronDown className={`w-4 h-4 transition-transform ${isMenuOpen ? 'rotate-180' : ''}`} />
+                        </button>
+                      </div>
+                    )}
                   </div>
 
-                  {/* Right: Status badge & dropdown trigger */}
-                  <div className="flex items-center gap-1 sm:gap-2">
-                    <span
-                      className={`text-[11px] font-semibold px-2.5 py-1 rounded-full border ${config.badgeClass}`}
-                    >
-                      {statusLabel}
-                    </span>
+                  {/* Right: Overdue inline actions + Status badge & dropdown trigger */}
+                  <div className="flex items-center justify-between sm:justify-end gap-2 sm:gap-2.5 flex-wrap sm:flex-nowrap">
+                    {/* 3 Overdue Inline Action Buttons: visible automatically when next prayer starts and status is PENDING */}
+                    {isOverdue && (
+                      <div
+                        data-no-card-toggle
+                        className="grid grid-cols-3 sm:flex items-center gap-1.5 sm:gap-2 w-full sm:w-auto"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {/* Action 1: Prayed */}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleSetStatus(prayer.id, 'PRAYED_ON_TIME');
+                          }}
+                          className="min-h-[38px] sm:min-h-[40px] px-2.5 sm:px-3 py-1.5 rounded-xl text-[11px] sm:text-xs font-semibold leading-tight text-center transition-all duration-150 flex items-center justify-center cursor-pointer bg-emerald-50 hover:bg-emerald-100 active:bg-emerald-200 text-emerald-800 border border-emerald-300 dark:bg-emerald-950/50 dark:hover:bg-emerald-900/60 dark:text-emerald-300 dark:border-emerald-700/80 shadow-2xs focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:outline-none"
+                          aria-label={`${t.dashboard.markPrayed}: ${prayerLabel}`}
+                        >
+                          {t.dashboard.markPrayed}
+                        </button>
 
-                    <button
-                      type="button"
-                      onClick={() => setActiveMenuPrayerId(isMenuOpen ? null : prayer.id)}
-                      className="min-h-[44px] min-w-[44px] flex items-center justify-center -mr-2 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 dark:hover:text-slate-200 cursor-pointer transition-colors"
-                      title={t.dashboard.changeStatus}
-                      aria-label={t.dashboard.changeStatus}
-                    >
-                      <ChevronDown className={`w-4 h-4 transition-transform ${isMenuOpen ? 'rotate-180' : ''}`} />
-                    </button>
+                        {/* Action 2: Made Up */}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleSetStatus(prayer.id, 'MADE_UP');
+                          }}
+                          className="min-h-[38px] sm:min-h-[40px] px-2.5 sm:px-3 py-1.5 rounded-xl text-[11px] sm:text-xs font-semibold leading-tight text-center transition-all duration-150 flex items-center justify-center cursor-pointer bg-sky-50 hover:bg-sky-100 active:bg-sky-200 text-sky-800 border border-sky-300 dark:bg-sky-950/50 dark:hover:bg-sky-900/60 dark:text-sky-300 dark:border-sky-700/80 shadow-2xs focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:outline-none"
+                          aria-label={`${t.dashboard.markMadeUp}: ${prayerLabel}`}
+                        >
+                          {t.dashboard.markMadeUp}
+                        </button>
+
+                        {/* Action 3: Missed */}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleSetStatus(prayer.id, 'MISSED');
+                          }}
+                          className="min-h-[38px] sm:min-h-[40px] px-2.5 sm:px-3 py-1.5 rounded-xl text-[11px] sm:text-xs font-semibold leading-tight text-center transition-all duration-150 flex items-center justify-center cursor-pointer bg-rose-50 hover:bg-rose-100 active:bg-rose-200 text-rose-800 border border-rose-300 dark:bg-rose-950/50 dark:hover:bg-rose-900/60 dark:text-rose-300 dark:border-rose-700/80 shadow-2xs focus-visible:ring-2 focus-visible:ring-rose-500 focus-visible:outline-none"
+                          aria-label={`${t.dashboard.markMissed}: ${prayerLabel}`}
+                        >
+                          {t.dashboard.markMissed}
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Standard status badge & dropdown trigger (on sm: and up, or mobile when not overdue) */}
+                    <div className={`items-center gap-1 sm:gap-2 shrink-0 ${isOverdue ? 'hidden sm:flex' : 'flex'}`}>
+                      <span
+                        className={`text-[11px] font-semibold px-2.5 py-1 rounded-full border ${config.badgeClass}`}
+                      >
+                        {statusLabel}
+                      </span>
+
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setActiveMenuPrayerId(isMenuOpen ? null : prayer.id);
+                        }}
+                        className="min-h-[44px] min-w-[44px] flex items-center justify-center -mr-2 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 dark:hover:text-slate-200 cursor-pointer transition-colors focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:outline-none"
+                        title={t.dashboard.changeStatus}
+                        aria-label={t.dashboard.changeStatus}
+                        aria-expanded={isMenuOpen}
+                        aria-controls={`prayer-menu-${prayer.id}`}
+                      >
+                        <ChevronDown className={`w-4 h-4 transition-transform ${isMenuOpen ? 'rotate-180' : ''}`} />
+                      </button>
+                    </div>
                   </div>
                 </div>
 
                 {/* 3 Canonical Status Action Buttons: Prayed, Made Up, Qaza (+ Reset if active) */}
                 {isMenuOpen && (
-                  <div className="mt-3 pt-3 border-t border-slate-200 dark:border-slate-800 space-y-2">
+                  <div
+                    id={`prayer-menu-${prayer.id}`}
+                    data-no-card-toggle
+                    className="mt-3 pt-3 border-t border-slate-200 dark:border-slate-800 space-y-2"
+                    onClick={(e) => e.stopPropagation()}
+                  >
                     <div className="grid grid-cols-3 gap-2">
                       {/* 1. Prayed */}
                       <button
                         type="button"
-                        onClick={() => handleSetStatus(prayer.id, 'PRAYED_ON_TIME')}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleSetStatus(prayer.id, 'PRAYED_ON_TIME');
+                        }}
                         className={`min-h-[44px] px-1.5 sm:px-2 py-2 sm:py-2.5 rounded-xl text-[11px] sm:text-xs md:text-sm font-semibold leading-tight text-center transition-colors duration-150 flex items-center justify-center cursor-pointer focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 focus-visible:outline-none ${
                           prayer.status === 'PRAYED_ON_TIME' || prayer.status === 'PRAYED' || prayer.status === 'PRAYED_LATE'
                             ? 'bg-emerald-600 text-white font-bold shadow-xs border border-emerald-600 dark:bg-emerald-500 dark:border-emerald-500'
@@ -1587,7 +1688,10 @@ export default function HomeDashboard({
                       {/* 2. Made Up */}
                       <button
                         type="button"
-                        onClick={() => handleSetStatus(prayer.id, 'MADE_UP')}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleSetStatus(prayer.id, 'MADE_UP');
+                        }}
                         className={`min-h-[44px] px-1.5 sm:px-2 py-2 sm:py-2.5 rounded-xl text-[11px] sm:text-xs md:text-sm font-semibold leading-tight text-center transition-colors duration-150 flex items-center justify-center cursor-pointer focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 focus-visible:outline-none ${
                           prayer.status === 'MADE_UP'
                             ? 'bg-sky-600 text-white font-bold shadow-xs border border-sky-600 dark:bg-sky-500 dark:border-sky-500'
@@ -1600,7 +1704,10 @@ export default function HomeDashboard({
                       {/* 3. Qaza */}
                       <button
                         type="button"
-                        onClick={() => handleSetStatus(prayer.id, 'MISSED')}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleSetStatus(prayer.id, 'MISSED');
+                        }}
                         className={`min-h-[44px] px-1.5 sm:px-2 py-2 sm:py-2.5 rounded-xl text-[11px] sm:text-xs md:text-sm font-semibold leading-tight text-center transition-colors duration-150 flex items-center justify-center cursor-pointer focus-visible:ring-2 focus-visible:ring-rose-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 focus-visible:outline-none ${
                           prayer.status === 'MISSED'
                             ? 'bg-rose-600 text-white font-bold shadow-xs border border-rose-600 dark:bg-rose-500 dark:border-rose-500'
@@ -1616,7 +1723,10 @@ export default function HomeDashboard({
                       <div className="flex justify-end pt-1">
                         <button
                           type="button"
-                          onClick={() => handleSetStatus(prayer.id, 'PENDING')}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleSetStatus(prayer.id, 'PENDING');
+                          }}
                           className="min-h-[44px] px-3 py-1 text-xs text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 underline cursor-pointer flex items-center gap-1 focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 focus-visible:outline-none rounded-lg font-medium"
                         >
                           {t.dashboard.resetToPending}

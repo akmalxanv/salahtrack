@@ -18,7 +18,7 @@
  * Governing Standard: AGENTS.md & PM Architectural Specification
  */
 
-import type { PrayerId } from '../types/prayer.ts';
+import type { PrayerId, PrayerItem } from '../types/prayer.ts';
 import { getYesterdayString } from './streak.ts';
 
 export const DEFAULT_FAJR_TIME = '04:47';
@@ -125,6 +125,16 @@ export function timeStringToMinutes(timeStr?: string, defaultTime = DEFAULT_FAJR
   return timeToMinutes(hours, minutes);
 }
 
+const DANGEROUS_PROTO_KEYS = new Set([
+  '__proto__',
+  'constructor',
+  'prototype',
+  'toString',
+  'valueOf',
+  'hasOwnProperty',
+  'isPrototypeOf',
+]);
+
 /**
  * Validates and sanitizes IANA timezone strings against prototype pollution,
  * control character injection, and invalid formats.
@@ -135,9 +145,7 @@ export function sanitizeTimezone(tz?: unknown): string {
   if (
     !trimmed ||
     trimmed.length > 64 ||
-    trimmed === '__proto__' ||
-    trimmed === 'constructor' ||
-    trimmed === 'prototype' ||
+    DANGEROUS_PROTO_KEYS.has(trimmed) ||
     !/^[A-Za-z0-9_\-+]+(?:\/[A-Za-z0-9_\-+]+)*$/.test(trimmed)
   ) {
     return DEFAULT_TIMEZONE;
@@ -363,4 +371,156 @@ export function resolvePrayerCycle(options: PrayerCycleOptions = {}): PrayerCycl
     hoursUntilNext,
     minutesUntilNext,
   };
+}
+
+/**
+ * Determines whether an obligatory prayer in the current liturgical cycle is overdue.
+ *
+ * Requirements:
+ * - If prayer.status !== 'PENDING', returns false (already resolved: PRAYED_ON_TIME, MISSED, MADE_UP, etc.).
+ * - If prayer or prayerId is not found, returns false.
+ * - Uses getZonedDateParts(now, timezone) and timeStringToMinutes for robust temporal calculation.
+ * - For Fajr: It becomes overdue once sunrise (prayer.endTime) has arrived or once Dhuhr begins (if sunrise not available).
+ * - For Dhuhr: Overdue once Asr start time begins (currentMinutes >= asrMinutes).
+ * - For Asr: Overdue once Maghrib start time begins (currentMinutes >= maghribMinutes).
+ * - For Maghrib: Overdue once Isha start time begins (currentMinutes >= ishaMinutes).
+ * - For Isha: In the current liturgical day, Isha is active overnight until Fajr.
+ *   If current time has reached or passed tomorrow's Fajr (or in post-midnight after Fajr), it is overdue.
+ * - In post-midnight pre-Fajr window (00:00 to Fajr adhan):
+ *   The active liturgical date is yesterday. Yesterday's Fajr, Dhuhr, Asr, and Maghrib are overdue.
+ *   Isha continues to be active overnight until Fajr adhan (not overdue).
+ */
+export function isPrayerOverdue(
+  prayerId: PrayerId,
+  prayers: PrayerItem[],
+  now: Date = new Date(),
+  timezone: string = DEFAULT_TIMEZONE
+): boolean {
+  if (!Array.isArray(prayers) || prayers.length === 0) {
+    return false;
+  }
+
+  const targetPrayer = prayers.find((p) => p && p.id === prayerId);
+  if (!targetPrayer) {
+    return false;
+  }
+
+  // Once resolved (not PENDING), overdue actions are not displayed
+  if (targetPrayer.status !== 'PENDING') {
+    return false;
+  }
+
+  const safeTz = sanitizeTimezone(timezone);
+  const fajrItem = prayers.find((p) => p && p.id === 'fajr');
+  const dhuhrItem = prayers.find((p) => p && p.id === 'dhuhr');
+  const asrItem = prayers.find((p) => p && p.id === 'asr');
+  const maghribItem = prayers.find((p) => p && p.id === 'maghrib');
+  const ishaItem = prayers.find((p) => p && p.id === 'isha');
+
+  const fajrTime = fajrItem?.time;
+  const fajrMinutes = timeStringToMinutes(fajrTime, DEFAULT_FAJR_TIME);
+  const dhuhrMinutes = timeStringToMinutes(dhuhrItem?.time, DEFAULT_DHUHR_TIME);
+  const asrMinutes = timeStringToMinutes(asrItem?.time || dhuhrItem?.endTime, DEFAULT_ASR_TIME);
+  const maghribMinutes = timeStringToMinutes(maghribItem?.time || asrItem?.endTime, DEFAULT_MAGHRIB_TIME);
+  const ishaMinutes = timeStringToMinutes(ishaItem?.time || maghribItem?.endTime, DEFAULT_ISHA_TIME);
+
+  // If explicit date envelope exists on target prayer or prayers array (guarded against prototype pollution)
+  const targetObj = targetPrayer as unknown as Record<string, unknown>;
+  const prayersObj = prayers as unknown as Record<string, unknown>;
+  const rawDate =
+    (typeof targetPrayer === 'object' && targetPrayer !== null && Object.prototype.hasOwnProperty.call(targetObj, 'date') && typeof targetObj.date === 'string'
+      ? targetObj.date
+      : undefined) ||
+    (typeof prayers === 'object' && prayers !== null && Object.prototype.hasOwnProperty.call(prayersObj, 'date') && typeof prayersObj.date === 'string'
+      ? prayersObj.date
+      : undefined);
+
+  if (typeof rawDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(rawDate)) {
+    const currentLiturgical = getLiturgicalDate(now, fajrTime || DEFAULT_FAJR_TIME, safeTz);
+    if (rawDate < currentLiturgical) {
+      return true; // Any PENDING prayer from a past liturgical day is overdue
+    }
+    if (rawDate > currentLiturgical) {
+      return false; // Future day prayers cannot be overdue
+    }
+  }
+
+  // If item has updatedAt indicating an earlier liturgical date
+  const rawUpdatedAt =
+    typeof targetPrayer === 'object' && targetPrayer !== null && Object.prototype.hasOwnProperty.call(targetObj, 'updatedAt') && typeof targetObj.updatedAt === 'string'
+      ? targetObj.updatedAt
+      : undefined;
+
+  if (!rawDate && rawUpdatedAt) {
+    const updatedDate = new Date(rawUpdatedAt);
+    if (!isNaN(updatedDate.getTime())) {
+      const updatedLiturgical = getLiturgicalDate(updatedDate, fajrTime || DEFAULT_FAJR_TIME, safeTz);
+      const currentLiturgical = getLiturgicalDate(now, fajrTime || DEFAULT_FAJR_TIME, safeTz);
+      if (updatedLiturgical < currentLiturgical) {
+        return true;
+      }
+    }
+  }
+
+  const { hour, minute } = getZonedDateParts(now, safeTz);
+  const currentMinutes = timeToMinutes(hour, minute);
+
+  // Post-midnight pre-Fajr window: 00:00 -> Fajr adhan
+  // In this window, liturgical date is yesterday. Yesterday's Fajr, Dhuhr, Asr, Maghrib are overdue.
+  // Yesterday's Isha is actively extending overnight until Fajr.
+  const isPostMidnight = currentMinutes < fajrMinutes;
+
+  switch (prayerId) {
+    case 'fajr': {
+      if (isPostMidnight) {
+        return true;
+      }
+      const rawEndTime = targetPrayer.endTime;
+      const hasEndTime =
+        typeof rawEndTime === 'string' &&
+        rawEndTime.trim().length > 0 &&
+        rawEndTime.includes(':');
+
+      if (hasEndTime) {
+        const sunriseMinutes = timeStringToMinutes(rawEndTime, '06:19');
+        return currentMinutes >= sunriseMinutes;
+      }
+      // If sunrise not available, overdue once Dhuhr begins
+      return currentMinutes >= dhuhrMinutes;
+    }
+
+    case 'dhuhr': {
+      if (isPostMidnight) {
+        return true;
+      }
+      return currentMinutes >= asrMinutes;
+    }
+
+    case 'asr': {
+      if (isPostMidnight) {
+        return true;
+      }
+      return currentMinutes >= maghribMinutes;
+    }
+
+    case 'maghrib': {
+      if (isPostMidnight) {
+        return true;
+      }
+      return currentMinutes >= ishaMinutes;
+    }
+
+    case 'isha': {
+      // In the current liturgical day, Isha is active overnight until Fajr.
+      // If current time has reached or passed tomorrow's Fajr (or in post-midnight after Fajr), it is overdue.
+      // Within the active liturgical cycle (from today's Fajr through tonight until tomorrow's Fajr):
+      // - daytime: not overdue
+      // - evening: active, not overdue
+      // - post-midnight (00:00 -> Fajr): active overnight, not overdue
+      return false;
+    }
+
+    default:
+      return false;
+  }
 }
