@@ -8,7 +8,6 @@ import {
   Copy,
   Check,
   LogOut,
-  Medal,
   Clock,
   KeyRound,
   Shield,
@@ -313,6 +312,36 @@ export default function GroupsManager() {
     });
   };
 
+  // Modern, vibrant numerical ranking badge helper
+  const getRankBadge = (rank: number) => {
+    if (rank === 1) {
+      return (
+        <span className="inline-flex items-center justify-center w-8 h-8 rounded-xl bg-gradient-to-tr from-amber-500 via-amber-400 to-yellow-300 text-slate-950 font-black text-xs shadow-sm shadow-amber-500/20 border border-amber-300 shrink-0">
+          1st
+        </span>
+      );
+    }
+    if (rank === 2) {
+      return (
+        <span className="inline-flex items-center justify-center w-8 h-8 rounded-xl bg-gradient-to-tr from-slate-400 via-slate-300 to-slate-200 text-slate-900 font-black text-xs shadow-sm shadow-slate-400/20 border border-slate-300 shrink-0">
+          2nd
+        </span>
+      );
+    }
+    if (rank === 3) {
+      return (
+        <span className="inline-flex items-center justify-center w-8 h-8 rounded-xl bg-gradient-to-tr from-amber-700 via-amber-600 to-amber-500 text-white font-black text-xs shadow-sm shadow-amber-700/20 border border-amber-600 shrink-0">
+          3rd
+        </span>
+      );
+    }
+    return (
+      <span className="inline-flex items-center justify-center w-8 h-8 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 font-bold text-xs border border-slate-200 dark:border-slate-700 shrink-0">
+        #{rank}
+      </span>
+    );
+  };
+
   if (!user) {
     return (
       <div className="flex flex-col items-center justify-center p-12 text-center rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs">
@@ -533,23 +562,7 @@ export default function GroupsManager() {
                 >
                   {/* Left: Rank & User Info */}
                   <div className="flex items-center gap-3.5 min-w-0">
-                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl font-bold text-sm">
-                      {member.rank === 1 ? (
-                        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-amber-100 text-amber-600 dark:bg-amber-950/60 dark:text-amber-400">
-                          <Medal className="w-5 h-5 fill-amber-400 stroke-amber-600" />
-                        </span>
-                      ) : member.rank === 2 ? (
-                        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-200 text-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                          <Medal className="w-5 h-5 fill-slate-300 stroke-slate-500" />
-                        </span>
-                      ) : member.rank === 3 ? (
-                        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-amber-900/10 text-amber-700 dark:bg-amber-950/40 dark:text-amber-500">
-                          <Medal className="w-5 h-5 fill-amber-700/60 stroke-amber-700" />
-                        </span>
-                      ) : (
-                        <span className="text-slate-400 font-semibold">{member.rank}</span>
-                      )}
-                    </div>
+                    {getRankBadge(member.rank)}
 
                     <div className="min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">

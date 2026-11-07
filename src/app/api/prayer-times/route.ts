@@ -37,6 +37,136 @@ export const METHOD_MAP: Record<string, number> = {
   RUSSIA: 14, // Spiritual Administration of Muslims of Russia
 };
 
+export interface PrayerTimesTimings {
+  fajr: { time: string; endTime: string };
+  dhuhr: { time: string; endTime: string };
+  asr: { time: string; endTime: string };
+  maghrib: { time: string; endTime: string };
+  isha: { time: string; endTime: string; isOvernight: boolean };
+}
+
+export interface PrayerTimesPayload {
+  success: true;
+  city: string;
+  country: string;
+  timezone: string;
+  location: {
+    latitude: number;
+    longitude: number;
+  };
+  method: number;
+  school: 'Hanafi' | 'Shafi';
+  timings: PrayerTimesTimings;
+  source: 'live';
+}
+
+export interface PrayerTimesCacheEntry {
+  data: PrayerTimesPayload;
+  cachedAt: number;
+  expiresAt: number;
+}
+
+export const MAX_PRAYER_TIMES_CACHE_ENTRIES = 1000;
+export const PRAYER_TIMES_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+// In-memory cache & in-flight request deduplication map
+const prayerTimesCache = new Map<string, PrayerTimesCacheEntry>();
+const inFlightRequests = new Map<string, Promise<PrayerTimesPayload | null>>();
+
+/**
+ * Builds a deterministic cache key from prayer calculation parameters:
+ * Key format: `${date || 'today'}_${lat.toFixed(4)}_${lng.toFixed(4)}_${method}_${school}`
+ */
+export function buildPrayerTimesCacheKey(
+  date: string | null | undefined,
+  lat: number,
+  lng: number,
+  method: number,
+  school: number
+): string {
+  const dateKey =
+    date && /^\d{4}-\d{2}-\d{2}$/.test(date.trim())
+      ? date.trim()
+      : 'today';
+  return `${dateKey}_${lat.toFixed(4)}_${lng.toFixed(4)}_${method}_${school}`;
+}
+
+/**
+ * Clears the prayer times in-memory cache and cancels any in-flight references.
+ * Exported for test environment isolation and administrative cache resets.
+ */
+export function clearPrayerTimesCache(): void {
+  prayerTimesCache.clear();
+  inFlightRequests.clear();
+}
+
+/**
+ * Returns current count of entries in the in-memory cache.
+ */
+export function getPrayerTimesCacheSize(): number {
+  return prayerTimesCache.size;
+}
+
+/**
+ * Returns current count of in-flight deduplicated requests.
+ */
+export function getInFlightRequestsSize(): number {
+  return inFlightRequests.size;
+}
+
+/**
+ * Retrieves a valid, unexpired entry from the in-memory cache (LRU ordering refreshed).
+ */
+export function getPrayerTimesFromCache(key: string): PrayerTimesPayload | null {
+  const entry = prayerTimesCache.get(key);
+  if (!entry) return null;
+
+  if (Date.now() > entry.expiresAt) {
+    prayerTimesCache.delete(key);
+    return null;
+  }
+
+  // Refresh LRU order (delete & re-insert at end of Map)
+  prayerTimesCache.delete(key);
+  prayerTimesCache.set(key, entry);
+
+  return entry.data;
+}
+
+/**
+ * Persists a prayer times payload into the in-memory TTL cache with LRU eviction guard.
+ */
+export function setPrayerTimesInCache(
+  key: string,
+  data: PrayerTimesPayload,
+  ttlMs: number = PRAYER_TIMES_CACHE_TTL_MS
+): void {
+  const now = Date.now();
+
+  // 1. Evict expired entries if cache is at or exceeds capacity limit
+  if (prayerTimesCache.size >= MAX_PRAYER_TIMES_CACHE_ENTRIES) {
+    for (const [k, entry] of prayerTimesCache.entries()) {
+      if (entry.expiresAt <= now) {
+        prayerTimesCache.delete(k);
+      }
+    }
+  }
+
+  // 2. If still at capacity, evict the least recently used / oldest item (first key in Map)
+  if (prayerTimesCache.size >= MAX_PRAYER_TIMES_CACHE_ENTRIES) {
+    const oldestKey = prayerTimesCache.keys().next().value;
+    if (oldestKey !== undefined) {
+      prayerTimesCache.delete(oldestKey);
+    }
+  }
+
+  prayerTimesCache.set(key, {
+    data,
+    cachedAt: now,
+    expiresAt: now + ttlMs,
+  });
+}
+
 /**
  * Checks whether the given coordinates or city name match Tashkent (within 0.05°).
  * Verified fallback timings are strictly reserved for Tashkent.
@@ -44,12 +174,15 @@ export const METHOD_MAP: Record<string, number> = {
 function isTashkentLocation(lat: number, lng: number, city?: string): boolean {
   if (city) {
     const normalized = city.trim().toLowerCase();
-    if (
+    const isTashkentName =
       normalized === 'tashkent' ||
       normalized === 'toshkent' ||
       normalized === 'ташкент' ||
-      normalized === 'طشقند'
-    ) {
+      normalized === 'طشقند';
+    if (!isTashkentName && normalized !== 'custom location' && normalized !== '') {
+      return false; // Explicitly NOT Tashkent!
+    }
+    if (isTashkentName) {
       return true;
     }
   }
@@ -62,6 +195,7 @@ function isTashkentLocation(lat: number, lng: number, city?: string): boolean {
  * Safely handles external API failures.
  * Returns verified fallback timings ONLY for Tashkent.
  * For non-Tashkent locations, returns an explicit 502 error to avoid silently displaying wrong prayer times.
+ * Note: Failures and fallback responses are NEVER cached in-memory.
  */
 function handleApiFailure(
   lat: number,
@@ -220,6 +354,29 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    // 3.1. Guard against unresolvable non-Tashkent city without coordinates:
+    // Never silently default coordinates to Tashkent when another city was requested.
+    if (cityQuery && !coordsResolved) {
+      const normalized = cityQuery.trim().toLowerCase();
+      if (
+        normalized === 'tashkent' ||
+        normalized === 'toshkent' ||
+        normalized === 'ташкент' ||
+        normalized === 'طشقند'
+      ) {
+        coordsResolved = true;
+      } else {
+        return NextResponse.json(
+          {
+            success: false,
+            error: `Unable to resolve geographic coordinates for city "${cityQuery}". Please specify latitude and longitude.`,
+            code: 'COORDINATES_REQUIRED',
+          },
+          { status: 400 }
+        );
+      }
+    }
+
     // 4. Resolve calculation method
     if (methodQuery) {
       const upper = methodQuery.toUpperCase();
@@ -254,23 +411,114 @@ export async function GET(request: NextRequest) {
         ? dateQuery.split('-').reverse().join('-') // convert YYYY-MM-DD to DD-MM-YYYY for Aladhan
         : '';
 
-    const apiUrl = endpointDate
-      ? `https://api.aladhan.com/v1/timings/${endpointDate}?latitude=${lat}&longitude=${lng}&method=${method}&school=${school}`
-      : `https://api.aladhan.com/v1/timings?latitude=${lat}&longitude=${lng}&method=${method}&school=${school}`;
+    // Cache key construction: ${date || 'today'}_${lat.toFixed(4)}_${lng.toFixed(4)}_${method}_${school}
+    const cacheKey = buildPrayerTimesCacheKey(dateQuery, lat, lng, method, school);
 
-    // 7. Fetch from Aladhan API with resilient 5-second timeout
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    const skipCache =
+      request.headers.get('cache-control') === 'no-cache' ||
+      request.headers.get('cache-control') === 'no-store' ||
+      request.headers.get('x-skip-cache') === 'true' ||
+      searchParams.get('skipCache') === 'true' ||
+      searchParams.get('fresh') === 'true';
 
-    const res = await fetch(apiUrl, {
-      signal: controller.signal,
-      next: { revalidate: 3600 },
-      headers: { Accept: 'application/json' },
-    });
+    // 7. Check In-Memory TTL Cache (Fast path <1ms)
+    if (!skipCache) {
+      const cached = getPrayerTimesFromCache(cacheKey);
+      if (cached) {
+        return NextResponse.json(cached, {
+          headers: {
+            'X-Cache': 'HIT',
+          },
+        });
+      }
+    }
 
-    clearTimeout(timeoutId);
+    // 8. Deduplicate In-Flight Requests
+    let isDeduped = false;
+    let inFlightPromise = inFlightRequests.get(cacheKey);
 
-    if (!res.ok) {
+    if (inFlightPromise && !skipCache) {
+      isDeduped = true;
+    } else {
+      const apiUrl = endpointDate
+        ? `https://api.aladhan.com/v1/timings/${endpointDate}?latitude=${lat}&longitude=${lng}&method=${method}&school=${school}`
+        : `https://api.aladhan.com/v1/timings?latitude=${lat}&longitude=${lng}&method=${method}&school=${school}`;
+
+      inFlightPromise = (async (): Promise<PrayerTimesPayload | null> => {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+        try {
+          const res = await fetch(apiUrl, {
+            signal: controller.signal,
+            next: { revalidate: 3600 },
+            headers: { Accept: 'application/json' },
+          });
+
+          clearTimeout(timeoutId);
+
+          if (!res.ok) {
+            return null;
+          }
+
+          const data = await res.json();
+          const timings = data?.data?.timings;
+          const meta = data?.data?.meta;
+
+          if (!timings) {
+            return null;
+          }
+
+          const formatTime = (t: string) => t.slice(0, 5);
+
+          const payload: PrayerTimesPayload = {
+            success: true,
+            city:
+              cityName !== 'Custom Location' && cityName !== TASHKENT_COORDS.city
+                ? cityName
+                : meta?.timezone?.split('/')[1]?.replace(/_/g, ' ') || cityName,
+            country: countryName || meta?.timezone?.split('/')[0] || TASHKENT_COORDS.country,
+            timezone: tzName || meta?.timezone || TASHKENT_COORDS.timezone,
+            location: {
+              latitude: lat,
+              longitude: lng,
+            },
+            method,
+            school: school === 1 ? 'Hanafi' : 'Shafi',
+            timings: {
+              fajr: { time: formatTime(timings.Fajr), endTime: formatTime(timings.Sunrise) },
+              dhuhr: { time: formatTime(timings.Dhuhr), endTime: formatTime(timings.Asr) },
+              asr: { time: formatTime(timings.Asr), endTime: formatTime(timings.Maghrib) },
+              maghrib: { time: formatTime(timings.Maghrib), endTime: formatTime(timings.Isha) },
+              isha: {
+                time: formatTime(timings.Isha),
+                endTime: formatTime(timings.Fajr),
+                isOvernight: true,
+              },
+            },
+            source: 'live',
+          };
+
+          // Cache only verified live API responses
+          setPrayerTimesInCache(cacheKey, payload);
+
+          return payload;
+        } catch (fetchErr) {
+          clearTimeout(timeoutId);
+          console.error('Failed to fetch prayer times:', fetchErr);
+          return null;
+        }
+      })().finally(() => {
+        inFlightRequests.delete(cacheKey);
+      });
+
+      inFlightRequests.set(cacheKey, inFlightPromise);
+    }
+
+    const payload = await inFlightPromise;
+
+    if (!payload) {
+      // API failed: DO NOT cache failure or fallback
       return handleApiFailure(
         lat,
         lng,
@@ -282,42 +530,10 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const data = await res.json();
-    const timings = data?.data?.timings;
-    const meta = data?.data?.meta;
-
-    if (!timings) {
-      return handleApiFailure(lat, lng, cityName, countryName, tzName, method);
-    }
-
-    const formatTime = (t: string) => t.slice(0, 5);
-
-    return NextResponse.json({
-      success: true,
-      city:
-        cityName !== 'Custom Location' && cityName !== TASHKENT_COORDS.city
-          ? cityName
-          : meta?.timezone?.split('/')[1]?.replace(/_/g, ' ') || cityName,
-      country: countryName || meta?.timezone?.split('/')[0] || TASHKENT_COORDS.country,
-      timezone: tzName || meta?.timezone || TASHKENT_COORDS.timezone,
-      location: {
-        latitude: lat,
-        longitude: lng,
+    return NextResponse.json(payload, {
+      headers: {
+        'X-Cache': isDeduped ? 'DEDUPED' : 'MISS',
       },
-      method,
-      school: school === 1 ? 'Hanafi' : 'Shafi',
-      timings: {
-        fajr: { time: formatTime(timings.Fajr), endTime: formatTime(timings.Sunrise) },
-        dhuhr: { time: formatTime(timings.Dhuhr), endTime: formatTime(timings.Asr) },
-        asr: { time: formatTime(timings.Asr), endTime: formatTime(timings.Maghrib) },
-        maghrib: { time: formatTime(timings.Maghrib), endTime: formatTime(timings.Isha) },
-        isha: {
-          time: formatTime(timings.Isha),
-          endTime: formatTime(timings.Fajr),
-          isOvernight: true,
-        },
-      },
-      source: 'live',
     });
   } catch (error) {
     console.error('Failed to fetch prayer times:', error);

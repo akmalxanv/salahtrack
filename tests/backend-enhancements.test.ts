@@ -9,7 +9,7 @@ import { Group } from '../src/models/Group.ts';
 import { PrayerRecord } from '../src/models/Prayer.ts';
 
 import { PUT as updateProfileHandler } from '../src/app/api/user/profile/route.ts';
-import { GET as getPrayerTimesHandler, METHOD_MAP } from '../src/app/api/prayer-times/route.ts';
+import { GET as getPrayerTimesHandler, METHOD_MAP, clearPrayerTimesCache } from '../src/app/api/prayer-times/route.ts';
 import { GET as getMemberPrayersHandler } from '../src/app/api/groups/[id]/members/[memberId]/prayers/route.ts';
 import { GET as getMemberHistoryHandler } from '../src/app/api/groups/[id]/member-history/route.ts';
 import { GET as getLeaderboardHandler } from '../src/app/api/leaderboard/route.ts';
@@ -351,6 +351,7 @@ describe('Backend Enhancements: Location, Methods, Circle Prayer History & Leade
     setupMocks();
     setupMockFetch();
     mockFetchFailure = false;
+    clearPrayerTimesCache();
   });
 
   after(() => {
@@ -582,6 +583,31 @@ describe('Backend Enhancements: Location, Methods, Circle Prayer History & Leade
         assert.equal(json.source, 'fallback');
         assert.ok(json.timings);
         assert.equal(json.city, 'Tashkent');
+      } finally {
+        mockFetchFailure = false;
+      }
+    });
+
+    it('rejects unknown city name when coordinates cannot be resolved', async () => {
+      const req = new NextRequest('http://localhost:3000/api/prayer-times?city=NonExistentCityXYZ');
+      const res = await getPrayerTimesHandler(req);
+      assert.equal(res.status, 400);
+      const json = await res.json();
+      assert.equal(json.success, false);
+      assert.equal(json.code, 'COORDINATES_REQUIRED');
+      assert.ok(json.error.includes('NonExistentCityXYZ'));
+    });
+
+    it('never serves Tashkent fallback for named non-Tashkent cities even on external API failure', async () => {
+      mockFetchFailure = true;
+      try {
+        // Query London with coordinates
+        const req = new NextRequest('http://localhost:3000/api/prayer-times?city=London&lat=51.5074&lng=-0.1278');
+        const res = await getPrayerTimesHandler(req);
+        assert.equal(res.status, 502);
+        const json = await res.json();
+        assert.equal(json.success, false);
+        assert.equal(json.code, 'PRAYER_TIMES_UNAVAILABLE');
       } finally {
         mockFetchFailure = false;
       }

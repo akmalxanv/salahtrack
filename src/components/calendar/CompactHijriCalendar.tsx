@@ -148,7 +148,7 @@ export default function CompactHijriCalendar({
       : HIJRI_MONTHS.en[monthIdx]);
 
   const arabicYearStr = toArabicNumerals(viewYear);
-  const eraStr = t.calendar.hijri?.era || (lang === 'uz' ? 'hijriy' : lang === 'ru' ? 'г. хиджры' : 'AH');
+  const eraStr = t.calendar.hijri?.era || '';
   const arabicEraStr = t.calendar.hijri?.arabicEra || 'هـ';
 
   // Whether user is viewing current Hijri month

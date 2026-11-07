@@ -17,12 +17,14 @@ export default function Sidebar() {
   return (
     <aside className="hidden md:flex flex-col w-64 h-screen sticky top-0 border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shrink-0">
       <div className="flex items-center gap-3 mb-8">
-        <BrandLogo size={40} priority />
-        <div>
-          <h1 className="font-bold text-slate-900 dark:text-slate-100 text-base leading-tight">
+        <BrandLogo size={36} priority />
+        <div className="flex flex-col min-w-0">
+          <span className="font-bold text-slate-900 dark:text-slate-100 text-lg tracking-tight leading-tight">
             {t.appTitle}
-          </h1>
-          <p className="text-xs text-slate-500 dark:text-slate-400">{t.appSubtitle}</p>
+          </span>
+          <span className="text-[11px] font-normal text-slate-500 dark:text-slate-400 truncate">
+            {t.appSubtitle}
+          </span>
         </div>
       </div>
 

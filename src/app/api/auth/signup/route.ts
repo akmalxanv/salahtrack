@@ -12,15 +12,42 @@ import {
   PRIMARY_SESSION_COOKIE,
   LEGACY_SESSION_COOKIE,
   sanitizeUser,
+  checkRateLimit,
+  recordFailedAttempt,
+  resetRateLimit,
+  createRateLimitKey,
 } from '../../../../lib/auth/index.ts';
 
 export async function POST(request: NextRequest) {
   try {
+    const ipAddress = request.headers.get('x-forwarded-for')?.split(',')[0].trim() || '127.0.0.1';
+    const rateLimitKey = createRateLimitKey(ipAddress, 'auth:signup');
+
+    // 0. Sliding-window rate limit check (Mitigate mass registration & CPU exhaustion)
+    const rateCheck = checkRateLimit(rateLimitKey);
+    if (!rateCheck.allowed) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Too many registration attempts. Please try again later.',
+          code: 'AUTH_RATE_LIMITED',
+          retryAfterSeconds: rateCheck.retryAfterSeconds,
+        },
+        {
+          status: 429,
+          headers: {
+            'Retry-After': String(rateCheck.retryAfterSeconds),
+          },
+        }
+      );
+    }
+
     const body = await request.json().catch(() => null);
 
     // 1. Validate payload
     const validation = validateSignupPayload(body);
     if (!validation.isValid || !validation.data) {
+      recordFailedAttempt(rateLimitKey);
       return NextResponse.json(
         {
           success: false,
@@ -43,6 +70,7 @@ export async function POST(request: NextRequest) {
     });
 
     if (existing) {
+      recordFailedAttempt(rateLimitKey);
       const isEmail = existing.email === email;
       return NextResponse.json(
         {
@@ -71,11 +99,13 @@ export async function POST(request: NextRequest) {
       },
     });
 
+    // Clear failed attempts on successful registration
+    resetRateLimit(rateLimitKey);
+
     // 6. Generate cryptographically secure session
     const sessionToken = generateSessionToken();
     const sessionExpiry = calculateSessionExpiry(false);
     const userAgent = request.headers.get('user-agent') || undefined;
-    const ipAddress = request.headers.get('x-forwarded-for')?.split(',')[0].trim() || '127.0.0.1';
 
     await Session.create({
       sessionToken,

@@ -11,11 +11,10 @@ import {
   CheckCircle2,
   AlertCircle,
   Flame,
-  Plus,
-  Minus,
   Loader2,
   LogIn,
   ChevronRight,
+  ChevronDown,
   Award,
   Check,
   Info,
@@ -48,15 +47,6 @@ import {
 } from '@/lib/storage-sync';
 
 const PRAYER_IDS: PrayerId[] = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
-
-// Frozen constant object to prevent React hook reference churn & infinite re-render loops
-const DEFAULT_QAZA_BY_PRAYER: Readonly<Record<PrayerId, number>> = Object.freeze({
-  fajr: 0,
-  dhuhr: 0,
-  asr: 0,
-  maghrib: 0,
-  isha: 0,
-});
 
 interface StatsData {
   today: {
@@ -158,16 +148,24 @@ function ProgressContent() {
   const [loadingHistory, setLoadingHistory] = useState(false);
 
   // Local fallback Qaza state & settled donations with stable defaults
-  const [localQaza, setLocalQaza] = useLocalStorage<number>('salahtrack_qaza_count', 0);
+  const [localQaza] = useLocalStorage<number>('salahtrack_qaza_count', 0);
   const [settledDonations] = useLocalStorage<number>('salahtrack_settled_donations', 0);
   const [paymentHistory, setPaymentHistory] = useState<QazaPaymentReceipt[]>([]);
+  const [expandedReceiptIds, setExpandedReceiptIds] = useState<Set<string>>(new Set());
   const [loadingPayments, setLoadingPayments] = useState(false);
-  const [isPayModalOpen, setIsPayModalOpen] = useState(false);
 
-  const [qazaByPrayer, setQazaByPrayer] = useLocalStorage<Record<PrayerId, number>>(
-    'salahtrack_qaza_prayers',
-    DEFAULT_QAZA_BY_PRAYER
-  );
+  const toggleExpandReceipt = useCallback((receiptId: string) => {
+    setExpandedReceiptIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(receiptId)) {
+        next.delete(receiptId);
+      } else {
+        next.add(receiptId);
+      }
+      return next;
+    });
+  }, []);
+  const [isPayModalOpen, setIsPayModalOpen] = useState(false);
 
   const userId = user?.id;
 
@@ -486,35 +484,6 @@ function ProgressContent() {
     return counts;
   }, [recordsByDate]);
 
-  // Qaza adjustment helpers:
-  // When fulfilling a qaza (-1), if there is a MISSED prayer in history, mark the oldest as MADE_UP.
-  // This clears the spiritual debt while leaving the financial fine intact (capped at 15,000 UZS).
-  const adjustQaza = useCallback(
-    (prayer: PrayerId, delta: number) => {
-      if (delta < 0) {
-        const missedRecords = Object.values(recordsByDate)
-          .filter((r) => r.prayers?.[prayer]?.status === 'MISSED')
-          .sort((a, b) => a.date.localeCompare(b.date));
-
-        if (missedRecords.length > 0) {
-          const target = missedRecords[0];
-          handleHistoricalCorrection(target.date, prayer, 'MADE_UP');
-        }
-      }
-
-      setQazaByPrayer((prev) => {
-        const current = prev?.[prayer] || 0;
-        const updated = Math.max(0, current + delta);
-        return {
-          ...prev,
-          [prayer]: updated,
-        };
-      });
-      setLocalQaza((prev) => Math.max(0, (prev || 0) + delta));
-    },
-    [recordsByDate, handleHistoricalCorrection, setQazaByPrayer, setLocalQaza]
-  );
-
   // Sorted list of historical records (descending date)
   const sortedHistoryRecords = useMemo(() => {
     return Object.values(recordsByDate).sort((a, b) => b.date.localeCompare(a.date));
@@ -552,21 +521,21 @@ function ProgressContent() {
     return calculateAccountabilityLedger(recordsByDate);
   }, [recordsByDate]);
 
-  const isAuthoritativeLoading = Boolean(user && loadingStats && !stats);
+  const isStatsLoading = Boolean(user && !stats);
 
   const fineItems = useMemo(() => {
-    return stats?.accountability?.breakdown || (isAuthoritativeLoading ? [] : localLedger.items);
-  }, [stats?.accountability?.breakdown, isAuthoritativeLoading, localLedger.items]);
+    return stats?.accountability?.breakdown || (isStatsLoading ? [] : localLedger.items);
+  }, [stats?.accountability?.breakdown, isStatsLoading, localLedger.items]);
 
   const accountabilityTotal =
     stats?.accountability?.totalFinancialDebt ??
     stats?.accountability?.totalAmount ??
-    (isAuthoritativeLoading ? 0 : localLedger.totalAmount);
+    (isStatsLoading ? 0 : localLedger.totalAmount);
 
   const pendingQazaCount =
     stats?.accountability?.pendingQazaCount ??
     stats?.accountability?.totalMissed ??
-    (isAuthoritativeLoading ? 0 : (localLedger.pendingQazaCount ?? localLedger.missedCount));
+    (isStatsLoading ? 0 : (localLedger.pendingQazaCount ?? localLedger.missedCount));
 
   const accountabilityOverdue =
     stats?.accountability?.totalOverdue ??
@@ -580,22 +549,10 @@ function ProgressContent() {
     return fineItems.reduce((sum, it) => sum + (it.overdueAmount || 0), 0);
   }, [fineItems]);
 
-  // Combined prayer-by-prayer Qaza tracking (considers manual counter and history missed records)
-  const displayQazaByPrayer = useMemo(() => {
-    const res: Record<PrayerId, number> = { fajr: 0, dhuhr: 0, asr: 0, maghrib: 0, isha: 0 };
-    for (const p of PRAYER_IDS) {
-      const manual = qazaByPrayer?.[p] || 0;
-      const fromHistory = historyMissedByPrayer[p] || 0;
-      res[p] = Math.max(manual, fromHistory);
-    }
-    return res;
-  }, [qazaByPrayer, historyMissedByPrayer]);
-
   // Total Qaza count for projection calculator and status
   const totalQazaCount = useMemo(() => {
-    const manualSum = Object.values(qazaByPrayer || {}).reduce((acc, val) => acc + (val || 0), 0);
-    return manualSum > 0 ? manualSum : (pendingQazaCount || localQaza || 0);
-  }, [qazaByPrayer, pendingQazaCount, localQaza]);
+    return pendingQazaCount || localQaza || 0;
+  }, [pendingQazaCount, localQaza]);
 
   return (
     <div className="space-y-4 sm:space-y-6">
@@ -691,11 +648,6 @@ function ProgressContent() {
           >
             <Scale className="w-4 h-4" />
             <span>{t.progress.tabs.qaza}</span>
-            {!isAuthoritativeLoading && accountabilityTotal > 0 && (
-              <span className="px-1.5 py-0.5 text-[10px] rounded-full bg-rose-100 dark:bg-rose-950/80 text-rose-800 dark:text-rose-300 font-bold">
-                {formatCurrency(accountabilityTotal, lang)}
-              </span>
-            )}
           </button>
         </nav>
       </div>
@@ -766,7 +718,7 @@ function ProgressContent() {
                   {t.accountability.title}
                 </span>
                 <div className="flex items-baseline gap-1.5">
-                  {isAuthoritativeLoading ? (
+                  {isStatsLoading ? (
                     <div className="h-7 w-20 bg-slate-200 dark:bg-slate-700 animate-pulse rounded" />
                   ) : (
                     <>
@@ -1020,12 +972,18 @@ function ProgressContent() {
                   {t.accountability.spiritualPendingCount}
                 </span>
                 <div className="flex items-baseline gap-2 mt-1">
-                  <span className="text-3xl sm:text-4xl font-black text-white">
-                    {pendingQazaCount}
-                  </span>
-                  <span className="text-xs text-sky-200">
-                    {t.accountability.prayersCount}
-                  </span>
+                  {isStatsLoading ? (
+                    <div className="h-9 w-24 bg-white/20 rounded-md animate-pulse" />
+                  ) : (
+                    <>
+                      <span className="text-3xl sm:text-4xl font-black text-white">
+                        {pendingQazaCount}
+                      </span>
+                      <span className="text-xs text-sky-200">
+                        {t.accountability.prayersCount}
+                      </span>
+                    </>
+                  )}
                 </div>
                 <p className="text-xs text-slate-300 mt-2">
                   {t.progress.missedPrayersCount.replace('{count}', String(pendingQazaCount))}
@@ -1044,42 +1002,49 @@ function ProgressContent() {
               </div>
             </div>
 
-            {/* Prayer-by-Prayer Counter Grid */}
+            {/* Actual Missed Prayers by Prayer (Derived strictly from prayer ledger) */}
             <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
               {PRAYER_IDS.map((p) => {
-                const count = displayQazaByPrayer[p] || 0;
+                const count = historyMissedByPrayer[p] || 0;
+                const isAllCaughtUp = count === 0;
+
                 return (
                   <div
                     key={p}
-                    className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900 shadow-xs text-center space-y-3"
+                    className={`rounded-2xl border p-4 shadow-xs text-center space-y-2.5 transition-all ${
+                      isAllCaughtUp
+                        ? 'border-emerald-200/80 bg-emerald-50/30 dark:border-emerald-900/50 dark:bg-emerald-950/15'
+                        : 'border-rose-200/80 bg-rose-50/30 dark:border-rose-900/50 dark:bg-rose-950/15'
+                    }`}
                   >
                     <span className="text-xs font-bold text-slate-700 dark:text-slate-300 capitalize block">
                       {t.prayers[p]}
                     </span>
-                    <p className="text-2xl font-bold text-slate-900 dark:text-slate-100">
-                      {count}
-                    </p>
-                    <div className="flex items-center justify-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => adjustQaza(p, -1)}
-                        disabled={count === 0}
-                        className="min-h-[44px] min-w-[44px] rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors active:scale-95"
-                        title={t.accountability.fulfillOne}
-                        aria-label={`${t.accountability.fulfillOne}: ${t.prayers[p]}`}
-                      >
-                        <Minus className="w-4 h-4" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => adjustQaza(p, 1)}
-                        className="min-h-[44px] min-w-[44px] rounded-xl bg-sky-50 dark:bg-sky-950/60 hover:bg-sky-100 dark:hover:bg-sky-900 text-sky-700 dark:text-sky-300 flex items-center justify-center cursor-pointer transition-colors active:scale-95"
-                        title={t.accountability.addMissed}
-                        aria-label={`${t.accountability.addMissed}: ${t.prayers[p]}`}
-                      >
-                        <Plus className="w-4 h-4" />
-                      </button>
-                    </div>
+
+                    {isStatsLoading ? (
+                      <div className="h-8 w-12 bg-slate-200 dark:bg-slate-700 rounded-md animate-pulse mx-auto" />
+                    ) : (
+                      <p className={`text-2xl font-extrabold ${isAllCaughtUp ? 'text-emerald-700 dark:text-emerald-400' : 'text-rose-700 dark:text-rose-400'}`}>
+                        {count}
+                      </p>
+                    )}
+
+                    <span
+                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                        isAllCaughtUp
+                          ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300'
+                          : 'bg-rose-100 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300'
+                      }`}
+                    >
+                      {isAllCaughtUp ? (
+                        <>
+                          <Check className="w-3 h-3 text-emerald-600" />
+                          <span>{t.dashboard.allCaughtUp}</span>
+                        </>
+                      ) : (
+                        <span>{t.accountability.statusMissedNeedsMakeup}</span>
+                      )}
+                    </span>
                   </div>
                 );
               })}
@@ -1167,7 +1132,7 @@ function ProgressContent() {
                     {t.accountability.totalFinancialDebt}
                   </span>
                   <div className="mt-1">
-                    {isAuthoritativeLoading ? (
+                    {isStatsLoading ? (
                       <div className="h-8 w-28 bg-white/20 animate-pulse rounded" />
                     ) : (
                       <p className="text-2xl font-black text-white">
@@ -1191,7 +1156,7 @@ function ProgressContent() {
                     {t.accountability.baseFinesSubtotal}
                   </span>
                   <div className="mt-1">
-                    {isAuthoritativeLoading ? (
+                    {isStatsLoading ? (
                       <div className="h-8 w-24 bg-slate-200 dark:bg-slate-700 animate-pulse rounded" />
                     ) : (
                       <p className="text-2xl font-bold text-slate-900 dark:text-slate-100">
@@ -1212,7 +1177,7 @@ function ProgressContent() {
                     {t.accountability.overduePenaltiesSubtotal}
                   </span>
                   <div className="mt-1">
-                    {isAuthoritativeLoading ? (
+                    {isStatsLoading ? (
                       <div className="h-8 w-24 bg-slate-200 dark:bg-slate-700 animate-pulse rounded" />
                     ) : (
                       <p className="text-2xl font-bold text-amber-600 dark:text-amber-400">
@@ -1370,8 +1335,9 @@ function ProgressContent() {
                   <p>{t.accountability.noPaymentsYet}</p>
                 </div>
               ) : (
-                <div className="space-y-3">
+                <div className="space-y-2.5">
                   {paymentHistory.map((receipt) => {
+                    const isExpanded = expandedReceiptIds.has(receipt.id);
                     const receiptDate = new Date(receipt.createdAt);
                     const formattedDate = !isNaN(receiptDate.getTime())
                       ? receiptDate.toLocaleDateString(
@@ -1389,62 +1355,90 @@ function ProgressContent() {
                     return (
                       <div
                         key={receipt.id}
-                        className="p-4 rounded-xl border border-slate-100 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-850/60 space-y-3"
+                        className="rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-850/60 overflow-hidden transition-all shadow-2xs"
                       >
-                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 border-b border-slate-200/60 dark:border-slate-700/60 pb-2.5">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="text-xs font-bold text-slate-900 dark:text-slate-100">
-                              {t.accountability.receiptId}: #{receipt.id.slice(-6).toUpperCase()}
+                        {/* Primary Collapsed Row: ONLY date, amount & chevron */}
+                        <button
+                          type="button"
+                          onClick={() => toggleExpandReceipt(receipt.id)}
+                          className="w-full p-3.5 sm:p-4 flex items-center justify-between text-left cursor-pointer hover:bg-slate-100/60 dark:hover:bg-slate-800/50 transition-colors"
+                          aria-expanded={isExpanded}
+                        >
+                          <div className="flex items-center gap-2.5">
+                            <span className="p-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 shrink-0">
+                              <Coins className="w-4 h-4" />
                             </span>
-                            <span className="text-[11px] text-slate-400 dark:text-slate-500">
-                              • {formattedDate}
-                            </span>
-                          </div>
-                          <span className="text-sm font-black text-emerald-600 dark:text-emerald-400">
-                            {formatCurrency(receipt.totalAmount, lang)}
-                          </span>
-                        </div>
-
-                        {/* Items in this payment */}
-                        <div className="space-y-1.5">
-                          {receipt.items.map((it, idx) => (
-                            <div
-                              key={`${receipt.id}-${it.date}-${it.prayerId}-${idx}`}
-                              className="flex items-center justify-between text-xs py-1 px-2 rounded-lg bg-white/70 dark:bg-slate-900/70 border border-slate-100/80 dark:border-slate-800/80"
-                            >
-                              <div className="flex items-center gap-2 flex-wrap">
-                                <span className="font-medium text-slate-700 dark:text-slate-300">
-                                  {it.date}
-                                </span>
-                                <span className="font-semibold text-slate-900 dark:text-slate-100 capitalize">
-                                  {t.prayers[it.prayerId]}
-                                </span>
-                                <span
-                                  className={`text-[10px] font-bold px-1.5 py-0.2 rounded ${
-                                    it.status === 'MADE_UP'
-                                      ? 'bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-300'
-                                      : 'bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300'
-                                  }`}
-                                >
-                                  {t.statuses[it.status] || it.status}
-                                </span>
-                                {it.isOverdue && (
-                                  <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300">
-                                    Overdue
-                                  </span>
-                                )}
-                              </div>
-                              <span className="font-bold text-slate-800 dark:text-slate-200">
-                                {formatCurrency(it.amount, lang)}
+                            <div>
+                              <span className="text-xs sm:text-sm font-semibold text-slate-900 dark:text-slate-100 block">
+                                {formattedDate}
+                              </span>
+                              <span className="text-[11px] text-slate-400">
+                                {receipt.items.length} {t.accountability.prayersCount}
                               </span>
                             </div>
-                          ))}
-                        </div>
+                          </div>
 
-                        {receipt.note && (
-                          <p className="text-[11px] italic text-slate-500 dark:text-slate-400">
-                            {receipt.note}
-                          </p>
+                          <div className="flex items-center gap-3">
+                            <span className="text-sm sm:text-base font-extrabold text-emerald-600 dark:text-emerald-400">
+                              {formatCurrency(receipt.totalAmount, lang)}
+                            </span>
+                            <ChevronDown
+                              className={`w-4 h-4 text-slate-400 transition-transform duration-200 ${
+                                isExpanded ? 'rotate-180 text-emerald-600' : ''
+                              }`}
+                            />
+                          </div>
+                        </button>
+
+                        {/* Expandable Itemized Details */}
+                        {isExpanded && (
+                          <div className="p-3.5 sm:p-4 border-t border-slate-200/70 dark:border-slate-800 space-y-3 bg-white/60 dark:bg-slate-900/40">
+                            <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400 pb-1 border-b border-slate-100 dark:border-slate-800">
+                              <span>{t.accountability.receiptId}: #{receipt.id.slice(-6).toUpperCase()}</span>
+                              <span>{t.dashboard.receiptDetails}</span>
+                            </div>
+
+                            <div className="space-y-1.5">
+                              {receipt.items.map((it, idx) => (
+                                <div
+                                  key={`${receipt.id}-${it.date}-${it.prayerId}-${idx}`}
+                                  className="flex items-center justify-between text-xs py-1.5 px-2.5 rounded-lg bg-slate-50/80 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800"
+                                >
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="font-medium text-slate-600 dark:text-slate-400">
+                                      {it.date}
+                                    </span>
+                                    <span className="font-semibold text-slate-900 dark:text-slate-100 capitalize">
+                                      {t.prayers[it.prayerId]}
+                                    </span>
+                                    <span
+                                      className={`text-[10px] font-bold px-1.5 py-0.2 rounded ${
+                                        it.status === 'MADE_UP'
+                                          ? 'bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-300'
+                                          : 'bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300'
+                                      }`}
+                                    >
+                                      {t.statuses[it.status] || it.status}
+                                    </span>
+                                    {it.isOverdue && (
+                                      <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300">
+                                        Overdue
+                                      </span>
+                                    )}
+                                  </div>
+                                  <span className="font-bold text-slate-800 dark:text-slate-200">
+                                    {formatCurrency(it.amount, lang)}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+
+                            {receipt.note && (
+                              <p className="text-[11px] italic text-slate-500 dark:text-slate-400 pt-1">
+                                {receipt.note}
+                              </p>
+                            )}
+                          </div>
                         )}
                       </div>
                     );

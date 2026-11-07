@@ -90,6 +90,12 @@ describe('SalahTrack Localization Engine (i18n) QA Suite', () => {
       }
     });
 
+    it('defines accurate appSubtitle across Uzbek, Russian, and English', () => {
+      assert.equal(translations.en.appSubtitle, 'Your daily prayer companion');
+      assert.equal(translations.uz.appSubtitle, 'Kundalik namozlaringiz uchun yordamchi');
+      assert.equal(translations.ru.appSubtitle, 'Ваш помощник в ежедневной молитве');
+    });
+
     it('guarantees 100% key parity between Uzbek (uz) and Russian (ru)', () => {
       const uzKeys = extractKeyPaths(translations.uz as unknown as Record<string, unknown>);
       const ruKeys = extractKeyPaths(translations.ru as unknown as Record<string, unknown>);

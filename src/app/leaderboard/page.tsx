@@ -5,7 +5,6 @@ import Link from 'next/link';
 import {
   Trophy,
   Calendar,
-  Medal,
   Clock,
   Loader2,
   Shield,
@@ -103,32 +102,32 @@ export default function LeaderboardPage() {
     }
   };
 
-  // Rank badge helper with standard competition medals
+  // Modern, vibrant numerical ranking badge helper
   const getRankBadge = (rank: number) => {
     if (rank === 1) {
       return (
-        <span className="flex items-center justify-center w-8 h-8 rounded-full bg-amber-100 dark:bg-amber-950/70 text-amber-700 dark:text-amber-300 font-bold text-xs border border-amber-300 dark:border-amber-700 shadow-2xs">
-          <Medal className="w-4 h-4 text-amber-500 fill-amber-400" />
+        <span className="inline-flex items-center justify-center w-8 h-8 rounded-xl bg-gradient-to-tr from-amber-500 via-amber-400 to-yellow-300 text-slate-950 font-black text-xs shadow-sm shadow-amber-500/20 border border-amber-300">
+          1st
         </span>
       );
     }
     if (rank === 2) {
       return (
-        <span className="flex items-center justify-center w-8 h-8 rounded-full bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold text-xs border border-slate-300 dark:border-slate-700 shadow-2xs">
-          <Medal className="w-4 h-4 text-slate-400 fill-slate-300" />
+        <span className="inline-flex items-center justify-center w-8 h-8 rounded-xl bg-gradient-to-tr from-slate-400 via-slate-300 to-slate-200 text-slate-900 font-black text-xs shadow-sm shadow-slate-400/20 border border-slate-300">
+          2nd
         </span>
       );
     }
     if (rank === 3) {
       return (
-        <span className="flex items-center justify-center w-8 h-8 rounded-full bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-400 font-bold text-xs border border-amber-200 dark:border-amber-800 shadow-2xs">
-          <Medal className="w-4 h-4 text-amber-700 fill-amber-600" />
+        <span className="inline-flex items-center justify-center w-8 h-8 rounded-xl bg-gradient-to-tr from-amber-700 via-amber-600 to-amber-500 text-white font-black text-xs shadow-sm shadow-amber-700/20 border border-amber-600">
+          3rd
         </span>
       );
     }
     return (
-      <span className="flex items-center justify-center w-8 h-8 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 font-bold text-xs border border-slate-200 dark:border-slate-700">
-        {rank}
+      <span className="inline-flex items-center justify-center w-8 h-8 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 font-bold text-xs border border-slate-200 dark:border-slate-700">
+        #{rank}
       </span>
     );
   };
@@ -159,7 +158,7 @@ export default function LeaderboardPage() {
         <button
           type="button"
           onClick={() => setActiveTab('global')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
+          className={`min-h-[44px] flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
             activeTab === 'global'
               ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-2xs'
               : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
@@ -172,7 +171,7 @@ export default function LeaderboardPage() {
         <button
           type="button"
           onClick={() => setActiveTab('circles')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
+          className={`min-h-[44px] flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
             activeTab === 'circles'
               ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-2xs'
               : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
@@ -325,11 +324,11 @@ export default function LeaderboardPage() {
                         key={entry.username}
                         className={`p-4 sm:p-5 rounded-2xl border transition-all flex flex-col justify-between relative overflow-hidden ${
                           isFirst
-                            ? 'bg-gradient-to-b from-amber-500/10 via-amber-500/5 to-white dark:to-slate-900 border-amber-300 dark:border-amber-700/80 shadow-md shadow-amber-500/10 md:order-2 md:-translate-y-2'
+                            ? 'bg-gradient-to-b from-amber-500/10 via-amber-500/5 to-white dark:to-slate-900 border-amber-300 dark:border-amber-700/80 shadow-md shadow-amber-500/10 md:-translate-y-1'
                             : isSecond
-                            ? 'bg-gradient-to-b from-slate-200/40 via-slate-100/20 to-white dark:to-slate-900 border-slate-300 dark:border-slate-700 shadow-xs md:order-1'
+                            ? 'bg-gradient-to-b from-slate-200/40 via-slate-100/20 to-white dark:to-slate-900 border-slate-300 dark:border-slate-700 shadow-xs'
                             : isThird
-                            ? 'bg-gradient-to-b from-amber-900/10 via-amber-900/5 to-white dark:to-slate-900 border-amber-700/30 dark:border-amber-800/40 shadow-xs md:order-3'
+                            ? 'bg-gradient-to-b from-amber-900/10 via-amber-900/5 to-white dark:to-slate-900 border-amber-700/30 dark:border-amber-800/40 shadow-xs'
                             : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800'
                         } ${
                           entry.isCurrentUser

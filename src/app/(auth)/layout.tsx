@@ -23,14 +23,9 @@ export default function AuthLayout({
           aria-label={t.appTitle}
         >
           <BrandLogo size={40} priority />
-          <div className="flex flex-col">
-            <span className="font-bold text-lg leading-tight tracking-tight text-slate-900 dark:text-slate-100">
-              {t.appTitle}
-            </span>
-            <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
-              {t.appSubtitle}
-            </span>
-          </div>
+          <span className="font-bold text-lg leading-tight tracking-tight text-slate-900 dark:text-slate-100">
+            {t.appTitle}
+          </span>
         </Link>
 
         <div className="flex items-center gap-2">

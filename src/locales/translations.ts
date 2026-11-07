@@ -266,6 +266,15 @@ export interface TranslationContent {
     overnightIshaActive: string;
     overnightIshaBadge: string;
     hijriBadge: string;
+    remindersOn: string;
+    remindersOff: string;
+    testNotification: string;
+    testNotificationBody: string;
+    prayerNotificationBody: string;
+    statusLive: string;
+    allCaughtUp: string;
+    receiptDetails: string;
+    hideReceiptDetails: string;
   };
   accountability: {
     title: string;
@@ -372,6 +381,11 @@ export interface TranslationContent {
     timezone?: string;
     saveLocation?: string;
     savingLocation?: string;
+    activeBadge?: string;
+    gpsDenied?: string;
+    gpsUnavailable?: string;
+    gpsTimeout?: string;
+    gpsGenericError?: string;
     discipline: string;
     disciplineDesc: string;
     basePledge: string;
@@ -701,7 +715,7 @@ export interface TranslationContent {
 export const translations: Record<Language, TranslationContent> = {
   ru: {
     appTitle: 'Namozlarim',
-    appSubtitle: 'Трекер намаза и самоконтроля',
+    appSubtitle: 'Ваш помощник в ежедневной молитве',
     common: {
       hoursUnit: 'ч',
       minsUnit: 'мин',
@@ -876,6 +890,15 @@ export const translations: Record<Language, TranslationContent> = {
       overnightIshaActive: 'Время ночного намаза (Иша) продолжается до наступления рассвета (Фаджр). Литургический день обновляется с наступлением Фаджра.',
       overnightIshaBadge: 'Иша продолжается',
       hijriBadge: 'Хиджра',
+      remindersOn: 'Напоминания вкл',
+      remindersOff: 'Напоминания выкл',
+      testNotification: 'Тест',
+      testNotificationBody: 'Напоминания о намазе успешно активированы!',
+      prayerNotificationBody: 'Наступило время намаза. Спешите к молитве, спешите к спасению!',
+      statusLive: 'В реальном времени',
+      allCaughtUp: 'Все прочитаны',
+      receiptDetails: 'Детализация',
+      hideReceiptDetails: 'Скрыть',
     },
     accountability: {
       title: 'Общая задолженность по садака (Штрафы за каза)',
@@ -982,6 +1005,11 @@ export const translations: Record<Language, TranslationContent> = {
       timezone: 'Часовой пояс',
       saveLocation: 'Сохранить местоположение',
       savingLocation: 'Сохранение...',
+      activeBadge: 'Активен',
+      gpsDenied: 'Доступ к GPS отклонен. Пожалуйста, разрешите геолокацию в настройках браузера.',
+      gpsUnavailable: 'Сигнал GPS недоступен.',
+      gpsTimeout: 'Время ожидания GPS истекло.',
+      gpsGenericError: 'Не удалось определить координаты GPS.',
       discipline: 'Система обязательств',
       disciplineDesc: 'Параметры личной ответственности за пропущенные намазы.',
       basePledge: 'Базовая ставка обязательства',
@@ -1330,7 +1358,7 @@ export const translations: Record<Language, TranslationContent> = {
 
   en: {
     appTitle: 'Namozlarim',
-    appSubtitle: 'Prayer Tracker & Consistency',
+    appSubtitle: 'Your daily prayer companion',
     common: {
       hoursUnit: 'h',
       minsUnit: 'm',
@@ -1505,6 +1533,15 @@ export const translations: Record<Language, TranslationContent> = {
       overnightIshaActive: 'Isha prayer continues overnight until the dawn of Fajr. The liturgical prayer day rolls over at Fajr adhan.',
       overnightIshaBadge: 'Isha is active',
       hijriBadge: 'Hijri',
+      remindersOn: 'Reminders ON',
+      remindersOff: 'Reminders OFF',
+      testNotification: 'Test',
+      testNotificationBody: 'Prayer reminders are active and functioning correctly!',
+      prayerNotificationBody: 'It is time for prayer. Come to prayer, come to success.',
+      statusLive: 'Live',
+      allCaughtUp: 'All caught up',
+      receiptDetails: 'Details',
+      hideReceiptDetails: 'Hide',
     },
     accountability: {
       title: 'Total Sadaqah Owed (Qaza Fines)',
@@ -1611,6 +1648,11 @@ export const translations: Record<Language, TranslationContent> = {
       timezone: 'Timezone',
       saveLocation: 'Save Location',
       savingLocation: 'Saving...',
+      activeBadge: 'Active',
+      gpsDenied: 'GPS permission denied. Please allow location access in your browser settings.',
+      gpsUnavailable: 'GPS position unavailable.',
+      gpsTimeout: 'GPS detection timed out.',
+      gpsGenericError: 'Could not determine GPS coordinates.',
       discipline: 'Accountability System',
       disciplineDesc: 'Personal discipline parameters for missed prayer pledges.',
       basePledge: 'Base Pledge Rate',
@@ -1959,7 +2001,7 @@ export const translations: Record<Language, TranslationContent> = {
 
   uz: {
     appTitle: 'Namozlarim',
-    appSubtitle: 'Namoz va ma’naviy intizom',
+    appSubtitle: 'Kundalik namozlaringiz uchun yordamchi',
     common: {
       hoursUnit: 'soat',
       minsUnit: 'daqiqa',
@@ -2134,6 +2176,15 @@ export const translations: Record<Language, TranslationContent> = {
       overnightIshaActive: 'Tong (Bomdod) otguncha Xufton namozi vaqti davom etadi. Diniy kun Bomdod kirishi bilan yangilanadi.',
       overnightIshaBadge: 'Xufton davom etmoqda',
       hijriBadge: 'Hijriy',
+      remindersOn: 'Eslatmalar yoqilgan',
+      remindersOff: 'Eslatmalar o‘chirilgan',
+      testNotification: 'Sinash',
+      testNotificationBody: 'Namoz eslatmalari faollashtirildi va to‘g‘ri ishlamoqda!',
+      prayerNotificationBody: 'Namoz vaqti kirdi. Namozga shoshiling, najotga shoshiling!',
+      statusLive: 'Jonli',
+      allCaughtUp: 'Barchasi o‘qilgan',
+      receiptDetails: 'Tafsilotlar',
+      hideReceiptDetails: 'Yopish',
     },
     accountability: {
       title: 'Umumiy sadaqa qarzi (Qazo jarimalari)',
@@ -2240,6 +2291,11 @@ export const translations: Record<Language, TranslationContent> = {
       timezone: 'Vaqt mintaqasi',
       saveLocation: 'Joylashuvni saqlash',
       savingLocation: 'Saqlanmoqda...',
+      activeBadge: 'Faol',
+      gpsDenied: 'GPS ruxsati berilmadi. Iltimos, brauzer sozlamalarida joylashuvga ruxsat bering.',
+      gpsUnavailable: 'GPS signali topilmadi.',
+      gpsTimeout: 'GPS aniqlash vaqti tugadi.',
+      gpsGenericError: 'GPS koordinatalarini aniqlab bo‘lmadi.',
       discipline: 'Mas’uliyat tizimi',
       disciplineDesc: 'Qazo qilingan namozlar uchun shaxsiy intizom parametrlari.',
       basePledge: 'Asosiy badal stavkasi',

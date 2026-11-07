@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, useEffect, useCallback } from 'react';
+import { useMemo, useState, useEffect, useCallback, useRef } from 'react';
 import {
   CheckCircle2,
   Flame,
@@ -29,7 +29,7 @@ import PayQazaModal from '@/components/qaza/PayQazaModal';
 import { PrayerItem, PrayerStatus, PrayerId, StreakData, DEFAULT_STREAK } from '@/types/prayer';
 import { calculateAccountabilityLedger } from '@/lib/accountability';
 import { calculateStreakTransition, evaluateRolloverStreak } from '@/lib/streak';
-import { validateCoordinates } from '@/lib/qibla';
+import { validateCoordinates, sanitizeLocationName } from '@/lib/qibla';
 import { formatLocalizedDate, formatLocalizedHijriDate, formatCurrency } from '@/lib/formatters';
 import {
   getLiturgicalDate,
@@ -178,6 +178,50 @@ function calculateNextPrayerCountdown(prayers: PrayerItem[], now: Date): NextPra
   };
 }
 
+// Client-side module-level caching and in-flight request deduplication for prayer times
+interface CachedPrayerTimesResponse {
+  city?: string;
+  source?: 'live' | 'fallback';
+  timings: Record<string, { time: string; endTime: string; isOvernight?: boolean }>;
+  [key: string]: unknown;
+}
+
+interface PrayerTimesCacheEntry {
+  data: CachedPrayerTimesResponse;
+  timestamp: number;
+}
+
+const prayerTimesCache = new Map<string, PrayerTimesCacheEntry>();
+const prayerTimesInFlight = new Map<string, Promise<CachedPrayerTimesResponse | null>>();
+const PRAYER_TIMES_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour memory TTL
+
+function getInitialLocationName(userCity?: string): string {
+  if (userCity) {
+    const sanitized = sanitizeLocationName(userCity);
+    if (sanitized) return sanitized;
+  }
+  if (typeof window !== 'undefined') {
+    try {
+      const stored = localStorage.getItem('salahtrack_location');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed?.city && typeof parsed.city === 'string') {
+          const sanitized = sanitizeLocationName(parsed.city);
+          if (sanitized) return sanitized;
+        }
+      }
+      const storedCity = localStorage.getItem('salahtrack_city_name');
+      if (storedCity && typeof storedCity === 'string') {
+        const sanitized = sanitizeLocationName(storedCity);
+        if (sanitized) return sanitized;
+      }
+    } catch {
+      // Storage access blocked or unavailable
+    }
+  }
+  return 'Tashkent';
+}
+
 interface HomeDashboardProps {
   initialQazaCount: number | null;
   initialPrayers: PrayerItem[] | null;
@@ -228,13 +272,46 @@ export default function HomeDashboard({
     window.addEventListener('local-storage-update', handleStorageUpdate);
     return () => window.removeEventListener('local-storage-update', handleStorageUpdate);
   }, []);
+
+  const lastSyncedKeyRef = useRef<string>('');
+  const lastSyncedStatusRef = useRef<'idle' | 'loading' | 'live' | 'fallback' | 'error'>('idle');
+  const [locationRevision, setLocationRevision] = useState(0);
+
+  // Location and Prayer API states
+  const [locationName, setLocationName] = useState<string>(() =>
+    getInitialLocationName(user?.preferences?.city)
+  );
+  const [apiStatus, setApiStatus] = useState<'loading' | 'live' | 'fallback' | 'error'>('loading');
+
+  // Synchronize location when component mounts or user preferences load
+  useEffect(() => {
+    queueMicrotask(() => {
+      const resolved = getInitialLocationName(user?.preferences?.city);
+      if (resolved) {
+        setLocationName(resolved);
+      }
+    });
+  }, [user?.preferences?.city]);
+
+  // Dedicated listener for location and calculation method changes
+  useEffect(() => {
+    const handleLocationUpdate = () => {
+      const resolved = getInitialLocationName(user?.preferences?.city);
+      if (resolved) {
+        setLocationName(resolved);
+      }
+      setLocationRevision((v) => v + 1);
+    };
+    window.addEventListener('salahtrack_location_update', handleLocationUpdate);
+    window.addEventListener('storage', handleLocationUpdate);
+    return () => {
+      window.removeEventListener('salahtrack_location_update', handleLocationUpdate);
+      window.removeEventListener('storage', handleLocationUpdate);
+    };
+  }, [user?.preferences?.city]);
   
   // Real-time ticking clock for live countdown and auto-advance
   const [now, setNow] = useState<Date>(() => new Date());
-
-  // Location and Prayer API states
-  const [locationName, setLocationName] = useState<string>('Tashkent');
-  const [apiStatus, setApiStatus] = useState<'loading' | 'live' | 'fallback' | 'error'>('loading');
 
   // Saving states per prayer item
   const [savingStatus, setSavingStatus] = useState<Record<PrayerId, 'idle' | 'saving' | 'saved' | 'error'>>({
@@ -245,7 +322,11 @@ export default function HomeDashboard({
     isha: 'idle',
   });
 
-  // Browser Notification state
+  // Browser Notification state & user toggle
+  const [remindersEnabled, setRemindersEnabled] = useLocalStorage<boolean>(
+    'salahtrack_reminders_enabled',
+    false
+  );
   const [notificationPermission, setNotificationPermission] = useState<'default' | 'granted' | 'denied' | 'unsupported'>('default');
 
   // 1-second live ticker
@@ -267,20 +348,40 @@ export default function HomeDashboard({
     });
   }, []);
 
-  const handleRequestNotification = async () => {
-    if (typeof window !== 'undefined' && 'Notification' in window) {
+  const handleToggleReminders = async () => {
+    if (typeof window === 'undefined' || !('Notification' in window)) {
+      setNotificationPermission('unsupported');
+      return;
+    }
+
+    if (Notification.permission === 'default') {
       try {
         const permission = await Notification.requestPermission();
         setNotificationPermission(permission as 'default' | 'granted' | 'denied');
         if (permission === 'granted') {
+          setRemindersEnabled(true);
           new Notification(t.appTitle, {
-            body: t.dashboard.notificationsEnabled,
-            icon: '/favicon.ico',
+            body: t.dashboard.testNotificationBody,
+            icon: '/apple-touch-icon.png',
           });
         }
       } catch (err) {
         console.warn('Notification permission error:', err);
       }
+      return;
+    }
+
+    if (Notification.permission === 'granted') {
+      setRemindersEnabled((prev) => !prev);
+    }
+  };
+
+  const handleTestNotification = () => {
+    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+      new Notification(t.appTitle, {
+        body: t.dashboard.testNotificationBody,
+        icon: '/apple-touch-icon.png',
+      });
     }
   };
 
@@ -307,6 +408,39 @@ export default function HomeDashboard({
 
   const activeLiturgicalDate = cycle.liturgicalDate;
   const isPostMidnight = cycle.isPostMidnight;
+
+  // Automated Prayer Adhan Reminders: checks upcoming prayer entry against current time
+  useEffect(() => {
+    if (!remindersEnabled || notificationPermission !== 'granted' || typeof window === 'undefined') {
+      return;
+    }
+
+    const currentHour = now.getHours();
+    const currentMin = now.getMinutes();
+    const currentTimeStr = `${String(currentHour).padStart(2, '0')}:${String(currentMin).padStart(2, '0')}`;
+
+    for (const p of prayers) {
+      if (!p.time) continue;
+      // If current clock matches prayer adhan time
+      if (p.time === currentTimeStr) {
+        const alertKey = `salahtrack_alert_${activeLiturgicalDate}_${p.id}`;
+        try {
+          const alreadySent = localStorage.getItem(alertKey);
+          if (!alreadySent) {
+            localStorage.setItem(alertKey, 'sent');
+            const prayerName = t.prayers[p.id] || p.name;
+            const notificationTitle = `${prayerName} (${p.time}) • ${t.appTitle}`;
+            new Notification(notificationTitle, {
+              body: t.dashboard.prayerNotificationBody,
+              icon: '/apple-touch-icon.png',
+            });
+          }
+        } catch {
+          // ignore localStorage access error
+        }
+      }
+    }
+  }, [now, prayers, remindersEnabled, notificationPermission, activeLiturgicalDate, t]);
 
   // Seed history on initial mount so /progress and /calendar reflect the current liturgical state
   useEffect(() => {
@@ -490,7 +624,6 @@ export default function HomeDashboard({
 
     async function syncPrayerTimes() {
       try {
-        setApiStatus('loading');
         let lat: number | null = null;
         let lng: number | null = null;
         let resolvedCityName: string | null = null;
@@ -530,9 +663,78 @@ export default function HomeDashboard({
           }
         }
 
+        if (!resolvedCityName) {
+          try {
+            const cachedCity = localStorage.getItem('salahtrack_city_name');
+            if (cachedCity) {
+              resolvedCityName = sanitizeLocationName(cachedCity);
+            }
+          } catch {
+            // ignore
+          }
+        }
+
         if (resolvedCityName) {
           setLocationName(resolvedCityName);
         }
+
+        const storedMethod = typeof window !== 'undefined' ? localStorage.getItem('salahtrack_calc_method') : null;
+        const method = user?.preferences?.calculationMethod || storedMethod || 'MWL';
+
+        const currentKey = `${activeLiturgicalDate}|${lat ?? ''}|${lng ?? ''}|${resolvedCityName ?? ''}|${method}`;
+
+        // If parameters haven't changed and prayer times are already successfully loaded, skip entirely
+        if (
+          currentKey === lastSyncedKeyRef.current &&
+          (lastSyncedStatusRef.current === 'live' || lastSyncedStatusRef.current === 'fallback')
+        ) {
+          return;
+        }
+
+        // Helper function to update state and synchronize timings
+        const applyTimings = (data: CachedPrayerTimesResponse) => {
+          if (resolvedCityName) {
+            setLocationName(resolvedCityName);
+          } else if (data.city) {
+            setLocationName(data.city);
+          }
+
+          const status = data.source === 'fallback' ? 'fallback' : 'live';
+          setApiStatus(status);
+          lastSyncedStatusRef.current = status;
+
+          setPrayers((prev) => {
+            let hasChanges = false;
+            const updated = prev.map((item) => {
+              const apiTime = data.timings?.[item.id];
+              const nextEndTime = apiTime?.endTime || item.endTime;
+              if (apiTime && (item.time !== apiTime.time || item.endTime !== nextEndTime)) {
+                hasChanges = true;
+                return { ...item, time: apiTime.time, endTime: nextEndTime };
+              }
+              return item;
+            });
+            if (hasChanges) {
+              saveDailyPrayersSync(activeLiturgicalDate, updated);
+            }
+            return hasChanges ? updated : prev;
+          });
+
+          lastSyncedKeyRef.current = currentKey;
+        };
+
+        // 1. Instant cache retrieval: return immediately without any network fetch
+        const cachedEntry = prayerTimesCache.get(currentKey);
+        if (cachedEntry && Date.now() - cachedEntry.timestamp < PRAYER_TIMES_CACHE_TTL_MS) {
+          if (!isCancelled) {
+            applyTimings(cachedEntry.data);
+          }
+          return;
+        }
+
+        // 2. Not in cache: show loading and prepare network request
+        setApiStatus('loading');
+        lastSyncedStatusRef.current = 'loading';
 
         const queryParams = new URLSearchParams();
         if (lat !== null && lng !== null) {
@@ -542,62 +744,71 @@ export default function HomeDashboard({
         if (resolvedCityName) {
           queryParams.set('city', resolvedCityName);
         }
-        const method = user?.preferences?.calculationMethod || 'MWL';
         queryParams.set('method', method);
         queryParams.set('date', activeLiturgicalDate);
 
         const url = `/api/prayer-times?${queryParams.toString()}`;
-        const res = await fetch(url);
-        if (!res.ok) {
-          if (!isCancelled) setApiStatus('error');
+
+        // 3. Deduplicate in-flight requests (handles React StrictMode concurrent mount)
+        let fetchPromise = prayerTimesInFlight.get(currentKey);
+        if (!fetchPromise) {
+          fetchPromise = (async () => {
+            try {
+              const res = await fetch(url);
+              if (!res.ok) return null;
+              const data = await res.json();
+              if (data?.timings) {
+                const isDefault =
+                  lat === null ||
+                  (Math.abs(lat - 41.2995) < 0.1 && Math.abs((lng ?? 69.2401) - 69.2401) < 0.1);
+
+                // Do not cache fallback data for non-default locations
+                if (!(data.source === 'fallback' && !isDefault)) {
+                  prayerTimesCache.set(currentKey, {
+                    data,
+                    timestamp: Date.now(),
+                  });
+                }
+                return data;
+              }
+              return null;
+            } catch (err) {
+              console.warn('Could not sync live prayer times:', err);
+              return null;
+            } finally {
+              prayerTimesInFlight.delete(currentKey);
+            }
+          })();
+          prayerTimesInFlight.set(currentKey, fetchPromise);
+        }
+
+        const data = await fetchPromise;
+        if (isCancelled) return;
+
+        if (!data?.timings) {
+          setApiStatus('error');
+          lastSyncedStatusRef.current = 'error';
           return;
         }
 
-        const data = await res.json();
-        if (isCancelled || !data?.timings) {
-          if (!isCancelled) setApiStatus('error');
-          return;
-        }
-
-        if (resolvedCityName) {
-          setLocationName(resolvedCityName);
-        } else if (data.city) {
-          setLocationName(data.city);
-        }
-
-        // If external API returned fallback, check if this is the default Tashkent location
-        const isDefaultLocation = lat === null || (Math.abs(lat - 41.2995) < 0.1 && Math.abs((lng ?? 69.2401) - 69.2401) < 0.1);
+        const isDefaultLocation =
+          lat === null ||
+          (Math.abs(lat - 41.2995) < 0.1 && Math.abs((lng ?? 69.2401) - 69.2401) < 0.1);
 
         if (data.source === 'fallback' && !isDefaultLocation) {
           // External API failed for a non-default city, do NOT overwrite with Tashkent fallback timings!
-          if (!isCancelled) setApiStatus('error');
+          setApiStatus('error');
+          lastSyncedStatusRef.current = 'error';
           return;
         }
 
-        if (data.source === 'fallback') {
-          setApiStatus('fallback');
-        } else {
-          setApiStatus('live');
-        }
-
-        setPrayers((prev) => {
-          let hasChanges = false;
-          const updated = prev.map((item) => {
-            const apiTime = data.timings[item.id];
-            if (apiTime && (item.time !== apiTime.time || item.endTime !== apiTime.endTime)) {
-              hasChanges = true;
-              return { ...item, time: apiTime.time, endTime: apiTime.endTime };
-            }
-            return item;
-          });
-          if (hasChanges) {
-            saveDailyPrayersSync(activeLiturgicalDate, updated);
-          }
-          return hasChanges ? updated : prev;
-        });
+        applyTimings(data);
       } catch (err) {
         console.warn('Could not sync live prayer times:', err);
-        if (!isCancelled) setApiStatus('error');
+        if (!isCancelled) {
+          setApiStatus('error');
+          lastSyncedStatusRef.current = 'error';
+        }
       }
     }
 
@@ -614,6 +825,8 @@ export default function HomeDashboard({
     user?.preferences?.latitude,
     user?.preferences?.longitude,
     activeLiturgicalDate,
+    locationRevision,
+    apiStatus,
   ]);
 
   // Live Next Prayer Countdown (calculated dynamically from current ticking time)
@@ -883,32 +1096,20 @@ export default function HomeDashboard({
         </div>
       )}
 
-      {/* Top Header Bar: Unified, Attractive, and Visually Consistent */}
+      {/* Top Header Bar: Unified, Attractive, and Visually Balanced */}
       <div className="p-4 sm:p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800/90 shadow-2xs">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-          {/* Left: Date & Location Info */}
-          <div className="space-y-1.5">
+          {/* Left: Gregorian & Hijri Date */}
+          <div className="space-y-1">
             <div className="flex items-center gap-2.5 flex-wrap">
               <div className="flex items-center gap-2">
                 <span className="p-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 shrink-0">
                   <CalendarIcon className="w-4 h-4" />
                 </span>
-                <span suppressHydrationWarning className="text-slate-900 dark:text-slate-100 font-bold text-base sm:text-lg">
+                <span suppressHydrationWarning className="text-slate-900 dark:text-slate-100 font-extrabold text-base sm:text-lg tracking-tight">
                   {gregorianDate}
                 </span>
               </div>
-
-              {/* Hijri Date Display Badge */}
-              {hijriDate && (
-                <span
-                  suppressHydrationWarning
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-semibold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border border-emerald-200/80 dark:border-emerald-800/80 shadow-2xs"
-                  title={t.calendar.hijri?.title || t.dashboard.hijriBadge}
-                >
-                  <Moon className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                  <span>{hijriDate}</span>
-                </span>
-              )}
 
               {isPostMidnight && (
                 <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200/80 dark:border-indigo-800/80 shadow-2xs">
@@ -918,12 +1119,13 @@ export default function HomeDashboard({
               )}
             </div>
 
-            <div className="flex items-center gap-2.5 text-xs flex-wrap">
-              <div className="inline-flex items-center gap-1.5 text-slate-500 dark:text-slate-400 font-medium bg-slate-100/70 dark:bg-slate-800/70 px-2.5 py-1 rounded-lg border border-slate-200/60 dark:border-slate-700/60">
-                <MapPin className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                <span>{locationName}</span>
-              </div>
-            </div>
+            {/* Small, elegant Hijri Date secondary line directly below Gregorian date */}
+            {hijriDate && (
+              <p suppressHydrationWarning className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 font-normal flex items-center gap-1.5 pl-7 mt-0.5">
+                <Moon className="w-3 h-3 text-emerald-600/70 dark:text-emerald-400/70 shrink-0" />
+                <span>{hijriDate}</span>
+              </p>
+            )}
           </div>
 
           {/* Right: Consistency Streak & Controls */}
@@ -990,31 +1192,32 @@ export default function HomeDashboard({
                 </span>
               </div>
 
-              {/* Status pill: Live / Fallback / Error */}
-              {apiStatus === 'loading' ? (
-                <span className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-400">
-                  <Loader2 className="w-3 h-3 animate-spin" />
-                  <span>{t.common.loading}</span>
-                </span>
-              ) : apiStatus === 'fallback' ? (
-                <span
-                  title={t.dashboard.apiError}
-                  className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full bg-amber-950/80 text-amber-300 border border-amber-800"
-                >
-                  <AlertTriangle className="w-2.5 h-2.5 text-amber-400" />
-                  <span>{t.dashboard.location}</span>
-                </span>
-              ) : apiStatus === 'error' ? (
-                <span className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full bg-rose-950/80 text-rose-300 border border-rose-800">
-                  <AlertTriangle className="w-2.5 h-2.5 text-rose-400" />
-                  <span>{t.dashboard.apiError}</span>
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full bg-emerald-950/80 text-emerald-300 border border-emerald-800">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                  <span>{locationName}</span>
-                </span>
-              )}
+              {/* Authoritative Single City Badge with Live Calculation Indicator */}
+              <div className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full bg-slate-800/90 text-slate-200 border border-slate-700/80 shadow-2xs">
+                <MapPin className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <span suppressHydrationWarning>{locationName}</span>
+                {apiStatus === 'live' && (
+                  <span
+                    className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"
+                    title="Live calculation"
+                  />
+                )}
+                {apiStatus === 'loading' && (
+                  <Loader2 className="w-3 h-3 text-slate-400 animate-spin" />
+                )}
+                {apiStatus === 'fallback' && (
+                  <span
+                    className="w-1.5 h-1.5 rounded-full bg-amber-400"
+                    title={t.dashboard.apiError}
+                  />
+                )}
+                {apiStatus === 'error' && (
+                  <span
+                    className="w-1.5 h-1.5 rounded-full bg-rose-400"
+                    title={t.dashboard.apiError}
+                  />
+                )}
+              </div>
             </div>
 
             <div className="flex items-baseline justify-between mt-2">
@@ -1050,30 +1253,56 @@ export default function HomeDashboard({
             </div>
           </div>
 
-          <div className="mt-4 pt-3 border-t border-slate-700/60 flex items-center justify-end text-xs text-slate-400">
-            {notificationPermission === 'granted' ? (
-              <span className="inline-flex items-center gap-1 text-[11px] text-emerald-400 font-medium">
-                <Bell className="w-3.5 h-3.5 text-emerald-400" />
-                <span>{t.dashboard.notificationsEnabled}</span>
-              </span>
-            ) : notificationPermission === 'denied' ? (
-              <span
-                title={t.dashboard.notificationsBlocked}
-                className="inline-flex items-center gap-1 text-[11px] text-slate-500 font-medium"
-              >
-                <BellOff className="w-3.5 h-3.5" />
-                <span>{t.dashboard.notificationsBlocked}</span>
-              </span>
-            ) : notificationPermission === 'default' ? (
-              <button
-                type="button"
-                onClick={handleRequestNotification}
-                className="inline-flex items-center gap-1 text-[11px] text-emerald-400 hover:text-emerald-300 font-semibold cursor-pointer underline"
-              >
-                <Bell className="w-3.5 h-3.5" />
-                <span>{t.dashboard.enableNotifications}</span>
-              </button>
-            ) : null}
+          <div className="mt-4 pt-3 border-t border-slate-700/60 flex items-center justify-between text-xs text-slate-400 flex-wrap gap-2">
+            <div className="flex items-center gap-2">
+              {notificationPermission === 'granted' ? (
+                <button
+                  type="button"
+                  onClick={handleToggleReminders}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                    remindersEnabled
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30'
+                      : 'bg-slate-800 text-slate-400 border border-slate-700 hover:bg-slate-700'
+                  }`}
+                  title={remindersEnabled ? t.dashboard.remindersOn : t.dashboard.remindersOff}
+                >
+                  {remindersEnabled ? (
+                    <Bell className="w-3.5 h-3.5 text-emerald-400" />
+                  ) : (
+                    <BellOff className="w-3.5 h-3.5 text-slate-400" />
+                  )}
+                  <span>{remindersEnabled ? t.dashboard.remindersOn : t.dashboard.remindersOff}</span>
+                </button>
+              ) : notificationPermission === 'denied' ? (
+                <span
+                  title={t.dashboard.notificationsBlocked}
+                  className="inline-flex items-center gap-1 text-[11px] text-slate-400 font-medium"
+                >
+                  <BellOff className="w-3.5 h-3.5 text-slate-500" />
+                  <span>{t.dashboard.notificationsBlocked}</span>
+                </span>
+              ) : notificationPermission === 'default' ? (
+                <button
+                  type="button"
+                  onClick={handleToggleReminders}
+                  className="inline-flex items-center gap-1.5 text-xs text-emerald-400 hover:text-emerald-300 font-semibold cursor-pointer underline"
+                >
+                  <Bell className="w-3.5 h-3.5" />
+                  <span>{t.dashboard.enableNotifications}</span>
+                </button>
+              ) : null}
+
+              {notificationPermission === 'granted' && (
+                <button
+                  type="button"
+                  onClick={handleTestNotification}
+                  className="px-2 py-1 rounded-md bg-white/10 hover:bg-white/20 text-slate-300 text-[10px] font-semibold transition-colors cursor-pointer"
+                  title={t.dashboard.testNotification}
+                >
+                  {t.dashboard.testNotification}
+                </button>
+              )}
+            </div>
           </div>
         </div>
 
@@ -1254,15 +1483,9 @@ export default function HomeDashboard({
       <div>
         <div className="flex items-center justify-between mb-3">
           <div>
-            <div className="flex items-center gap-2">
-              <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">
-                {t.dashboard.todayPrayers}
-              </h2>
-              <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200/70 dark:border-emerald-800/70">
-                <MapPin className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
-                <span>{locationName}</span>
-              </span>
-            </div>
+            <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">
+              {t.dashboard.todayPrayers}
+            </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
               {t.dashboard.completedRatio}: {completedCount} / 5
             </p>

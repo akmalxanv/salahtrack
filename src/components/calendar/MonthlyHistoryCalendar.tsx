@@ -18,7 +18,6 @@ import {
 import { useLanguage } from '@/context/LanguageContext';
 import { getCalendarDate, getLiturgicalDate } from '@/lib/prayer-cycle';
 import { formatLocalizedDate, formatLocalizedHijriDate } from '@/lib/formatters';
-import CompactHijriCalendar from './CompactHijriCalendar';
 import type { PrayerId, PrayerStatus, PrayerHistoryRecord } from '@/types/prayer';
 
 const PRAYER_IDS: PrayerId[] = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
@@ -212,10 +211,8 @@ export default function MonthlyHistoryCalendar({
     <div className="space-y-6">
       {/* Calendar & Inspector Layout Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-6 items-start">
-        {/* ==================== LEFT COLUMN: GREGORIAN & HIJRI CALENDARS ==================== */}
-        <div className="lg:col-span-7 xl:col-span-7 2xl:col-span-7 space-y-6">
-          {/* 1. Interactive Gregorian Monthly Calendar */}
-          <div className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-6 dark:border-slate-800 dark:bg-slate-900 shadow-xs space-y-5">
+        {/* ==================== LEFT COLUMN: INTERACTIVE MONTHLY CALENDAR ==================== */}
+        <div className="lg:col-span-7 xl:col-span-7 2xl:col-span-7 rounded-2xl border border-slate-200 bg-white p-4 sm:p-6 dark:border-slate-800 dark:bg-slate-900 shadow-xs space-y-5">
           {/* Calendar Header with Navigation Controls */}
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
             <div className="flex items-center gap-2.5">
@@ -418,15 +415,6 @@ export default function MonthlyHistoryCalendar({
             </div>
           </div>
         </div>
-
-        {/* 2. Compact Hijri (Islamic) Calendar directly below Gregorian Calendar */}
-        <CompactHijriCalendar
-          selectedDate={selectedDate}
-          onSelectDate={onSelectDate}
-          records={records}
-          readOnly={readOnly}
-        />
-      </div>
 
       {/* ==================== RIGHT COLUMN: SELECTED DATE DETAIL CARD ==================== */}
       <div className="lg:col-span-5 xl:col-span-5 2xl:col-span-5 rounded-2xl border border-slate-200 bg-white p-4 sm:p-5 dark:border-slate-800 dark:bg-slate-900 shadow-xs space-y-5 lg:sticky lg:top-6">

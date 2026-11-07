@@ -319,6 +319,42 @@ describe('Backend Authentication Layer Tests', () => {
       assert.strictEqual(json.success, false);
       assert.ok(json.error.includes('Email is already registered'));
     });
+
+    it('enforces rate limiting after 5 failed signup attempts', async () => {
+      for (let i = 0; i < 5; i++) {
+        const failReq = new NextRequest('http://localhost:3000/api/auth/signup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: 'A',
+            email: 'invalid',
+            username: 'x',
+            password: 'short',
+            confirmPassword: 'mismatch',
+          }),
+        });
+        const failRes = await signupHandler(failReq);
+        assert.strictEqual(failRes.status, 400);
+      }
+
+      const blockedReq = new NextRequest('http://localhost:3000/api/auth/signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Valid User',
+          email: 'valid@salahtrack.uz',
+          username: 'valid_user',
+          password: 'Password123!#',
+          confirmPassword: 'Password123!#',
+        }),
+      });
+
+      const blockedRes = await signupHandler(blockedReq);
+      assert.strictEqual(blockedRes.status, 429);
+      const json = await blockedRes.json();
+      assert.strictEqual(json.code, 'AUTH_RATE_LIMITED');
+      assert.ok(blockedRes.headers.get('retry-after'));
+    });
   });
 
   describe('2. POST /api/auth/login', () => {

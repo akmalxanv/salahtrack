@@ -566,3 +566,14 @@ export function triggerHapticFeedback(durationMs: number = 30): boolean {
   }
   return false;
 }
+
+/**
+ * Sanitizes location names read from storage or user input:
+ * strips control characters, HTML tags, trims, and bounds length to 100 chars.
+ */
+export function sanitizeLocationName(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const sanitized = raw.replace(/[\x00-\x1F\x7F<>]/g, '').trim().slice(0, 100);
+  return sanitized.length > 0 ? sanitized : null;
+}
+

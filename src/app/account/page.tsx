@@ -149,17 +149,13 @@ function AuthenticatedAccountView({
         setGpsDetecting(false);
       },
       (err) => {
-        let errorMsg = 'Could not determine GPS coordinates';
+        let errorMsg = t.profile.gpsGenericError || 'Could not determine GPS coordinates';
         if (err.code === 1) {
-          errorMsg = lang === 'uz'
-            ? 'GPS ruxsati berilmadi. Iltimos, brauzer sozlamalarida joylashuvga ruxsat bering.'
-            : lang === 'ru'
-            ? 'Доступ к GPS отклонен. Пожалуйста, разрешите геолокацию в настройках браузера.'
-            : 'GPS permission denied. Please allow location access in your browser settings.';
+          errorMsg = t.profile.gpsDenied || 'GPS permission denied. Please allow location access in your browser settings.';
         } else if (err.code === 2) {
-          errorMsg = lang === 'uz' ? 'GPS signali topilmadi.' : lang === 'ru' ? 'Сигнал GPS недоступен.' : 'GPS position unavailable.';
+          errorMsg = t.profile.gpsUnavailable || 'GPS position unavailable.';
         } else if (err.code === 3) {
-          errorMsg = lang === 'uz' ? 'GPS aniqlash vaqti tugadi.' : lang === 'ru' ? 'Время ожидания GPS истекло.' : 'GPS detection timed out.';
+          errorMsg = t.profile.gpsTimeout || 'GPS detection timed out.';
         }
         setLocationError(errorMsg);
         setGpsDetecting(false);
@@ -249,6 +245,7 @@ function AuthenticatedAccountView({
         })
       );
 
+      window.dispatchEvent(new CustomEvent('salahtrack_location_update'));
       window.dispatchEvent(new Event('local-storage-update'));
       window.dispatchEvent(new Event('storage'));
 
@@ -286,6 +283,10 @@ function AuthenticatedAccountView({
 
       const json = await res.json();
       if (res.ok && json.success) {
+        localStorage.setItem('salahtrack_calc_method', calculationMethod);
+        window.dispatchEvent(new CustomEvent('salahtrack_location_update'));
+        window.dispatchEvent(new Event('local-storage-update'));
+        window.dispatchEvent(new Event('storage'));
         setProfileSuccess(t.profile.profileUpdated);
         await refreshUser();
         setTimeout(() => setProfileSuccess(null), 3500);
@@ -320,6 +321,10 @@ function AuthenticatedAccountView({
 
       const json = await res.json();
       if (res.ok && json.success) {
+        localStorage.setItem('salahtrack_calc_method', calculationMethod);
+        window.dispatchEvent(new CustomEvent('salahtrack_location_update'));
+        window.dispatchEvent(new Event('local-storage-update'));
+        window.dispatchEvent(new Event('storage'));
         setCalcSuccess(t.profile.profileUpdated);
         await refreshUser();
         setTimeout(() => setCalcSuccess(null), 3500);
@@ -573,12 +578,18 @@ function AuthenticatedAccountView({
         <div className="p-4 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/50 space-y-3">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div className="space-y-1">
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                {t.profile.currentLocation || 'Current Location'}
-              </span>
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                  {t.profile.currentLocation || 'Current Location'}
+                </span>
+                <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-600 text-white">
+                  {t.profile.activeBadge || 'Active'}
+                </span>
+              </div>
               <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-lg font-bold text-slate-900 dark:text-slate-100">
-                  {locationData.cityName}
+                <span className="text-lg font-bold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
+                  <MapPin className="w-4 h-4 text-emerald-600" />
+                  <span>{locationData.cityName}</span>
                 </span>
                 {locationData.country && (
                   <span className="text-xs px-2 py-0.5 rounded-md bg-emerald-100/70 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 font-medium">
@@ -750,28 +761,38 @@ function AuthenticatedAccountView({
 
         <form onSubmit={handleSaveCalcMethod} className="space-y-4">
           <div className="space-y-2">
-            {CALCULATION_METHODS.map((method) => (
-              <label
-                key={method.id}
-                className={`flex items-center justify-between p-3.5 rounded-xl border transition-all cursor-pointer ${
-                  calculationMethod === method.id
-                    ? 'border-emerald-600 bg-emerald-50/60 dark:bg-emerald-950/30'
-                    : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800/50'
-                }`}
-              >
-                <span className="text-xs font-medium text-slate-800 dark:text-slate-200">
-                  {method.name}
-                </span>
-                <input
-                  type="radio"
-                  name="calcMethod"
-                  value={method.id}
-                  checked={calculationMethod === method.id}
-                  onChange={(e) => setCalculationMethod(e.target.value)}
-                  className="w-4 h-4 text-emerald-600 focus:ring-emerald-500"
-                />
-              </label>
-            ))}
+            {CALCULATION_METHODS.map((method) => {
+              const isSelected = calculationMethod === method.id;
+              return (
+                <label
+                  key={method.id}
+                  className={`flex items-center justify-between p-3.5 rounded-xl border transition-all cursor-pointer ${
+                    isSelected
+                      ? 'border-emerald-600 bg-emerald-50/60 dark:bg-emerald-950/30'
+                      : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800/50'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold text-slate-800 dark:text-slate-200">
+                      {method.name}
+                    </span>
+                    {isSelected && (
+                      <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-600 text-white">
+                        {t.profile.activeBadge || 'Active'}
+                      </span>
+                    )}
+                  </div>
+                  <input
+                    type="radio"
+                    name="calcMethod"
+                    value={method.id}
+                    checked={isSelected}
+                    onChange={(e) => setCalculationMethod(e.target.value)}
+                    className="w-4 h-4 text-emerald-600 focus:ring-emerald-500"
+                  />
+                </label>
+              );
+            })}
           </div>
 
           <div className="flex justify-end pt-2">
@@ -926,6 +947,202 @@ function AuthenticatedAccountView({
   );
 }
 
+function GuestSettingsView() {
+  const { t, lang } = useLanguage();
+  const [calcMethod, setCalcMethod] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('salahtrack_calc_method') || 'MWL';
+    }
+    return 'MWL';
+  });
+  const [locationData, setLocationData] = useState(() => {
+    let city = 'Tashkent';
+    let lat = 41.2995;
+    let lng = 69.2401;
+    let tz = 'Asia/Tashkent';
+    try {
+      const stored = typeof window !== 'undefined' ? localStorage.getItem('salahtrack_location') : null;
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed.city) city = parsed.city;
+        if (typeof parsed.lat === 'number') lat = parsed.lat;
+        if (typeof parsed.lng === 'number') lng = parsed.lng;
+        if (parsed.timezone) tz = parsed.timezone;
+      }
+    } catch {
+      // ignore
+    }
+    return { city, lat, lng, timezone: tz };
+  });
+
+  const [isCityModalOpen, setIsCityModalOpen] = useState(false);
+  const [savedNotice, setSavedNotice] = useState<string | null>(null);
+
+  const handleSelectCityPreset = (cityPreset: CityPreset) => {
+    const localizedName = cityPreset.nativeNames[lang] || cityPreset.name;
+    const nextLoc = {
+      city: localizedName,
+      lat: cityPreset.coordinates.lat,
+      lng: cityPreset.coordinates.lng,
+      timezone: cityPreset.timezone || 'Asia/Tashkent',
+    };
+    setLocationData(nextLoc);
+    localStorage.setItem('salahtrack_location', JSON.stringify(nextLoc));
+    window.dispatchEvent(new CustomEvent('salahtrack_location_update'));
+    window.dispatchEvent(new Event('local-storage-update'));
+    window.dispatchEvent(new Event('storage'));
+    setIsCityModalOpen(false);
+    setSavedNotice(t.profile.locationSaved || 'Location saved');
+    setTimeout(() => setSavedNotice(null), 3000);
+  };
+
+  const handleSelectCustomCoords = (lat: number, lng: number, label: string) => {
+    const preset = findCityByCoordinates(lat, lng, 35);
+    const localizedName = preset ? (preset.nativeNames[lang] || preset.name) : label;
+    const nextLoc = {
+      city: localizedName,
+      lat,
+      lng,
+      timezone: preset?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Tashkent',
+    };
+    setLocationData(nextLoc);
+    localStorage.setItem('salahtrack_location', JSON.stringify(nextLoc));
+    window.dispatchEvent(new CustomEvent('salahtrack_location_update'));
+    window.dispatchEvent(new Event('local-storage-update'));
+    window.dispatchEvent(new Event('storage'));
+    setIsCityModalOpen(false);
+    setSavedNotice(t.profile.locationSaved || 'Location saved');
+    setTimeout(() => setSavedNotice(null), 3000);
+  };
+
+  const handleSaveMethod = (m: string) => {
+    setCalcMethod(m);
+    localStorage.setItem('salahtrack_calc_method', m);
+    window.dispatchEvent(new CustomEvent('salahtrack_location_update'));
+    window.dispatchEvent(new Event('local-storage-update'));
+    window.dispatchEvent(new Event('storage'));
+    setSavedNotice(t.profile.profileUpdated);
+    setTimeout(() => setSavedNotice(null), 3000);
+  };
+
+  return (
+    <div className="space-y-6">
+      {savedNotice && (
+        <div
+          role="status"
+          className="p-3.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 text-xs font-medium flex items-center gap-2"
+        >
+          <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
+          <span>{savedNotice}</span>
+        </div>
+      )}
+
+      {/* Guest Location Settings */}
+      <div className="rounded-2xl border border-slate-200 bg-white p-5 sm:p-6 dark:border-slate-800 dark:bg-slate-900 shadow-2xs space-y-4">
+        <div>
+          <h2 className="text-base font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+            <MapPin className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+            <span>{t.profile.cityLocation || 'City & Location'}</span>
+          </h2>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+            {t.profile.cityLocationDesc || 'Select your city to get authentic prayer times.'}
+          </p>
+        </div>
+
+        <div className="p-4 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/50 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                {t.profile.currentLocation || 'Current Location'}
+              </span>
+              <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-600 text-white">
+                {t.profile.activeBadge || 'Active'}
+              </span>
+            </div>
+            <p className="text-lg font-bold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
+              <MapPin className="w-4 h-4 text-emerald-600" />
+              <span>{locationData.city}</span>
+            </p>
+            <p className="text-xs text-slate-400 font-mono">
+              {locationData.lat.toFixed(4)}°N, {locationData.lng.toFixed(4)}°E • {locationData.timezone}
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setIsCityModalOpen(true)}
+            className="min-h-[44px] px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs rounded-xl shadow-xs transition-colors flex items-center gap-2 cursor-pointer self-start sm:self-auto"
+          >
+            <Compass className="w-4 h-4" />
+            <span>{t.profile.changeLocation || t.qibla.selectCity}</span>
+          </button>
+        </div>
+
+        {isCityModalOpen && (
+          <CityPickerModal
+            isOpen={isCityModalOpen}
+            onClose={() => setIsCityModalOpen(false)}
+            onSelectCity={handleSelectCityPreset}
+            onSelectCustomCoords={handleSelectCustomCoords}
+            onDetectGps={() => {}}
+            isLocatingGps={false}
+            currentCoords={{ lat: locationData.lat, lng: locationData.lng }}
+          />
+        )}
+      </div>
+
+      {/* Guest Calculation Method Settings */}
+      <div className="rounded-2xl border border-slate-200 bg-white p-5 sm:p-6 dark:border-slate-800 dark:bg-slate-900 shadow-2xs space-y-4">
+        <div>
+          <h2 className="text-base font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+            <Compass className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+            <span>{t.profile.calcMethod}</span>
+          </h2>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+            {t.account.sections.preferencesDesc}
+          </p>
+        </div>
+
+        <div className="space-y-2">
+          {CALCULATION_METHODS.map((method) => {
+            const isSelected = calcMethod === method.id;
+            return (
+              <label
+                key={method.id}
+                onClick={() => handleSaveMethod(method.id)}
+                className={`flex items-center justify-between p-3.5 rounded-xl border transition-all cursor-pointer ${
+                  isSelected
+                    ? 'border-emerald-600 bg-emerald-50/60 dark:bg-emerald-950/30'
+                    : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800/50'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-slate-800 dark:text-slate-200">
+                    {method.name}
+                  </span>
+                  {isSelected && (
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-600 text-white">
+                      {t.profile.activeBadge || 'Active'}
+                    </span>
+                  )}
+                </div>
+                <input
+                  type="radio"
+                  name="guestCalcMethod"
+                  value={method.id}
+                  checked={isSelected}
+                  onChange={() => handleSaveMethod(method.id)}
+                  className="w-4 h-4 text-emerald-600 focus:ring-emerald-500"
+                />
+              </label>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AccountContent() {
   const { t } = useLanguage();
   const { user, refreshUser, logout } = useAuth();
@@ -973,6 +1190,8 @@ function AccountContent() {
             </Link>
           </div>
         </div>
+
+        <GuestSettingsView />
 
         <ContactCreator className="pt-2" />
       </div>

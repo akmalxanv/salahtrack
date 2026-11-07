@@ -21,17 +21,8 @@ import {
   DEFAULT_OBSERVER,
   KAABA_COORDS,
   validateCoordinates,
+  sanitizeLocationName,
 } from '@/lib/qibla';
-
-/**
- * Sanitizes location names read from storage or user input:
- * strips control characters, HTML tags, trims, and bounds length to 100 chars.
- */
-function sanitizeLocationName(raw: unknown): string | null {
-  if (typeof raw !== 'string') return null;
-  const sanitized = raw.replace(/[\x00-\x1F\x7F<>]/g, '').trim().slice(0, 100);
-  return sanitized.length > 0 ? sanitized : null;
-}
 import { useDeviceOrientation } from '@/hooks/useDeviceOrientation';
 import { AstrolabeDial } from '@/components/qibla/AstrolabeDial';
 import { SpiritLevel } from '@/components/qibla/SpiritLevel';
@@ -167,6 +158,8 @@ export default function QiblaPage() {
             lng: newCoords.lng,
           }));
           localStorage.setItem('salahtrack_city_name', label);
+          window.dispatchEvent(new CustomEvent('salahtrack_location_update'));
+          window.dispatchEvent(new Event('storage'));
         } catch {
           // Ignore storage errors
         }
@@ -203,6 +196,8 @@ export default function QiblaPage() {
         lng: newCoords.lng,
       }));
       localStorage.setItem('salahtrack_city_name', cityLabel);
+      window.dispatchEvent(new CustomEvent('salahtrack_location_update'));
+      window.dispatchEvent(new Event('storage'));
     } catch {
       // Ignore storage errors
     }
@@ -231,6 +226,8 @@ export default function QiblaPage() {
         lng: validation.lng,
       }));
       localStorage.setItem('salahtrack_city_name', cleanLabel);
+      window.dispatchEvent(new CustomEvent('salahtrack_location_update'));
+      window.dispatchEvent(new Event('storage'));
     } catch {
       // Ignore storage errors
     }

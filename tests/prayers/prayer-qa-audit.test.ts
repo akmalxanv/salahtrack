@@ -9,7 +9,7 @@ import { Session } from '../../src/models/Session.ts';
 import {
   POST as createPrayerHandler,
 } from '../../src/app/api/prayers/route.ts';
-import { GET as getPrayerTimesHandler } from '../../src/app/api/prayer-times/route.ts';
+import { GET as getPrayerTimesHandler, clearPrayerTimesCache } from '../../src/app/api/prayer-times/route.ts';
 import {
   getZonedDateParts,
   isPostMidnightPreFajr,
@@ -57,6 +57,7 @@ let mockSessions: Array<{
 }> = [];
 
 function setupMocks() {
+  clearPrayerTimesCache();
   mockRecords = [];
   mockUsers = [];
   mockSessions = [];
