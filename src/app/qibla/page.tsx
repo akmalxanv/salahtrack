@@ -17,6 +17,7 @@ import { useLanguage } from '@/context/LanguageContext';
 import {
   calculateQiblaBearing,
   calculateDistanceToKaaba,
+  calculateMagneticDeclination,
   getLocalizedCompassDirection,
   DEFAULT_OBSERVER,
   KAABA_COORDS,
@@ -65,6 +66,11 @@ export default function QiblaPage() {
     [qiblaBearing, lang]
   );
 
+  const declination = useMemo(
+    () => calculateMagneticDeclination(coords.lat, coords.lng),
+    [coords.lat, coords.lng]
+  );
+
   // Decoupled 60fps Device Orientation Hook
   const {
     heading,
@@ -75,6 +81,7 @@ export default function QiblaPage() {
     permissionState,
     isSecureContext,
     isSimulating,
+    isUncalibrated,
     simulatedHeading,
     setSimulatedHeading,
     requestPermission,
@@ -84,6 +91,7 @@ export default function QiblaPage() {
     unwrappedNeedleAngle,
   } = useDeviceOrientation({
     qiblaBearing,
+    declination: declination.declinationDeg,
   });
 
   // Restore cached location from localStorage on mount with strict validation
@@ -310,29 +318,64 @@ export default function QiblaPage() {
         </div>
       )}
 
+      {/* Uncalibrated Compass Figure-8 Calibration Alert Banner */}
+      {isUncalibrated && (
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-2xl bg-amber-500/15 border border-amber-500/40 text-amber-900 dark:text-amber-200 shadow-xs animate-in fade-in duration-200">
+          <div className="flex items-center gap-3">
+            <RotateCw className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 animate-spin" />
+            <div>
+              <p className="text-xs font-bold">{t.qibla.needsCalibration}</p>
+              <p className="text-[11px] text-amber-700 dark:text-amber-300 mt-0.5">
+                {t.qibla.figure8Alert}
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsCalibrationOpen(true)}
+            className="min-h-[44px] px-4 py-2 rounded-xl text-xs font-semibold bg-amber-600 hover:bg-amber-700 text-white shadow-xs transition-colors shrink-0 cursor-pointer self-start sm:self-auto"
+          >
+            {t.qibla.calibrateButton}
+          </button>
+        </div>
+      )}
+
       {/* Main Astrolabe Instrument Stage */}
       <div className="flex flex-col items-center justify-center p-6 sm:p-10 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 shadow-sm relative overflow-hidden">
         {/* Subtle decorative background gradient */}
         <div className="absolute inset-0 bg-gradient-to-b from-amber-500/5 via-transparent to-transparent pointer-events-none" />
 
-        {/* Sensor Status Indicator Chip */}
-        <div className="mb-6 flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 shadow-2xs">
-          {isSimulating ? (
-            <>
-              <Sliders className="w-3.5 h-3.5 text-amber-500" />
-              <span>{t.qibla.manualSimulation}</span>
-            </>
-          ) : isSensorAvailable ? (
-            <>
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-              <span>{t.qibla.compassSensor}</span>
-            </>
-          ) : (
-            <>
-              <Smartphone className="w-3.5 h-3.5 text-slate-400" />
-              <span>{t.qibla.numericFallback}</span>
-            </>
-          )}
+        {/* Sensor Status Indicator & True North vs Magnetic Declination Chips */}
+        <div className="mb-6 flex flex-wrap items-center justify-center gap-2">
+          {/* Sensor Mode Chip */}
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 shadow-2xs">
+            {isSimulating ? (
+              <>
+                <Sliders className="w-3.5 h-3.5 text-amber-500" />
+                <span>{t.qibla.manualSimulation}</span>
+              </>
+            ) : isSensorAvailable ? (
+              <>
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                <span>{t.qibla.compassSensor}</span>
+              </>
+            ) : (
+              <>
+                <Smartphone className="w-3.5 h-3.5 text-slate-400" />
+                <span>{t.qibla.numericFallback}</span>
+              </>
+            )}
+          </div>
+
+          {/* True North (GPS) vs Magnetic North Declination Badge */}
+          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 shadow-2xs">
+            <Navigation className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+            <span>{t.qibla.trueNorthGps}</span>
+            <span className="text-slate-400">•</span>
+            <span className="font-mono font-semibold text-emerald-600 dark:text-emerald-400">
+              {declination.formatted}
+            </span>
+          </div>
         </div>
 
         {/* 60fps Astrolabe Compass Dial Component */}

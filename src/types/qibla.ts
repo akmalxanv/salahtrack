@@ -54,6 +54,12 @@ export interface CityNativeNames {
   ar?: string;
 }
 
+export interface MagneticDeclination {
+  declinationDeg: number;       // Magnetic declination angle in degrees (-180 to 180)
+  isEast: boolean;              // True if positive (East), false if negative (West)
+  formatted: string;            // e.g. "+5.5° E" or "-12.5° W"
+}
+
 export interface CityPreset {
   id: string;                  // Unique slug (e.g. 'tashkent', 'makkah')
   name: string;                // Default English name

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, Suspense } from 'react';
+import React, { useState, useMemo, Suspense } from 'react';
 import Link from 'next/link';
 import {
   User as UserIcon,
@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { useLanguage } from '@/context/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
+import LanguageSelector from '@/components/LanguageSelector';
 import ContactCreator from '@/components/ContactCreator';
 import { findCityByCoordinates, findCityByNameOrId } from '@/lib/cities';
 import { CityPickerModal } from '@/components/qibla/CityPickerModal';
@@ -45,17 +46,16 @@ function AuthenticatedAccountView({
 }) {
   const { t, lang } = useLanguage();
 
-  // Personal Information State initialized directly from user
+  // Personal Information State
   const [name, setName] = useState(user.name || '');
-  const [calculationMethod, setCalculationMethod] = useState(user.preferences?.calculationMethod || 'MWL');
   const [profileSaving, setProfileSaving] = useState(false);
   const [profileSuccess, setProfileSuccess] = useState<string | null>(null);
   const [profileError, setProfileError] = useState<string | null>(null);
 
-  // Calculation Method Saving State
+  // Calculation Method State
+  const [calculationMethod, setCalculationMethod] = useState(user.preferences?.calculationMethod || 'MWL');
   const [calcSaving, setCalcSaving] = useState(false);
   const [calcSuccess, setCalcSuccess] = useState<string | null>(null);
-  const [calcError, setCalcError] = useState<string | null>(null);
 
   // Password Change State
   const [currentPassword, setCurrentPassword] = useState('');
@@ -66,7 +66,21 @@ function AuthenticatedAccountView({
   const [passwordSuccess, setPasswordSuccess] = useState<string | null>(null);
   const [passwordError, setPasswordError] = useState<string | null>(null);
 
-  // City / Location State initialized directly from user or localStorage
+  // Live Password Strength Indicator
+  const passwordStrength = useMemo(() => {
+    if (!newPassword) return { score: 0, label: '', colorClass: '' };
+    let score = 0;
+    if (newPassword.length >= 8) score++;
+    if (/[A-Z]/.test(newPassword) && /[a-z]/.test(newPassword)) score++;
+    if (/[0-9]/.test(newPassword)) score++;
+    if (/[^A-Za-z0-9]/.test(newPassword)) score++;
+
+    if (score <= 1) return { score: 1, label: t.account.passwordWeak, colorClass: 'bg-rose-500 text-rose-600 dark:text-rose-400' };
+    if (score <= 3) return { score: 2, label: t.account.passwordMedium, colorClass: 'bg-amber-500 text-amber-600 dark:text-amber-400' };
+    return { score: 3, label: t.account.passwordStrong, colorClass: 'bg-emerald-500 text-emerald-600 dark:text-emerald-400' };
+  }, [newPassword, t]);
+
+  // Location State
   const [locationData, setLocationData] = useState(() => {
     let initialName = user.preferences?.city || '';
     let initialLat = user.preferences?.latitude;
@@ -106,14 +120,89 @@ function AuthenticatedAccountView({
   });
 
   const [isCityModalOpen, setIsCityModalOpen] = useState(false);
-  const [isCustomCoordOpen, setIsCustomCoordOpen] = useState(false);
-  const [customLatInput, setCustomLatInput] = useState('');
-  const [customLngInput, setCustomLngInput] = useState('');
-  const [customCoordError, setCustomCoordError] = useState<string | null>(null);
   const [locationSaving, setLocationSaving] = useState(false);
   const [locationSuccess, setLocationSuccess] = useState<string | null>(null);
   const [locationError, setLocationError] = useState<string | null>(null);
   const [gpsDetecting, setGpsDetecting] = useState(false);
+
+  // Instant location persistence
+  const persistLocation = async (nextLoc: typeof locationData) => {
+    setLocationSaving(true);
+    setLocationSuccess(null);
+    setLocationError(null);
+    try {
+      const res = await fetch('/api/user/profile', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          preferences: {
+            city: nextLoc.cityName,
+            latitude: nextLoc.latitude,
+            longitude: nextLoc.longitude,
+            timezone: nextLoc.timezone,
+          },
+        }),
+      });
+
+      const json = await res.json();
+      if (!res.ok || !json.success) {
+        setLocationError(json.error || t.common.error);
+        setLocationSaving(false);
+        return;
+      }
+
+      localStorage.setItem(
+        'salahtrack_location',
+        JSON.stringify({
+          city: nextLoc.cityName,
+          lat: nextLoc.latitude,
+          lng: nextLoc.longitude,
+          timezone: nextLoc.timezone,
+        })
+      );
+
+      window.dispatchEvent(new CustomEvent('salahtrack_location_update'));
+      window.dispatchEvent(new Event('local-storage-update'));
+      window.dispatchEvent(new Event('storage'));
+
+      setLocationSuccess(t.profile.locationSaved || 'Location saved');
+      await refreshUser();
+      setTimeout(() => setLocationSuccess(null), 3000);
+    } catch {
+      setLocationError(t.common.error);
+    } finally {
+      setLocationSaving(false);
+    }
+  };
+
+  const handleSelectCityPreset = (city: CityPreset) => {
+    const localizedName = city.nativeNames[lang] || city.name;
+    const nextLoc = {
+      cityName: localizedName,
+      country: city.country,
+      latitude: city.coordinates.lat,
+      longitude: city.coordinates.lng,
+      timezone: city.timezone || 'Asia/Tashkent',
+    };
+    setLocationData(nextLoc);
+    setIsCityModalOpen(false);
+    persistLocation(nextLoc);
+  };
+
+  const handleSelectCustomCoords = (lat: number, lng: number, label: string) => {
+    const preset = findCityByCoordinates(lat, lng, 35);
+    const nextLoc = {
+      cityName: preset ? (preset.nativeNames[lang] || preset.name) : label,
+      country: preset ? preset.country : '',
+      latitude: lat,
+      longitude: lng,
+      timezone: preset?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Tashkent',
+    };
+    setLocationData(nextLoc);
+    setIsCityModalOpen(false);
+    persistLocation(nextLoc);
+  };
 
   const handleDetectGps = () => {
     if (typeof window === 'undefined' || !navigator.geolocation) {
@@ -128,25 +217,16 @@ function AuthenticatedAccountView({
         const lat = position.coords.latitude;
         const lng = position.coords.longitude;
         const preset = findCityByCoordinates(lat, lng, 35);
-        if (preset) {
-          const localizedName = preset.nativeNames[lang] || preset.name;
-          setLocationData({
-            cityName: localizedName,
-            country: preset.country,
-            latitude: lat,
-            longitude: lng,
-            timezone: preset.timezone || 'Asia/Tashkent',
-          });
-        } else {
-          setLocationData({
-            cityName: `${lat.toFixed(4)}°, ${lng.toFixed(4)}°`,
-            country: '',
-            latitude: lat,
-            longitude: lng,
-            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Tashkent',
-          });
-        }
+        const nextLoc = {
+          cityName: preset ? (preset.nativeNames[lang] || preset.name) : `${lat.toFixed(4)}°, ${lng.toFixed(4)}°`,
+          country: preset ? preset.country : '',
+          latitude: lat,
+          longitude: lng,
+          timezone: preset?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Tashkent',
+        };
+        setLocationData(nextLoc);
         setGpsDetecting(false);
+        persistLocation(nextLoc);
       },
       (err) => {
         let errorMsg = t.profile.gpsGenericError || 'Could not determine GPS coordinates';
@@ -164,54 +244,11 @@ function AuthenticatedAccountView({
     );
   };
 
-  const handleSelectCityPreset = (city: CityPreset) => {
-    const localizedName = city.nativeNames[lang] || city.name;
-    setLocationData({
-      cityName: localizedName,
-      country: city.country,
-      latitude: city.coordinates.lat,
-      longitude: city.coordinates.lng,
-      timezone: city.timezone || 'Asia/Tashkent',
-    });
-    setIsCityModalOpen(false);
-  };
-
-  const handleSelectCustomCoords = (lat: number, lng: number, label: string) => {
-    const preset = findCityByCoordinates(lat, lng, 35);
-    setLocationData({
-      cityName: preset ? (preset.nativeNames[lang] || preset.name) : label,
-      country: preset ? preset.country : '',
-      latitude: lat,
-      longitude: lng,
-      timezone: preset?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Tashkent',
-    });
-    setIsCityModalOpen(false);
-  };
-
-  const handleApplyManualCoords = () => {
-    setCustomCoordError(null);
-    const lat = parseFloat(customLatInput);
-    const lng = parseFloat(customLngInput);
-    if (isNaN(lat) || lat < -90 || lat > 90 || isNaN(lng) || lng < -180 || lng > 180) {
-      setCustomCoordError(t.qibla.invalidCoordinates);
-      return;
-    }
-    const preset = findCityByCoordinates(lat, lng, 35);
-    setLocationData({
-      cityName: preset ? (preset.nativeNames[lang] || preset.name) : `${lat.toFixed(4)}°, ${lng.toFixed(4)}°`,
-      country: preset ? preset.country : '',
-      latitude: lat,
-      longitude: lng,
-      timezone: preset?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Tashkent',
-    });
-    setIsCustomCoordOpen(false);
-  };
-
-  const handleSaveLocation = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    setLocationSuccess(null);
-    setLocationError(null);
-    setLocationSaving(true);
+  // Instant calculation method selection & auto-save
+  const handleSelectCalcMethod = async (methodId: string) => {
+    setCalculationMethod(methodId);
+    setCalcSaving(true);
+    setCalcSuccess(null);
 
     try {
       const res = await fetch('/api/user/profile', {
@@ -220,42 +257,25 @@ function AuthenticatedAccountView({
         credentials: 'same-origin',
         body: JSON.stringify({
           preferences: {
-            city: locationData.cityName,
-            latitude: locationData.latitude,
-            longitude: locationData.longitude,
-            timezone: locationData.timezone,
+            calculationMethod: methodId,
           },
         }),
       });
 
       const json = await res.json();
-      if (!res.ok || !json.success) {
-        setLocationError(json.error || t.common.error);
-        setLocationSaving(false);
-        return;
+      if (res.ok && json.success) {
+        localStorage.setItem('salahtrack_calc_method', methodId);
+        window.dispatchEvent(new CustomEvent('salahtrack_location_update'));
+        window.dispatchEvent(new Event('local-storage-update'));
+        window.dispatchEvent(new Event('storage'));
+        setCalcSuccess(t.profile.profileUpdated);
+        await refreshUser();
+        setTimeout(() => setCalcSuccess(null), 3000);
       }
-
-      localStorage.setItem(
-        'salahtrack_location',
-        JSON.stringify({
-          city: locationData.cityName,
-          lat: locationData.latitude,
-          lng: locationData.longitude,
-          timezone: locationData.timezone,
-        })
-      );
-
-      window.dispatchEvent(new CustomEvent('salahtrack_location_update'));
-      window.dispatchEvent(new Event('local-storage-update'));
-      window.dispatchEvent(new Event('storage'));
-
-      setLocationSuccess(t.profile.locationSaved || 'Location saved');
-      await refreshUser();
-      setTimeout(() => setLocationSuccess(null), 3500);
     } catch {
-      setLocationError(t.common.error);
+      // ignore
     } finally {
-      setLocationSaving(false);
+      setCalcSaving(false);
     }
   };
 
@@ -283,10 +303,6 @@ function AuthenticatedAccountView({
 
       const json = await res.json();
       if (res.ok && json.success) {
-        localStorage.setItem('salahtrack_calc_method', calculationMethod);
-        window.dispatchEvent(new CustomEvent('salahtrack_location_update'));
-        window.dispatchEvent(new Event('local-storage-update'));
-        window.dispatchEvent(new Event('storage'));
         setProfileSuccess(t.profile.profileUpdated);
         await refreshUser();
         setTimeout(() => setProfileSuccess(null), 3500);
@@ -297,44 +313,6 @@ function AuthenticatedAccountView({
       setProfileError(t.common.error);
     } finally {
       setProfileSaving(false);
-    }
-  };
-
-  // Save Calculation Method
-  const handleSaveCalcMethod = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setCalcSuccess(null);
-    setCalcError(null);
-    setCalcSaving(true);
-
-    try {
-      const res = await fetch('/api/user/profile', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
-        body: JSON.stringify({
-          preferences: {
-            calculationMethod,
-          },
-        }),
-      });
-
-      const json = await res.json();
-      if (res.ok && json.success) {
-        localStorage.setItem('salahtrack_calc_method', calculationMethod);
-        window.dispatchEvent(new CustomEvent('salahtrack_location_update'));
-        window.dispatchEvent(new Event('local-storage-update'));
-        window.dispatchEvent(new Event('storage'));
-        setCalcSuccess(t.profile.profileUpdated);
-        await refreshUser();
-        setTimeout(() => setCalcSuccess(null), 3500);
-      } else {
-        setCalcError(json.error || t.common.error);
-      }
-    } catch {
-      setCalcError(t.common.error);
-    } finally {
-      setCalcSaving(false);
     }
   };
 
@@ -384,7 +362,6 @@ function AuthenticatedAccountView({
     }
   };
 
-  // Streamlined Cohesive Authenticated View (All settings in one primary view)
   return (
     <div className="space-y-6 max-w-4xl mx-auto pb-12">
       {/* Header with Title and Logout Action */}
@@ -411,35 +388,35 @@ function AuthenticatedAccountView({
         </button>
       </header>
 
-      {/* Account Info Profile Banner */}
-      <div className="rounded-2xl border border-slate-200 bg-white p-5 sm:p-6 dark:border-slate-800 dark:bg-slate-900 shadow-2xs">
-        <div className="flex items-center gap-4">
-          <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-emerald-600 to-teal-500 text-white font-bold text-xl flex items-center justify-center shadow-md shadow-emerald-600/20 shrink-0 select-none">
-            {user.name.charAt(0).toUpperCase()}
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100 truncate">
-                {user.name}
-              </h2>
-            </div>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 truncate">
-              @{user.username} • {user.email}
+      {/* ========================================================================= */}
+      {/* CARD 1: Profile & Identity                                                */}
+      {/* ========================================================================= */}
+      <div className="rounded-2xl border border-slate-200 bg-white p-5 sm:p-6 dark:border-slate-800 dark:bg-slate-900 shadow-2xs space-y-5">
+        <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+          <div>
+            <h2 className="text-base font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+              <UserIcon className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+              <span>{t.account.sections.personalInfo}</span>
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              {t.account.sections.personalInfoDesc}
             </p>
           </div>
         </div>
-      </div>
 
-      {/* Section 1: Personal Information Form */}
-      <div className="rounded-2xl border border-slate-200 bg-white p-5 sm:p-6 dark:border-slate-800 dark:bg-slate-900 shadow-2xs space-y-5">
-        <div>
-          <h2 className="text-base font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-            <UserIcon className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-            <span>{t.account.sections.personalInfo}</span>
-          </h2>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-            {t.account.sections.personalInfoDesc}
-          </p>
+        {/* User Identity Chip */}
+        <div className="p-4 rounded-xl bg-slate-50/80 dark:bg-slate-800/50 border border-slate-200/70 dark:border-slate-800 flex items-center gap-3.5">
+          <div className="w-12 h-12 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-500 text-white font-bold text-lg flex items-center justify-center shadow-md shadow-emerald-600/20 shrink-0 select-none">
+            {user.name.charAt(0).toUpperCase()}
+          </div>
+          <div className="min-w-0 flex-1">
+            <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100 truncate">
+              {user.name}
+            </h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
+              @{user.username} • {user.email}
+            </p>
+          </div>
         </div>
 
         {/* Feedback Messages */}
@@ -463,6 +440,7 @@ function AuthenticatedAccountView({
         )}
 
         <form onSubmit={handleSaveProfile} className="space-y-4">
+          {/* Editable Full Name */}
           <div className="space-y-1.5">
             <label
               htmlFor="name"
@@ -480,32 +458,54 @@ function AuthenticatedAccountView({
             />
           </div>
 
+          {/* Read-Only Username & Email */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
-              <span className="block text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300">
-                {t.auth.signup.usernameLabel}
-              </span>
+              <div className="flex items-center justify-between">
+                <span className="block text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300">
+                  {t.auth.signup.usernameLabel}
+                </span>
+                <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-400 font-medium">
+                  {t.groups.strictlyReadOnly}
+                </span>
+              </div>
               <input
                 type="text"
                 disabled
                 value={`@${user.username}`}
-                className="w-full px-3.5 py-2.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-500 dark:text-slate-400 cursor-not-allowed"
+                className="w-full px-3.5 py-2.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-500 dark:text-slate-400 cursor-not-allowed select-none"
               />
             </div>
 
             <div className="space-y-1.5">
-              <span className="block text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300">
-                {t.auth.signup.emailLabel}
-              </span>
+              <div className="flex items-center justify-between">
+                <span className="block text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300">
+                  {t.auth.signup.emailLabel}
+                </span>
+                <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 font-medium">
+                  {t.common.saved}
+                </span>
+              </div>
               <input
                 type="email"
                 disabled
                 value={user.email}
-                className="w-full px-3.5 py-2.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-500 dark:text-slate-400 cursor-not-allowed"
+                className="w-full px-3.5 py-2.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-500 dark:text-slate-400 cursor-not-allowed select-none"
               />
             </div>
           </div>
 
+          {/* Language Selector */}
+          <div className="space-y-1.5 pt-1">
+            <span className="block text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300">
+              {t.account.sections.preferences}
+            </span>
+            <div className="pt-0.5">
+              <LanguageSelector />
+            </div>
+          </div>
+
+          {/* Save Profile Button */}
           <div className="flex justify-end pt-2">
             <button
               type="submit"
@@ -525,9 +525,11 @@ function AuthenticatedAccountView({
         </form>
       </div>
 
-      {/* Section 2: City / Location Selector (Uzbekistan 14 regions + International hubs + GPS) */}
+      {/* ========================================================================= */}
+      {/* CARD 2: Prayer Times & Location (City & Instant Auto-Save Calculation)   */}
+      {/* ========================================================================= */}
       <div className="rounded-2xl border border-slate-200 bg-white p-5 sm:p-6 dark:border-slate-800 dark:bg-slate-900 shadow-2xs space-y-5">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
           <div>
             <h2 className="text-base font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
               <MapPin className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
@@ -542,19 +544,26 @@ function AuthenticatedAccountView({
           <button
             type="button"
             onClick={handleDetectGps}
-            disabled={gpsDetecting}
+            disabled={gpsDetecting || locationSaving}
             className="self-start sm:self-auto min-h-[44px] px-3.5 py-2 rounded-xl border border-emerald-200 dark:border-emerald-800/80 bg-emerald-50/60 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100/80 dark:hover:bg-emerald-900/60 text-xs font-semibold flex items-center gap-2 transition-colors cursor-pointer disabled:opacity-60"
             title={t.profile.detectGps}
           >
-            {gpsDetecting ? (
+            {gpsDetecting || locationSaving ? (
               <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-600 dark:text-emerald-400" />
             ) : (
               <Crosshair className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
             )}
-            <span>{gpsDetecting ? t.profile.detectingGps : t.profile.detectGps}</span>
+            <span>
+              {gpsDetecting
+                ? t.profile.detectingGps
+                : locationSaving
+                  ? t.dashboard.saving
+                  : t.profile.detectGps}
+            </span>
           </button>
         </div>
 
+        {/* Location Alerts */}
         {locationSuccess && (
           <div
             role="status"
@@ -573,8 +582,17 @@ function AuthenticatedAccountView({
             <span>{locationError}</span>
           </div>
         )}
+        {calcSuccess && (
+          <div
+            role="status"
+            className="p-3.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 text-xs font-medium flex items-center gap-2"
+          >
+            <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
+            <span>{calcSuccess}</span>
+          </div>
+        )}
 
-        {/* Selected Location Card Display */}
+        {/* Current City Display Card */}
         <div className="p-4 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/50 space-y-3">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div className="space-y-1">
@@ -631,87 +649,45 @@ function AuthenticatedAccountView({
           </div>
         </div>
 
-        {/* Optional Manual Coordinate Input Expandable */}
-        <div className="space-y-3">
-          <button
-            type="button"
-            onClick={() => setIsCustomCoordOpen((prev) => !prev)}
-            className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 hover:underline inline-flex items-center gap-1 cursor-pointer"
-          >
-            <span>{t.profile.customCoordinates || 'Enter coordinates manually'}</span>
-          </button>
+        {/* Calculation Method Segmented Control (Instant Auto-Save) */}
+        <div className="space-y-3 pt-2">
+          <div>
+            <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+              <Compass className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+              <span>{t.profile.calcMethod}</span>
+              {calcSaving && <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-600 ml-1" />}
+            </h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              {t.account.sections.preferencesDesc}
+            </p>
+          </div>
 
-          {isCustomCoordOpen && (
-            <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 space-y-3">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label htmlFor="customLatInput" className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
-                    Latitude (-90 to 90)
-                  </label>
-                  <input
-                    id="customLatInput"
-                    type="number"
-                    step="0.0001"
-                    min="-90"
-                    max="90"
-                    value={customLatInput}
-                    onChange={(e) => setCustomLatInput(e.target.value)}
-                    placeholder={locationData.latitude.toString()}
-                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label htmlFor="customLngInput" className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
-                    Longitude (-180 to 180)
-                  </label>
-                  <input
-                    id="customLngInput"
-                    type="number"
-                    step="0.0001"
-                    min="-180"
-                    max="180"
-                    value={customLngInput}
-                    onChange={(e) => setCustomLngInput(e.target.value)}
-                    placeholder={locationData.longitude.toString()}
-                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
-                  />
-                </div>
-              </div>
-
-              {customCoordError && (
-                <p className="text-xs text-red-600 dark:text-red-400">{customCoordError}</p>
-              )}
-
-              <div className="flex justify-end gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            {CALCULATION_METHODS.map((method) => {
+              const isSelected = calculationMethod === method.id;
+              return (
                 <button
+                  key={method.id}
                   type="button"
-                  onClick={handleApplyManualCoords}
-                  className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-medium transition-colors cursor-pointer"
+                  onClick={() => handleSelectCalcMethod(method.id)}
+                  className={`min-h-[44px] p-3 rounded-xl border text-left transition-all cursor-pointer flex items-center justify-between gap-2 ${
+                    isSelected
+                      ? 'border-emerald-600 bg-emerald-50/70 dark:bg-emerald-950/40 ring-1 ring-emerald-500/30'
+                      : 'border-slate-200 dark:border-slate-750 bg-slate-50/40 dark:bg-slate-800/40 hover:bg-slate-100 dark:hover:bg-slate-800'
+                  }`}
                 >
-                  {t.qibla.applyCoords || 'Apply'}
+                  <span className={`text-xs font-semibold ${isSelected ? 'text-emerald-900 dark:text-emerald-100' : 'text-slate-700 dark:text-slate-300'}`}>
+                    {method.name}
+                  </span>
+                  {isSelected && (
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-600 text-white shrink-0">
+                      {t.profile.activeBadge || 'Active'}
+                    </span>
+                  )}
                 </button>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Save Location Button */}
-        <div className="flex justify-end pt-2">
-          <button
-            type="button"
-            onClick={handleSaveLocation}
-            disabled={locationSaving}
-            className="min-h-[44px] py-2.5 px-5 bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs rounded-xl shadow-xs transition-colors flex items-center gap-2 cursor-pointer disabled:opacity-60"
-          >
-            {locationSaving ? (
-              <>
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                <span>{t.profile.savingLocation || t.common.loading}</span>
-              </>
-            ) : (
-              <span>{t.profile.saveLocation || t.profile.saveProfile}</span>
-            )}
-          </button>
+              );
+            })}
+          </div>
         </div>
 
         {/* CityPickerModal Dialog */}
@@ -728,104 +704,23 @@ function AuthenticatedAccountView({
         )}
       </div>
 
-      {/* Section 2: Prayer Calculation Method (Clear, Dedicated Section) */}
+      {/* ========================================================================= */}
+      {/* CARD 3: Security & Credentials (Password Update with Live Strength Meter) */}
+      {/* ========================================================================= */}
       <div className="rounded-2xl border border-slate-200 bg-white p-5 sm:p-6 dark:border-slate-800 dark:bg-slate-900 shadow-2xs space-y-5">
-        <div>
-          <h2 className="text-base font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-            <Compass className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-            <span>{t.profile.calcMethod}</span>
-          </h2>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-            {t.account.sections.preferencesDesc}
-          </p>
+        <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+          <div>
+            <h2 className="text-base font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+              <KeyRound className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+              <span>{t.profile.changePassword}</span>
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              {t.account.sections.securityDesc}
+            </p>
+          </div>
         </div>
 
-        {calcSuccess && (
-          <div
-            role="status"
-            className="p-3.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 text-xs font-medium flex items-center gap-2"
-          >
-            <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
-            <span>{calcSuccess}</span>
-          </div>
-        )}
-        {calcError && (
-          <div
-            role="alert"
-            className="p-3.5 rounded-xl bg-red-50 dark:bg-red-950/60 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 text-xs font-medium flex items-center gap-2"
-          >
-            <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
-            <span>{calcError}</span>
-          </div>
-        )}
-
-        <form onSubmit={handleSaveCalcMethod} className="space-y-4">
-          <div className="space-y-2">
-            {CALCULATION_METHODS.map((method) => {
-              const isSelected = calculationMethod === method.id;
-              return (
-                <label
-                  key={method.id}
-                  className={`flex items-center justify-between p-3.5 rounded-xl border transition-all cursor-pointer ${
-                    isSelected
-                      ? 'border-emerald-600 bg-emerald-50/60 dark:bg-emerald-950/30'
-                      : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800/50'
-                  }`}
-                >
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-semibold text-slate-800 dark:text-slate-200">
-                      {method.name}
-                    </span>
-                    {isSelected && (
-                      <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-600 text-white">
-                        {t.profile.activeBadge || 'Active'}
-                      </span>
-                    )}
-                  </div>
-                  <input
-                    type="radio"
-                    name="calcMethod"
-                    value={method.id}
-                    checked={isSelected}
-                    onChange={(e) => setCalculationMethod(e.target.value)}
-                    className="w-4 h-4 text-emerald-600 focus:ring-emerald-500"
-                  />
-                </label>
-              );
-            })}
-          </div>
-
-          <div className="flex justify-end pt-2">
-            <button
-              type="submit"
-              disabled={calcSaving}
-              className="min-h-[44px] py-2.5 px-5 bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs rounded-xl shadow-xs transition-colors flex items-center gap-2 cursor-pointer disabled:opacity-60"
-            >
-              {calcSaving ? (
-                <>
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  <span>{t.common.loading}</span>
-                </>
-              ) : (
-                <span>{t.profile.saveProfile}</span>
-              )}
-            </button>
-          </div>
-        </form>
-      </div>
-
-      {/* Section 3: Integrated Security Settings (Password Change & Security Notice) */}
-      <div className="rounded-2xl border border-slate-200 bg-white p-5 sm:p-6 dark:border-slate-800 dark:bg-slate-900 shadow-2xs space-y-5">
-        <div>
-          <h2 className="text-base font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-            <KeyRound className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-            <span>{t.profile.changePassword}</span>
-          </h2>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-            {t.account.argonSecurityNote}
-          </p>
-        </div>
-
+        {/* Feedback Messages */}
         {passwordSuccess && (
           <div
             role="status"
@@ -846,6 +741,7 @@ function AuthenticatedAccountView({
         )}
 
         <form onSubmit={handleChangePassword} className="space-y-4">
+          {/* Current Password */}
           <div className="space-y-1.5">
             <label
               htmlFor="currPass"
@@ -853,16 +749,27 @@ function AuthenticatedAccountView({
             >
               {t.profile.currentPassword}
             </label>
-            <input
-              id="currPass"
-              type={showPasswords ? 'text' : 'password'}
-              required
-              value={currentPassword}
-              onChange={(e) => setCurrentPassword(e.target.value)}
-              className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500"
-            />
+            <div className="relative">
+              <input
+                id="currPass"
+                type={showPasswords ? 'text' : 'password'}
+                required
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                className="w-full px-3.5 py-2.5 pr-10 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPasswords(!showPasswords)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer p-1"
+                aria-label={showPasswords ? t.account.hidePassword : t.account.showPassword}
+              >
+                {showPasswords ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
           </div>
 
+          {/* New Password & Confirm Password */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <label
@@ -899,7 +806,27 @@ function AuthenticatedAccountView({
             </div>
           </div>
 
-          <div className="flex items-center justify-between pt-1">
+          {/* Live Password Strength Meter */}
+          {newPassword && (
+            <div className="space-y-1.5 pt-1">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-slate-500 dark:text-slate-400 font-medium">
+                  {t.account.passwordStrength}:
+                </span>
+                <span className={`font-bold ${passwordStrength.colorClass}`}>
+                  {passwordStrength.label}
+                </span>
+              </div>
+              <div className="grid grid-cols-3 gap-1.5 h-1.5">
+                <div className={`rounded-full ${passwordStrength.score >= 1 ? 'bg-rose-500' : 'bg-slate-200 dark:bg-slate-700'}`} />
+                <div className={`rounded-full ${passwordStrength.score >= 2 ? 'bg-amber-500' : 'bg-slate-200 dark:bg-slate-700'}`} />
+                <div className={`rounded-full ${passwordStrength.score >= 3 ? 'bg-emerald-500' : 'bg-slate-200 dark:bg-slate-700'}`} />
+              </div>
+            </div>
+          )}
+
+          {/* Action Row */}
+          <div className="flex items-center justify-between pt-2">
             <button
               type="button"
               onClick={() => setShowPasswords(!showPasswords)}
@@ -911,7 +838,7 @@ function AuthenticatedAccountView({
 
             <button
               type="submit"
-              disabled={passwordSaving}
+              disabled={passwordSaving || !newPassword || newPassword.length < 8}
               className="min-h-[44px] py-2.5 px-5 bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs rounded-xl shadow-xs transition-colors flex items-center gap-2 cursor-pointer disabled:opacity-60"
             >
               {passwordSaving ? (
@@ -926,16 +853,19 @@ function AuthenticatedAccountView({
           </div>
         </form>
 
-        {/* Embedded Secure Session Notice */}
+        {/* Embedded Argon2id Security & Session Badge */}
         <div className="pt-4 border-t border-slate-100 dark:border-slate-800">
           <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/80 dark:border-slate-800 flex items-start gap-3">
             <ShieldCheck className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
             <div className="space-y-0.5">
-              <h3 className="text-xs font-bold text-slate-900 dark:text-slate-100">
-                {t.account.secureSessionTitle}
+              <h3 className="text-xs font-bold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
+                <span>{t.account.secureSessionTitle}</span>
+                <span className="px-1.5 py-0.2 rounded-sm text-[9px] font-mono bg-emerald-100 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 font-bold">
+                  Argon2id
+                </span>
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-                {t.account.secureSessionDesc}
+                {t.account.argonSecurityNote}
               </p>
             </div>
           </div>
@@ -1037,8 +967,8 @@ function GuestSettingsView() {
         </div>
       )}
 
-      {/* Guest Location Settings */}
-      <div className="rounded-2xl border border-slate-200 bg-white p-5 sm:p-6 dark:border-slate-800 dark:bg-slate-900 shadow-2xs space-y-4">
+      {/* Guest Location & Calculation Card */}
+      <div className="rounded-2xl border border-slate-200 bg-white p-5 sm:p-6 dark:border-slate-800 dark:bg-slate-900 shadow-2xs space-y-5">
         <div>
           <h2 className="text-base font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
             <MapPin className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
@@ -1078,6 +1008,56 @@ function GuestSettingsView() {
           </button>
         </div>
 
+        {/* Calculation Method Segmented Control */}
+        <div className="space-y-3 pt-2">
+          <div>
+            <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+              <Compass className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+              <span>{t.profile.calcMethod}</span>
+            </h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              {t.account.sections.preferencesDesc}
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            {CALCULATION_METHODS.map((method) => {
+              const isSelected = calcMethod === method.id;
+              return (
+                <button
+                  key={method.id}
+                  type="button"
+                  onClick={() => handleSaveMethod(method.id)}
+                  className={`min-h-[44px] p-3 rounded-xl border text-left transition-all cursor-pointer flex items-center justify-between gap-2 ${
+                    isSelected
+                      ? 'border-emerald-600 bg-emerald-50/70 dark:bg-emerald-950/40 ring-1 ring-emerald-500/30'
+                      : 'border-slate-200 dark:border-slate-750 bg-slate-50/40 dark:bg-slate-800/40 hover:bg-slate-100 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  <span className={`text-xs font-semibold ${isSelected ? 'text-emerald-900 dark:text-emerald-100' : 'text-slate-700 dark:text-slate-300'}`}>
+                    {method.name}
+                  </span>
+                  {isSelected && (
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-600 text-white shrink-0">
+                      {t.profile.activeBadge || 'Active'}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Language Selector */}
+        <div className="space-y-1.5 pt-3 border-t border-slate-100 dark:border-slate-800">
+          <span className="block text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300">
+            {t.account.sections.preferences}
+          </span>
+          <div className="pt-0.5">
+            <LanguageSelector />
+          </div>
+        </div>
+
         {isCityModalOpen && (
           <CityPickerModal
             isOpen={isCityModalOpen}
@@ -1089,55 +1069,6 @@ function GuestSettingsView() {
             currentCoords={{ lat: locationData.lat, lng: locationData.lng }}
           />
         )}
-      </div>
-
-      {/* Guest Calculation Method Settings */}
-      <div className="rounded-2xl border border-slate-200 bg-white p-5 sm:p-6 dark:border-slate-800 dark:bg-slate-900 shadow-2xs space-y-4">
-        <div>
-          <h2 className="text-base font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-            <Compass className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-            <span>{t.profile.calcMethod}</span>
-          </h2>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-            {t.account.sections.preferencesDesc}
-          </p>
-        </div>
-
-        <div className="space-y-2">
-          {CALCULATION_METHODS.map((method) => {
-            const isSelected = calcMethod === method.id;
-            return (
-              <label
-                key={method.id}
-                onClick={() => handleSaveMethod(method.id)}
-                className={`flex items-center justify-between p-3.5 rounded-xl border transition-all cursor-pointer ${
-                  isSelected
-                    ? 'border-emerald-600 bg-emerald-50/60 dark:bg-emerald-950/30'
-                    : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800/50'
-                }`}
-              >
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-semibold text-slate-800 dark:text-slate-200">
-                    {method.name}
-                  </span>
-                  {isSelected && (
-                    <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-600 text-white">
-                      {t.profile.activeBadge || 'Active'}
-                    </span>
-                  )}
-                </div>
-                <input
-                  type="radio"
-                  name="guestCalcMethod"
-                  value={method.id}
-                  checked={isSelected}
-                  onChange={() => handleSaveMethod(method.id)}
-                  className="w-4 h-4 text-emerald-600 focus:ring-emerald-500"
-                />
-              </label>
-            );
-          })}
-        </div>
       </div>
     </div>
   );

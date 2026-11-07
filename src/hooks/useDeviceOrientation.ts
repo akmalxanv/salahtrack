@@ -8,6 +8,7 @@ import {
   applyDeadband,
   computeTiltMetrics,
   calculateTurnGuidance,
+  calculateTiltCompensatedHeading,
   normalizeAngle,
   compensateScreenOrientation,
   getScreenOrientationAngle,
@@ -25,6 +26,7 @@ export interface UseDeviceOrientationOptions {
   throttleMs?: number;
   deadbandThreshold?: number;
   alignmentTolerance?: number;
+  declination?: number;
 }
 
 export interface UseDeviceOrientationReturn {
@@ -43,6 +45,7 @@ export interface UseDeviceOrientationReturn {
   isSensorAvailable: boolean | null;
   isSecureContext: boolean;
   isSimulating: boolean;
+  isUncalibrated: boolean;
 
   // Manual simulation controls (desktop testing / manual fallback)
   simulatedHeading: number | null;
@@ -69,6 +72,7 @@ export function useDeviceOrientation({
   throttleMs = DEFAULT_THROTTLE_MS,
   deadbandThreshold = DEFAULT_DEADBAND_THRESHOLD,
   alignmentTolerance = DEFAULT_ALIGNMENT_TOLERANCE,
+  declination = 0,
 }: UseDeviceOrientationOptions): UseDeviceOrientationReturn {
   // Direct DOM Refs for buttery smooth 60fps transform updates without re-renders
   const dialRef = useRef<HTMLDivElement | null>(null);
@@ -78,7 +82,12 @@ export function useDeviceOrientation({
   const rawHeadingRef = useRef<number | null>(null);
   const rawBetaRef = useRef<number | null>(null);
   const rawGammaRef = useRef<number | null>(null);
+  const declinationRef = useRef<number>(declination);
   const simulatedHeadingRef = useRef<number | null>(initialSimulatedHeading);
+
+  useEffect(() => {
+    declinationRef.current = declination;
+  }, [declination]);
 
   // Absolute sensor detection & deconfliction tracking refs
   const hasReceivedAbsoluteRef = useRef<boolean>(false);
@@ -123,6 +132,8 @@ export function useDeviceOrientation({
     }
     return null;
   });
+
+  const [isUncalibrated, setIsUncalibrated] = useState<boolean>(false);
 
   const [permissionState, setPermissionState] = useState<PermissionState>(() => {
     if (typeof window === 'undefined') return 'prompt';
@@ -221,8 +232,13 @@ export function useDeviceOrientation({
 
       if (typeof event.alpha === 'number' && Number.isFinite(event.alpha)) {
         const screenAngle = getScreenOrientationAngle();
-        const heading = (360 - event.alpha) % 360;
-        rawHeadingRef.current = compensateScreenOrientation(heading, screenAngle);
+        rawHeadingRef.current = calculateTiltCompensatedHeading(
+          event.alpha,
+          rawBetaRef.current,
+          rawGammaRef.current,
+          screenAngle,
+          declinationRef.current
+        );
         setIsSensorAvailable(true);
       }
     };
@@ -237,6 +253,10 @@ export function useDeviceOrientation({
 
       // iOS Safari provides webkitCompassHeading directly (0 = North, clockwise, absolute)
       const webkitHeading = (event as unknown as { webkitCompassHeading?: number }).webkitCompassHeading;
+      const compassAccuracy = (event as unknown as { webkitCompassAccuracy?: number }).webkitCompassAccuracy;
+      if (typeof compassAccuracy === 'number') {
+        setIsUncalibrated(compassAccuracy < 0 || compassAccuracy > 25);
+      }
       if (typeof webkitHeading === 'number' && Number.isFinite(webkitHeading)) {
         hasReceivedAbsoluteRef.current = true;
         const screenAngle = getScreenOrientationAngle();
@@ -250,8 +270,13 @@ export function useDeviceOrientation({
         hasReceivedAbsoluteRef.current = true;
         if (typeof event.alpha === 'number' && Number.isFinite(event.alpha)) {
           const screenAngle = getScreenOrientationAngle();
-          const heading = (360 - event.alpha) % 360;
-          rawHeadingRef.current = compensateScreenOrientation(heading, screenAngle);
+          rawHeadingRef.current = calculateTiltCompensatedHeading(
+            event.alpha,
+            rawBetaRef.current,
+            rawGammaRef.current,
+            screenAngle,
+            declinationRef.current
+          );
           setIsSensorAvailable(true);
         }
         return;
@@ -268,8 +293,13 @@ export function useDeviceOrientation({
       // Fallback relative heading only if absolute API is completely unsupported
       if (typeof event.alpha === 'number' && Number.isFinite(event.alpha)) {
         const screenAngle = getScreenOrientationAngle();
-        const heading = (360 - event.alpha) % 360;
-        rawHeadingRef.current = compensateScreenOrientation(heading, screenAngle);
+        rawHeadingRef.current = calculateTiltCompensatedHeading(
+          event.alpha,
+          rawBetaRef.current,
+          rawGammaRef.current,
+          screenAngle,
+          declinationRef.current
+        );
         setIsSensorAvailable(true);
       }
     };
@@ -444,6 +474,7 @@ export function useDeviceOrientation({
     isAligned: turnGuidanceState.isAligned,
     isSensorAvailable,
     permissionState,
+    isUncalibrated,
     isSecureContext:
       typeof window !== 'undefined'
         ? 'isSecureContext' in window

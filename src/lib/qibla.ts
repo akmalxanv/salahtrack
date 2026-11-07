@@ -13,6 +13,7 @@ import type {
   TiltStatus,
   TurnGuidance,
   CoordinateValidationResult,
+  MagneticDeclination,
 } from '@/types/qibla';
 
 export const KAABA_COORDS: QiblaCoordinates = Object.freeze({
@@ -405,6 +406,47 @@ export function calculateDistanceToKaaba(observerLat: number, observerLng: numbe
 }
 
 /**
+ * Calculates geomagnetic declination angle for any terrestrial observer coordinates
+ * using a spherical harmonic dipole approximation (WMM epoch).
+ *
+ * @param observerLat Latitude in decimal degrees [-90, 90]
+ * @param observerLng Longitude in decimal degrees [-180, 180]
+ * @returns MagneticDeclination object with declinationDeg, isEast flag, and formatted string (e.g. "+5.5° E")
+ */
+export function calculateMagneticDeclination(observerLat: number, observerLng: number): MagneticDeclination {
+  if (!Number.isFinite(observerLat) || !Number.isFinite(observerLng)) {
+    return { declinationDeg: 0, isEast: true, formatted: '+0.0° E' };
+  }
+
+  // Geomagnetic dipole axis coordinates
+  const POLE_LAT = 86.5 * (Math.PI / 180);
+  const POLE_LNG = -147.0 * (Math.PI / 180);
+
+  const phi = observerLat * (Math.PI / 180);
+  const lambda = observerLng * (Math.PI / 180);
+  const deltaLambda = POLE_LNG - lambda;
+
+  const y = Math.cos(POLE_LAT) * Math.sin(deltaLambda);
+  const x =
+    Math.cos(phi) * Math.sin(POLE_LAT) -
+    Math.sin(phi) * Math.cos(POLE_LAT) * Math.cos(deltaLambda);
+
+  const decRad = Math.atan2(y, x);
+  let decDeg = (decRad * 180) / Math.PI;
+
+  decDeg = Math.round(decDeg * 10) / 10;
+  const isEast = decDeg >= 0;
+  const absVal = Math.abs(decDeg).toFixed(1);
+  const formatted = `${decDeg >= 0 ? '+' : '-'}${absVal}° ${isEast ? 'E' : 'W'}`;
+
+  return {
+    declinationDeg: decDeg,
+    isEast,
+    formatted,
+  };
+}
+
+/**
  * Returns 16-point cardinal compass direction abbreviation for a given degree bearing.
  */
 export function getCompassDirection(bearing: number): string {
@@ -512,13 +554,67 @@ export interface RawOrientationInput {
 }
 
 /**
+ * Computes 3D tilt-compensated azimuth from Android Euler orientation angles (alpha, beta, gamma),
+ * compensating for screen rotation and optionally applying magnetic declination to yield True North.
+ *
+ * Prevents erratic compass needle deviation when the user tilts their device naturally (e.g. 20°-45°).
+ *
+ * @param alpha In-plane rotation angle in degrees [0, 360)
+ * @param beta Device pitch in degrees [-180, 180]
+ * @param gamma Device roll in degrees [-90, 90]
+ * @param screenAngle Screen orientation rotation in degrees (0, 90, 180, 270)
+ * @param declinationDeg Optional magnetic declination in degrees (to adjust Magnetic North to True North)
+ */
+export function calculateTiltCompensatedHeading(
+  alpha: number | null | undefined,
+  beta: number | null | undefined,
+  gamma: number | null | undefined,
+  screenAngle: number = 0,
+  declinationDeg: number = 0
+): number | null {
+  if (alpha === null || alpha === undefined || !Number.isFinite(alpha)) {
+    return null;
+  }
+
+  const safeBeta = typeof beta === 'number' && Number.isFinite(beta) ? Math.max(-85, Math.min(85, beta)) : 0;
+  const safeGamma = typeof gamma === 'number' && Number.isFinite(gamma) ? Math.max(-85, Math.min(85, gamma)) : 0;
+
+  const a = toRadians(alpha);
+  const b = toRadians(safeBeta);
+  const g = toRadians(safeGamma);
+
+  // Components of device longitudinal axis (Y-axis pointing top of device)
+  // projected onto the Earth's horizontal tangent plane
+  const Vx = -Math.cos(a) * Math.sin(g) * Math.sin(b) - Math.sin(a) * Math.cos(b);
+  const Vy = -Math.sin(a) * Math.sin(g) * Math.sin(b) + Math.cos(a) * Math.cos(b);
+
+  let magneticHeadingDeg: number;
+  if (Math.abs(Vx) < 1e-6 && Math.abs(Vy) < 1e-6) {
+    // Degenerate/vertical pointing fallback
+    magneticHeadingDeg = (360 - alpha) % 360;
+  } else {
+    magneticHeadingDeg = (toDegrees(Math.atan2(Vx, Vy)) + 360) % 360;
+  }
+
+  // Apply screen orientation compensation (e.g. landscape vs portrait)
+  const screenCompensated = compensateScreenOrientation(magneticHeadingDeg, screenAngle);
+
+  // Apply magnetic declination to convert Magnetic North to True North
+  const validDeclination = Number.isFinite(declinationDeg) ? declinationDeg : 0;
+  const trueHeading = normalizeAngle(screenCompensated + validDeclination);
+
+  return Math.round(trueHeading * 10) / 10;
+}
+
+/**
  * Extracts device heading from DeviceOrientationEvent data.
- * Prioritizes iOS `webkitCompassHeading`, then Android `alpha`.
- * Applies screen orientation compensation.
+ * Prioritizes iOS `webkitCompassHeading`, then Android `alpha` with 3D tilt compensation.
+ * Applies screen orientation compensation and magnetic declination.
  */
 export function extractCompassHeading(
   event: RawOrientationInput,
-  screenAngle: number = 0
+  screenAngle: number = 0,
+  declinationDeg: number = 0
 ): number | null {
   if (
     typeof event.webkitCompassHeading === 'number' &&
@@ -528,8 +624,13 @@ export function extractCompassHeading(
   }
 
   if (typeof event.alpha === 'number' && Number.isFinite(event.alpha)) {
-    const heading = (360 - event.alpha) % 360;
-    return compensateScreenOrientation(heading, screenAngle);
+    return calculateTiltCompensatedHeading(
+      event.alpha,
+      event.beta,
+      event.gamma,
+      screenAngle,
+      declinationDeg
+    );
   }
 
   return null;

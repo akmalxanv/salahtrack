@@ -275,6 +275,12 @@ export interface TranslationContent {
     allCaughtUp: string;
     receiptDetails: string;
     hideReceiptDetails: string;
+    notificationsUnsupported: string;
+    notificationsHelpTitle: string;
+    notificationsHelpDesc: string;
+    notificationsHelpStepChrome: string;
+    notificationsHelpStepSafari: string;
+    notificationsHelpClose: string;
   };
   accountability: {
     title: string;
@@ -485,6 +491,10 @@ export interface TranslationContent {
     insecureContextWarning: string;
     compassQiblaLabel: string;
     accuracyOptimalTip: string;
+    trueNorthGps: string;
+    magneticDeclination: string;
+    needsCalibration: string;
+    figure8Alert: string;
   };
   settings: {
     title: string;
@@ -589,6 +599,10 @@ export interface TranslationContent {
     viewMemberHistory?: string;
     memberHistoryTitle?: string;
     readOnlyNotice?: string;
+    yourProfile: string;
+    yourHistoryInProgress: string;
+    strictlyReadOnly: string;
+    backToMemberList: string;
   };
   progress: {
     title: string;
@@ -683,6 +697,10 @@ export interface TranslationContent {
       security: string;
       securityDesc: string;
     };
+    passwordStrength: string;
+    passwordWeak: string;
+    passwordMedium: string;
+    passwordStrong: string;
   };
   apiErrors: {
     AUTH_UNAUTHORIZED: string;
@@ -899,6 +917,12 @@ export const translations: Record<Language, TranslationContent> = {
       allCaughtUp: 'Все прочитаны',
       receiptDetails: 'Детализация',
       hideReceiptDetails: 'Скрыть',
+      notificationsUnsupported: 'Уведомления не поддерживаются вашим браузером',
+      notificationsHelpTitle: 'Как включить уведомления',
+      notificationsHelpDesc: 'Уведомления заблокированы в настройках браузера. Включите их, чтобы не пропускать намазы:',
+      notificationsHelpStepChrome: 'Chrome / Edge: нажмите на значок настроек сайта в адресной строке и разрешите уведомления.',
+      notificationsHelpStepSafari: 'Safari (iOS): добавьте сайт на «Экран «Домой» (PWA) и включите уведомления в Настройках.',
+      notificationsHelpClose: 'Понятно',
     },
     accountability: {
       title: 'Общая задолженность по садака (Штрафы за каза)',
@@ -1109,6 +1133,10 @@ export const translations: Record<Language, TranslationContent> = {
       insecureContextWarning: 'Политики безопасности браузера ограничивают доступ к аппаратному компасу и GPS через незащищенное соединение (только по HTTPS). Включены ручной ползунок вращения и выбор городов.',
       compassQiblaLabel: 'Кибла',
       accuracyOptimalTip: '3–5 движений восьмеркой',
+      trueNorthGps: 'Истинный Север (GPS)',
+      magneticDeclination: 'Магнитное склонение',
+      needsCalibration: 'Требуется калибровка компаса',
+      figure8Alert: 'Повращайте телефон по траектории «восьмерки» для калибровки датчика',
     },
     settings: {
       title: 'Настройки',
@@ -1233,6 +1261,10 @@ export const translations: Record<Language, TranslationContent> = {
       viewMemberHistory: 'История намазов',
       memberHistoryTitle: 'История намазов участника',
       readOnlyNotice: 'Режим просмотра (только для чтения)',
+      yourProfile: 'Вы',
+      yourHistoryInProgress: 'Ваша история молитв в разделе «Прогресс»',
+      strictlyReadOnly: 'Строго только чтение',
+      backToMemberList: 'Назад к списку участников',
     },
     progress: {
       title: 'Личный прогресс',
@@ -1327,6 +1359,10 @@ export const translations: Record<Language, TranslationContent> = {
         security: 'Безопасность и сессии',
         securityDesc: 'Смена пароля и управление защищенной серверной сессией',
       },
+      passwordStrength: 'Надежность пароля',
+      passwordWeak: 'Слабый',
+      passwordMedium: 'Средний',
+      passwordStrong: 'Надежный',
     },
     apiErrors: {
       AUTH_UNAUTHORIZED: 'Требуется авторизация',
@@ -1542,6 +1578,12 @@ export const translations: Record<Language, TranslationContent> = {
       allCaughtUp: 'All caught up',
       receiptDetails: 'Details',
       hideReceiptDetails: 'Hide',
+      notificationsUnsupported: 'Notifications are not supported by your browser',
+      notificationsHelpTitle: 'How to Enable Notifications',
+      notificationsHelpDesc: 'Notifications are blocked in your browser settings. Enable them to never miss prayer times:',
+      notificationsHelpStepChrome: 'Chrome / Edge: Click the lock icon in the address bar and set Notifications to Allow.',
+      notificationsHelpStepSafari: 'Safari (iOS): Add the app to your Home Screen (PWA) and enable Notifications in Settings.',
+      notificationsHelpClose: 'Got it',
     },
     accountability: {
       title: 'Total Sadaqah Owed (Qaza Fines)',
@@ -1752,6 +1794,10 @@ export const translations: Record<Language, TranslationContent> = {
       insecureContextWarning: 'Browser security policies restrict hardware compass orientation and GPS access to secure contexts (HTTPS). Manual rotation slider and city presets are enabled.',
       compassQiblaLabel: 'Qibla',
       accuracyOptimalTip: '3–5 figure-8 rotations',
+      trueNorthGps: 'True North (GPS)',
+      magneticDeclination: 'Magnetic Declination',
+      needsCalibration: 'Compass Calibration Required',
+      figure8Alert: 'Move your phone in a figure-8 motion to calibrate the sensor',
     },
     settings: {
       title: 'Settings',
@@ -1876,6 +1922,10 @@ export const translations: Record<Language, TranslationContent> = {
       viewMemberHistory: 'Prayer History',
       memberHistoryTitle: 'Member Prayer History',
       readOnlyNotice: 'Read-only view mode',
+      yourProfile: 'You',
+      yourHistoryInProgress: 'Your personal history is in Progress',
+      strictlyReadOnly: 'Strictly Read-Only',
+      backToMemberList: 'Back to Circle Members',
     },
     progress: {
       title: 'Personal Progress',
@@ -1970,6 +2020,10 @@ export const translations: Record<Language, TranslationContent> = {
         security: 'Security & Sessions',
         securityDesc: 'Change your password and manage secure server sessions',
       },
+      passwordStrength: 'Password Strength',
+      passwordWeak: 'Weak',
+      passwordMedium: 'Medium',
+      passwordStrong: 'Strong',
     },
     apiErrors: {
       AUTH_UNAUTHORIZED: 'Authentication required',
@@ -2185,6 +2239,12 @@ export const translations: Record<Language, TranslationContent> = {
       allCaughtUp: 'Barchasi o‘qilgan',
       receiptDetails: 'Tafsilotlar',
       hideReceiptDetails: 'Yopish',
+      notificationsUnsupported: 'Brauzeringizda bildirishnomalar qo‘llab-quvvatlanmaydi',
+      notificationsHelpTitle: 'Bildirishnomalarni yoqish bo‘yicha qo‘llanma',
+      notificationsHelpDesc: 'Bildirishnomalar brauzer sozlamalarida bloklangan. Namoz vaqtlarini o‘tkazib yubormaslik uchun ularga ruxsat bering:',
+      notificationsHelpStepChrome: 'Chrome / Edge: manzil qatori yonidagi qulf belgisini bosing va Bildirishnomalarga ruxsat bering.',
+      notificationsHelpStepSafari: 'Safari (iOS): ilovani «Bosh ekranga qo‘shish» (PWA) qiling va Sozlamalarda bildirishnomalarga ruxsat bering.',
+      notificationsHelpClose: 'Tushundim',
     },
     accountability: {
       title: 'Umumiy sadaqa qarzi (Qazo jarimalari)',
@@ -2395,6 +2455,10 @@ export const translations: Record<Language, TranslationContent> = {
       insecureContextWarning: 'Brauzer xavfsizlik siyosati apparat kompas datchigi va GPS-dan faqat xavfsiz ulanishda (HTTPS) foydalanishga ruxsat beradi. Qo‘lda burish slayderi va shaharlar ro‘yxati yoqilgan.',
       compassQiblaLabel: 'Qibla',
       accuracyOptimalTip: '3–5 marta 8 shaklida aylantirish',
+      trueNorthGps: 'Haqiqiy Shimol (GPS)',
+      magneticDeclination: 'Magnit og‘ishi',
+      needsCalibration: 'Kompasni kalibrlash talab etiladi',
+      figure8Alert: 'Datchikni kalibrlash uchun telefoningizni sakkiz shaklida aylantiring',
     },
     settings: {
       title: 'Sozlamalar',
@@ -2519,6 +2583,10 @@ export const translations: Record<Language, TranslationContent> = {
       viewMemberHistory: 'Namozlar tarixi',
       memberHistoryTitle: 'A’zoning namozlar tarixi',
       readOnlyNotice: 'Faqat ko‘rish rejimi',
+      yourProfile: 'Siz',
+      yourHistoryInProgress: 'Shaxsiy tarixingiz «Tarix» bo‘limida',
+      strictlyReadOnly: 'Faqat ko‘rish rejimi',
+      backToMemberList: 'Guruh a‘zolariga qaytish',
     },
     progress: {
       title: 'Shaxsiy rivojlanish',
@@ -2613,6 +2681,10 @@ export const translations: Record<Language, TranslationContent> = {
         security: 'Xavfsizlik va seanslar',
         securityDesc: 'Parolni yangilash va himoyalangan server seanslarini boshqarish',
       },
+      passwordStrength: 'Parol mustahkamligi',
+      passwordWeak: 'Zaif',
+      passwordMedium: 'O‘rtacha',
+      passwordStrong: 'Mustahkam',
     },
     apiErrors: {
       AUTH_UNAUTHORIZED: 'Avtorizatsiyadan o‘tish talab qilinadi',
