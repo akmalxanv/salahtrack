@@ -11,7 +11,6 @@ import {
 import { GET as getStats } from '../src/app/api/stats/route.ts';
 import { validateSessionToken } from '../src/lib/auth/guard.ts';
 import { execLean } from '../src/lib/mongodb.ts';
-import { isPrayerOverdue } from '../src/lib/prayer-cycle.ts';
 import { Session } from '../src/models/Session.ts';
 import { User } from '../src/models/User.ts';
 import type { PrayerId, PrayerItem, PrayerStatus } from '../src/types/prayer.ts';
@@ -125,122 +124,142 @@ const SAMPLE_PRAYERS: PrayerItem[] = [
 describe('QA Verification: Dashboard Layout & Performance Optimizations', () => {
 
   // =========================================================================
-  // 1. Prayer Cards Single-Row Inline Actions
+  // 1. Prayer Cards UI (Restored Compact Layout from 1e65ba4)
   // =========================================================================
-  describe('1. Prayer Cards Single-Row Inline Actions', () => {
+  describe('1. Prayer Cards UI (Restored Compact)', () => {
     let dashboardSource: string;
 
     beforeEach(() => {
       dashboardSource = fs.readFileSync(HOME_DASHBOARD_PATH, 'utf-8');
     });
 
-    it('1.1 should have ONLY ONE set of action buttons (Prayed, Made Up, Missed) per prayer card', () => {
+    it('1.1 should verify the restored compact prayer card structure: checkmark + name/time on left, status badge + side chevron on right', () => {
       // Find the prayer mapping loop in HomeDashboard.tsx
       const prayerLoopStart = dashboardSource.indexOf('{prayers.map((prayer) => {');
       assert.ok(prayerLoopStart !== -1, 'prayers.map loop must exist in HomeDashboard.tsx');
-      
-      const prayerLoopEnd = dashboardSource.indexOf('</div>\n      </div>\n\n      {/* Guidance Modal');
+
+      const prayerLoopEnd = dashboardSource.indexOf('{/* Pay Qaza Modal');
       assert.ok(prayerLoopEnd !== -1, 'End of prayer card mapping must be located');
-      
+
       const prayerCardBlock = dashboardSource.slice(prayerLoopStart, prayerLoopEnd);
 
-      // Verify that the action trigger / container exists exactly once per card
-      const actionContainerMatches = prayerCardBlock.match(/Right: EXACTLY ONE set of action buttons, displayed INLINE on the SAME ROW/g);
-      assert.equal(actionContainerMatches?.length, 1, 'There must be exactly one action button region comment');
-
-      // Verify trigger toggle button to open inline menu
+      // Verify main row flex container
       assert.match(
         prayerCardBlock,
-        /setActiveMenuPrayerId\(prayer\.id\)/,
-        'Should have a single toggle button activating the inline menu for that prayer'
+        /<div className="flex items-center justify-between">/,
+        'Prayer card main row must be flex items-center justify-between'
       );
 
-      // Verify that when isMenuOpen is true, exactly one set of action buttons is rendered:
-      // 1. Prayed (PRAYED_ON_TIME)
-      // 2. Made Up (MADE_UP)
-      // 3. Missed (MISSED)
-      // 4. Cancel (X)
-      const actionMenuStart = prayerCardBlock.indexOf('Right: EXACTLY ONE set of action buttons');
-      assert.ok(actionMenuStart !== -1, 'Must locate action menu container');
-      const actionMenuBlock = prayerCardBlock.slice(actionMenuStart);
+      // Verify Left: Quick toggle checkmark button with CheckCircle2
+      assert.match(
+        prayerCardBlock,
+        /<button[\s\S]*?onClick=\{\(e\)\s*=>\s*\{\s*e\.stopPropagation\(\);\s*handleQuickToggle\(prayer\.id\);\s*\}\}[\s\S]*?<CheckCircle2\s+className=\{`w-6 h-6 transition-transform active:scale-90 \$\{config\.iconClass\}`\}\s*\/>[\s\S]*?<\/button>/,
+        'Left side must contain checkmark button with CheckCircle2 and stopPropagation'
+      );
 
-      const prayedButtonMatches = actionMenuBlock.match(/handleSetStatus\(prayer\.id, 'PRAYED_ON_TIME'\)/g);
-      assert.equal(prayedButtonMatches?.length, 1, 'Must have exactly ONE "Prayed" action button in inline menu per card');
+      // Verify Left: Prayer name and time range
+      assert.match(
+        prayerCardBlock,
+        /\{prayerLabel\}/,
+        'Left side must display prayer label'
+      );
+      assert.match(
+        prayerCardBlock,
+        /<span>\{prayer\.time\}\s*–\s*\{prayer\.endTime\}<\/span>/,
+        'Left side must display prayer time interval (e.g., prayer.time – prayer.endTime)'
+      );
 
-      const madeUpButtonMatches = actionMenuBlock.match(/handleSetStatus\(prayer\.id, 'MADE_UP'\)/g);
-      assert.equal(madeUpButtonMatches?.length, 1, 'Must have exactly ONE "Made Up" action button in inline menu per card');
+      // Verify Right: Status badge with exact styling
+      assert.match(
+        prayerCardBlock,
+        /className=\{`text-\[11px\] font-semibold px-2\.5 py-1 rounded-full border \$\{config\.badgeClass\}`\}/,
+        'Right side must display status badge with config.badgeClass'
+      );
 
-      const missedButtonMatches = actionMenuBlock.match(/handleSetStatus\(prayer\.id, 'MISSED'\)/g);
-      assert.equal(missedButtonMatches?.length, 1, 'Must have exactly ONE "Missed" action button in inline menu per card');
+      // Verify Right: Side chevron button with ChevronDown
+      assert.match(
+        prayerCardBlock,
+        /<button[\s\S]*?onClick=\{\(e\)\s*=>\s*\{\s*e\.stopPropagation\(\);\s*setActiveMenuPrayerId\(isMenuOpen \? null : prayer\.id\);\s*\}\}[\s\S]*?<ChevronDown\s+className=\{`w-4 h-4 transition-transform \$\{isMenuOpen \? 'rotate-180' : ''\}`\}\s*\/>[\s\S]*?<\/button>/,
+        'Right side must contain side chevron button with ChevronDown'
+      );
 
-      const cancelButtonMatches = actionMenuBlock.match(/setActiveMenuPrayerId\(null\)/g);
-      // Cancel is called when clicking any action or the cancel 'X' button (1 on each action + 1 cancel button = 4)
-      assert.ok(cancelButtonMatches && cancelButtonMatches.length >= 4, 'Actions and cancel button close the inline menu');
+      // Verify touch targets comply with mobile-first accessibility (min-h-[44px] min-w-[44px])
+      const touchTargetMatches = prayerCardBlock.match(/min-h-\[44px\] min-w-\[44px\]/g);
+      assert.ok(touchTargetMatches && touchTargetMatches.length >= 2, 'Main row buttons must have min-h-[44px] min-w-[44px] touch targets');
     });
 
-    it('1.2 should verify that NO sub-drawer, duplicate menu, or secondary accordion exists below the prayer row', () => {
+    it('1.2 should verify no action buttons on the top/main row (never duplicate buttons)', () => {
       const prayerLoopStart = dashboardSource.indexOf('{prayers.map((prayer) => {');
-      const prayerLoopEnd = dashboardSource.indexOf('</div>\n      </div>\n\n      {/* Guidance Modal');
+      const prayerLoopEnd = dashboardSource.indexOf('{/* Pay Qaza Modal');
       const prayerCardBlock = dashboardSource.slice(prayerLoopStart, prayerLoopEnd);
 
-      // Verify that the prayer card contains only a single main row and no sibling elements below it
-      assert.doesNotMatch(prayerCardBlock, /<details/i, 'No HTML <details> accordion element allowed');
-      assert.doesNotMatch(prayerCardBlock, /accordion/i, 'No accordion drawer class or component allowed');
-      assert.doesNotMatch(prayerCardBlock, /sub-drawer|subdrawer|drawer-content/i, 'No sub-drawer allowed');
-      assert.doesNotMatch(prayerCardBlock, /dropdown-menu|collapse|collapsible/i, 'No secondary collapsible menu allowed');
+      const mainRowStart = prayerCardBlock.indexOf('<div className="flex items-center justify-between">');
+      const mainRowEnd = prayerCardBlock.indexOf('{/* 3 Canonical Status Action Buttons');
+      assert.ok(mainRowStart !== -1 && mainRowEnd !== -1, 'Main row boundaries must be located');
+      const mainRowBlock = prayerCardBlock.slice(mainRowStart, mainRowEnd);
 
-      // Check the root card container: it must only contain the single flex row
-      const cardContainerRegex = /<div\s+key=\{prayer\.id\}[\s\S]*?>\s*\{\/\* Main Prayer Row: Rigid identical alignment for all 5 prayers \*\/\}\s*<div className="flex items-center justify-between gap-2 sm:gap-3 min-w-0">([\s\S]*?)<\/div>\s*<\/div>/;
-      const cardMatch = prayerCardBlock.match(cardContainerRegex);
-      assert.ok(cardMatch, 'Card container must strictly contain the main prayer flex row and nothing below it');
+      // Top/main row must NOT contain any status change action buttons
+      assert.doesNotMatch(mainRowBlock, /handleSetStatus/, 'Top/main row must NOT contain handleSetStatus action buttons');
+      assert.doesNotMatch(mainRowBlock, />\s*\{t\.dashboard\.markPrayed\}\s*<\/button>/, 'Top/main row must NOT contain markPrayed action button');
+      assert.doesNotMatch(mainRowBlock, /t\.dashboard\.markMadeUp/, 'Top/main row must NOT contain markMadeUp button');
+      assert.doesNotMatch(mainRowBlock, /t\.dashboard\.markMissed/, 'Top/main row must NOT contain markMissed button');
+
+      // Check that Made Up and Missed only appear once in the whole card (in dropdown menu only)
+      const madeUpMatches = prayerCardBlock.match(/handleSetStatus\(prayer\.id,\s*['"]MADE_UP['"]\)/g) || [];
+      assert.equal(madeUpMatches.length, 1, 'MADE_UP action button must appear exactly once (in dropdown menu)');
+
+      const missedMatches = prayerCardBlock.match(/handleSetStatus\(prayer\.id,\s*['"]MISSED['"]\)/g) || [];
+      assert.equal(missedMatches.length, 1, 'MISSED action button must appear exactly once (in dropdown menu)');
     });
 
-    it('1.3 should verify that action buttons display inline on the same row with clear status updating', () => {
+    it('1.3 should verify that only the side chevron button toggles the 3 status options and overdue prayers do NOT automatically open the menu', () => {
       const prayerLoopStart = dashboardSource.indexOf('{prayers.map((prayer) => {');
-      const prayerLoopEnd = dashboardSource.indexOf('</div>\n      </div>\n\n      {/* Guidance Modal');
+      const prayerLoopEnd = dashboardSource.indexOf('{/* Pay Qaza Modal');
       const prayerCardBlock = dashboardSource.slice(prayerLoopStart, prayerLoopEnd);
 
-      // Verify the right-hand inline action wrapper
+      // Verify that isMenuOpen is strictly bound to activeMenuPrayerId === prayer.id
       assert.match(
         prayerCardBlock,
-        /<div className="flex items-center shrink-0">/,
-        'Action wrapper must be flex items-center shrink-0 to remain inline on the row'
+        /const\s+isMenuOpen\s*=\s*activeMenuPrayerId\s*===\s*prayer\.id;/,
+        'isMenuOpen must be strictly defined as activeMenuPrayerId === prayer.id'
       );
 
-      // Verify the action button row styling
+      // Verify that overdue prayers do NOT automatically open the menu without chevron click
+      assert.doesNotMatch(prayerCardBlock, /isOverdue/, 'isOverdue must NOT be declared or used in prayer card block');
+      assert.doesNotMatch(prayerCardBlock, /dismissedOverdue/, 'dismissedOverdue state must NOT be used');
+
+      // Verify toggle button behavior
       assert.match(
         prayerCardBlock,
-        /<div className="flex items-center gap-1 sm:gap-1\.5/,
-        'Action buttons must sit inline in a horizontal flex container'
+        /setActiveMenuPrayerId\(isMenuOpen\s*\?\s*null\s*:\s*prayer\.id\)/,
+        'Chevron button must toggle menu between null and prayer.id'
       );
 
-      // Verify touch targets comply with mobile-first accessibility (>= 34-40px on narrow mobile)
-      assert.match(
-        prayerCardBlock,
-        /min-h-\[34px\] sm:min-h-\[40px\]/,
-        'Action buttons must meet narrow mobile responsive button sizing (min-h-[34px] sm:min-h-[40px])'
-      );
+      // Functional verification of chevron toggle logic
+      let activeMenuPrayerId: string | null = null;
+      function toggleMenu(currentId: string | null, targetId: string): string | null {
+        return currentId === targetId ? null : targetId;
+      }
 
-      // Test status transitions logic
-      const prayers: PrayerItem[] = JSON.parse(JSON.stringify(SAMPLE_PRAYERS));
-      const targetPrayer = prayers.find((p) => p.id === 'fajr')!;
-      assert.equal(targetPrayer.status, 'PENDING');
+      // Even if prayer is overdue, when activeMenuPrayerId is null, menu is closed
+      let isDhuhrMenuOpen = activeMenuPrayerId === 'dhuhr';
+      assert.equal(isDhuhrMenuOpen, false, 'Overdue prayer must not open menu automatically without chevron click');
 
-      // Simulate status transitions
-      targetPrayer.status = 'PRAYED_ON_TIME';
-      assert.equal(targetPrayer.status, 'PRAYED_ON_TIME');
+      // Clicking chevron opens menu
+      activeMenuPrayerId = toggleMenu(activeMenuPrayerId, 'dhuhr');
+      isDhuhrMenuOpen = activeMenuPrayerId === 'dhuhr';
+      assert.equal(isDhuhrMenuOpen, true, 'Clicking chevron opens menu');
 
-      targetPrayer.status = 'MADE_UP';
-      assert.equal(targetPrayer.status, 'MADE_UP');
-
-      targetPrayer.status = 'MISSED';
-      assert.equal(targetPrayer.status, 'MISSED');
+      // Clicking chevron again closes menu
+      activeMenuPrayerId = toggleMenu(activeMenuPrayerId, 'dhuhr');
+      isDhuhrMenuOpen = activeMenuPrayerId === 'dhuhr';
+      assert.equal(isDhuhrMenuOpen, false, 'Clicking chevron again closes menu');
     });
 
-    it('1.4 should verify idempotency: tapping a PENDING card marks it PRAYED_ON_TIME, tapping an already prayed/made-up/missed card does NOT change its status', () => {
+    it('1.4 should verify idempotency: tapping a Pending prayer card marks it PRAYED_ON_TIME, tapping an already prayed/made-up/missed card does NOT change its status', () => {
       // 1. AST / Code Verification: card container onClick must guard with if (isPending)
       const prayerLoopStart = dashboardSource.indexOf('{prayers.map((prayer) => {');
-      const prayerLoopEnd = dashboardSource.indexOf('</div>\n      </div>\n\n      {/* Guidance Modal');
+      const prayerLoopEnd = dashboardSource.indexOf('{/* Pay Qaza Modal');
       const prayerCardBlock = dashboardSource.slice(prayerLoopStart, prayerLoopEnd);
 
       assert.match(
@@ -253,6 +272,13 @@ describe('QA Verification: Dashboard Layout & Performance Optimizations', () => 
         prayerCardBlock,
         /onClick=\{\(\)\s*=>\s*\{\s*if\s*\(\s*isPending\s*\)\s*\{\s*handleSetStatus\(\s*prayer\.id,\s*['"]PRAYED_ON_TIME['"]\s*\);?\s*\}\s*\}\}/,
         'Card onClick handler must only invoke handleSetStatus when isPending is true'
+      );
+
+      // Verify conditional cursor styling
+      assert.match(
+        prayerCardBlock,
+        /isPending\s*\?\s*['"]cursor-pointer[^'"]*['"]\s*:\s*['"]cursor-default['"]/,
+        'Card cursor must be pointer when pending, default when resolved'
       );
 
       // 2. Functional Verification of idempotent card-tap transition logic
@@ -293,74 +319,69 @@ describe('QA Verification: Dashboard Layout & Performance Optimizations', () => 
       assert.equal(missedResult.newStatus, 'MISSED');
     });
 
-    it('1.5 should verify that if a prayer is PENDING and overdue (isOverdue), the action menu is automatically open without needing chevron click', () => {
-      // 1. AST / Code Verification: isOverdue and isMenuOpen declarations
+    it('1.5 should verify dropdown menu: renders 3 status buttons in grid grid-cols-3 gap-2 plus resetToPending when not pending, with e.stopPropagation()', () => {
       const prayerLoopStart = dashboardSource.indexOf('{prayers.map((prayer) => {');
-      const prayerLoopEnd = dashboardSource.indexOf('</div>\n      </div>\n\n      {/* Guidance Modal');
+      const prayerLoopEnd = dashboardSource.indexOf('{/* Pay Qaza Modal');
       const prayerCardBlock = dashboardSource.slice(prayerLoopStart, prayerLoopEnd);
 
+      // Verify dropdown container renders on isMenuOpen with e.stopPropagation()
       assert.match(
         prayerCardBlock,
-        /const\s+isOverdue\s*=\s*prayer\.status\s*===\s*['"]PENDING['"]\s*&&\s*isPrayerOverdue\(\s*prayer\.id,\s*prayers,\s*now\s*\)/,
-        'isOverdue must check both prayer.status === "PENDING" and isPrayerOverdue'
+        /\{isMenuOpen\s*&&\s*\(\s*<div\s+className="mt-3 pt-3 border-t border-slate-200 dark:border-slate-800 space-y-2"\s+onClick=\{\(e\)\s*=>\s*e\.stopPropagation\(\)\}/,
+        'Dropdown container must render when isMenuOpen is true and stop click propagation'
       );
 
+      // Verify 3-column grid container
       assert.match(
         prayerCardBlock,
-        /const\s+isMenuOpen\s*=\s*activeMenuPrayerId\s*===\s*prayer\.id\s*\|\|\s*\(\s*isOverdue\s*&&\s*!dismissedOverdue\[prayer\.id\]\s*\)/,
-        'isMenuOpen must evaluate to true when isOverdue is true and not dismissed, even without activeMenuPrayerId'
+        /<div className="grid grid-cols-3 gap-2">/,
+        'Dropdown menu buttons must be arranged in grid grid-cols-3 gap-2'
       );
 
-      // 2. Functional Verification with isPrayerOverdue logic
-      const testPrayers: PrayerItem[] = [
-        { id: 'fajr', name: 'Fajr', time: '04:47', endTime: '06:19', status: 'PENDING' },
-        { id: 'dhuhr', name: 'Dhuhr', time: '12:13', endTime: '16:20', status: 'PENDING' },
-        { id: 'asr', name: 'Asr', time: '16:20', endTime: '18:05', status: 'PENDING' },
-        { id: 'maghrib', name: 'Maghrib', time: '18:05', endTime: '19:32', status: 'PENDING' },
-        { id: 'isha', name: 'Isha', time: '19:32', endTime: '23:59', status: 'PENDING' },
-      ];
-
-      // At 17:00 (5 PM), Fajr and Dhuhr have passed their endTimes
-      const overdueTime = new Date('2026-11-07T17:00:00');
-      const isDhuhrOverdue = isPrayerOverdue('dhuhr', testPrayers, overdueTime);
-      assert.equal(isDhuhrOverdue, true, 'Dhuhr should be overdue at 17:00 when its endTime is 16:20');
-
-      // Without clicking chevron (activeMenuPrayerId is null) and not dismissed
-      const activeMenuPrayerId: string | null = null;
-      const dismissedOverdue: Record<string, boolean> = {};
-
-      let isMenuOpen = activeMenuPrayerId === 'dhuhr' || (isDhuhrOverdue && !dismissedOverdue['dhuhr']);
-      assert.equal(isMenuOpen, true, 'Action menu must be open automatically when prayer is overdue');
-
-      // User dismisses overdue menu via Cancel button
-      dismissedOverdue['dhuhr'] = true;
-      isMenuOpen = activeMenuPrayerId === 'dhuhr' || (isDhuhrOverdue && !dismissedOverdue['dhuhr']);
-      assert.equal(isMenuOpen, false, 'Action menu must close when user dismisses overdue state');
-
-      // Once prayer is marked PRAYED_ON_TIME, it is no longer pending or overdue
-      const resolvedPrayers: PrayerItem[] = testPrayers.map((p) =>
-        p.id === 'dhuhr' ? { ...p, status: 'PRAYED_ON_TIME' as PrayerStatus } : p
+      // Verify markPrayed button in dropdown
+      assert.match(
+        prayerCardBlock,
+        /handleSetStatus\(prayer\.id,\s*'PRAYED_ON_TIME'\);[\s\S]*?setActiveMenuPrayerId\(null\);[\s\S]*?\{t\.dashboard\.markPrayed\}/,
+        'Dropdown must contain Prayed button setting status to PRAYED_ON_TIME and closing menu'
       );
-      const isResolvedOverdue = isPrayerOverdue('dhuhr', resolvedPrayers, overdueTime);
-      assert.equal(isResolvedOverdue, false, 'Prayed prayer must not be marked overdue');
 
-      const isResolvedMenuOpen =
-        activeMenuPrayerId === 'dhuhr' || (isResolvedOverdue && !dismissedOverdue['dhuhr']);
-      assert.equal(isResolvedMenuOpen, false, 'Menu must remain closed for resolved prayers');
+      // Verify markMadeUp button in dropdown
+      assert.match(
+        prayerCardBlock,
+        /handleSetStatus\(prayer\.id,\s*'MADE_UP'\);[\s\S]*?setActiveMenuPrayerId\(null\);[\s\S]*?\{t\.dashboard\.markMadeUp\}/,
+        'Dropdown must contain Made Up button setting status to MADE_UP and closing menu'
+      );
 
-      // Non-overdue prayer: at 14:00 (during Dhuhr window)
-      const midDayTime = new Date('2026-11-07T14:00:00');
-      const isMidDayDhuhrOverdue = isPrayerOverdue('dhuhr', testPrayers, midDayTime);
-      assert.equal(isMidDayDhuhrOverdue, false, 'Dhuhr should not be overdue at 14:00 (window is 12:13 - 16:20)');
+      // Verify markMissed button in dropdown
+      assert.match(
+        prayerCardBlock,
+        /handleSetStatus\(prayer\.id,\s*'MISSED'\);[\s\S]*?setActiveMenuPrayerId\(null\);[\s\S]*?\{t\.dashboard\.markMissed\}/,
+        'Dropdown must contain Missed button setting status to MISSED and closing menu'
+      );
 
-      const isMidDayMenuOpen =
-        activeMenuPrayerId === 'dhuhr' || (isMidDayDhuhrOverdue && !dismissedOverdue['dhuhr']);
-      assert.equal(isMidDayMenuOpen, false, 'Menu must not be open automatically for active/non-overdue prayers');
+      // Verify Reset to Pending button when prayer.status !== 'PENDING'
+      assert.match(
+        prayerCardBlock,
+        /\{prayer\.status\s*!==\s*'PENDING'\s*&&\s*\([\s\S]*?handleSetStatus\(prayer\.id,\s*'PENDING'\);[\s\S]*?setActiveMenuPrayerId\(null\);[\s\S]*?\{t\.dashboard\.resetToPending\}[\s\S]*?<\/button>/,
+        'Dropdown must render Reset to pending button when prayer is not pending'
+      );
+
+      // Verify stopPropagation on quick toggle checkmark, side chevron, and dropdown buttons
+      assert.match(
+        prayerCardBlock,
+        /onClick=\{\(e\)\s*=>\s*\{\s*e\.stopPropagation\(\);\s*handleQuickToggle\(prayer\.id\);\s*\}\}/,
+        'Quick toggle checkmark button must call e.stopPropagation()'
+      );
+      assert.match(
+        prayerCardBlock,
+        /onClick=\{\(e\)\s*=>\s*\{\s*e\.stopPropagation\(\);\s*setActiveMenuPrayerId\(isMenuOpen \? null : prayer\.id\);\s*\}\}/,
+        'Side chevron button must call e.stopPropagation()'
+      );
     });
   });
 
   // =========================================================================
-  // 2. Next Prayer Display
+  // 2. Next Prayer Display (Restored Compact Layout from 1e65ba4)
   // =========================================================================
   describe('2. Next Prayer Display', () => {
     let dashboardSource: string;
@@ -369,7 +390,7 @@ describe('QA Verification: Dashboard Layout & Performance Optimizations', () => 
       dashboardSource = fs.readFileSync(HOME_DASHBOARD_PATH, 'utf-8');
     });
 
-    it('2.1 should verify that the word "Tomorrow" does NOT appear anywhere in the next prayer hero card', () => {
+    it('2.1 should verify compact 2-row layout: prayer name and time on left, "in" label and countdown on right, with zero "Tomorrow" text', () => {
       // Extract Card A: Next Prayer Card
       const cardAStart = dashboardSource.indexOf('{/* Card A: Next Prayer Card */}');
       const cardBStart = dashboardSource.indexOf('{/* Card B: Daily Prayer Progress Card');
@@ -377,37 +398,67 @@ describe('QA Verification: Dashboard Layout & Performance Optimizations', () => 
 
       const cardASource = dashboardSource.slice(cardAStart, cardBStart);
 
-      // Assert that "Tomorrow" or "tomorrow" does NOT appear in Card A's JSX
+      // Verify Left: Prayer name typography
+      assert.match(
+        cardASource,
+        /<p className="text-2xl font-black tracking-tight text-white">\s*\{t\.prayers\[nextPrayer\.prayerId\]\}\s*<\/p>/,
+        'Left side must display prayer name with text-2xl font-black tracking-tight text-white'
+      );
+
+      // Verify Left: Prayer time range with Clock icon and tabular-nums
+      assert.match(
+        cardASource,
+        /<div className="flex items-center gap-1\.5 text-xs text-slate-400 mt-0\.5">[\s\S]*?<Clock className="w-3\.5 h-3\.5" \/>[\s\S]*?<span className="tabular-nums">[\s\S]*?nextPrayer\.prayerTime[\s\S]*?<\/span>/,
+        'Left side must display prayer time range with text-xs text-slate-400 mt-0.5 and tabular-nums'
+      );
+
+      // Verify Right: "in" label
+      assert.match(
+        cardASource,
+        /<span className="text-\[11px\] font-medium text-slate-400 block mb-0\.5">\s*\{t\.dashboard\.in\}\s*<\/span>/,
+        'Right side must display "in" label with text-[11px] font-medium text-slate-400 block mb-0.5'
+      );
+
+      // Verify Right: Countdown timer typography
+      assert.match(
+        cardASource,
+        /<p[\s\S]*?suppressHydrationWarning[\s\S]*?className="text-xl sm:text-2xl font-black text-emerald-400 font-mono tracking-tight"/,
+        'Right side must display countdown timer with text-xl sm:text-2xl font-black text-emerald-400 font-mono tracking-tight'
+      );
+
+      // Assert that "Tomorrow" or "tomorrow" does NOT appear anywhere in Card A
       assert.doesNotMatch(cardASource, /\bTomorrow\b/i, 'The word "Tomorrow" must NOT appear in Next Prayer hero card');
       assert.doesNotMatch(cardASource, /\bErtaga\b/i, 'The Uzbek word "Ertaga" must NOT appear in Next Prayer hero card');
       assert.doesNotMatch(cardASource, /\bЗавтра\b/i, 'The Russian word "Завтра" must NOT appear in Next Prayer hero card');
       assert.doesNotMatch(cardASource, /isTomorrow/i, 'isTomorrow property must not be conditionally rendered as a label in Card A');
     });
 
-    it('2.2 should verify that next prayer interval is displayed cleanly and centered (e.g., "05:12 – 06:40")', () => {
-      const cardAStart = dashboardSource.indexOf('{/* Card A: Next Prayer Card */}');
-      const cardBStart = dashboardSource.indexOf('{/* Card B: Daily Prayer Progress Card');
-      const cardASource = dashboardSource.slice(cardAStart, cardBStart);
-
-      // Verify centered container styling
-      assert.match(
-        cardASource,
-        /className="text-xs sm:text-sm font-medium text-slate-300 flex items-center justify-center gap-1\.5 mt-0\.5"/,
-        'Time interval container must be centered with justify-center and scaled-down typography'
+    it('2.2 should verify removal of overnight Isha banner and overnight Isha header badge', () => {
+      // Assert that isPostMidnight is not declared or referenced in HomeDashboard
+      assert.doesNotMatch(
+        dashboardSource,
+        /isPostMidnight\s*&&/,
+        'HomeDashboard must NOT contain conditional isPostMidnight banner'
+      );
+      assert.doesNotMatch(
+        dashboardSource,
+        /const\s+isPostMidnight\s*=/,
+        'HomeDashboard must NOT declare isPostMidnight'
       );
 
-      // Verify tabular-nums en-dash interval rendering
-      assert.match(
-        cardASource,
-        /<span className="tabular-nums">\s*\{nextPrayerItem\?\.endTime\s*\?\s*`\$\{nextPrayer\.prayerTime\}\s*–\s*\$\{nextPrayerItem\.endTime\}`\s*:\s*nextPrayer\.prayerTime\}\s*<\/span>/,
-        'Time interval must render start and end time with an en-dash (e.g., "05:12 – 06:40") with tabular-nums'
+      // Assert that overnightIshaBadge is not referenced
+      assert.doesNotMatch(
+        dashboardSource,
+        /overnightIshaBadge/,
+        'HomeDashboard must NOT render overnightIshaBadge'
       );
 
-      // Test formatting logic across all prayers
-      for (const p of SAMPLE_PRAYERS) {
-        const intervalStr = p.endTime ? `${p.time} – ${p.endTime}` : p.time;
-        assert.match(intervalStr, /^\d{2}:\d{2}\s*–\s*\d{2}:\d{2}$/, `Interval for ${p.name} must match format HH:mm – HH:mm`);
-      }
+      // Assert that overnight banner text is not present
+      assert.doesNotMatch(
+        dashboardSource,
+        /overnightIshaBanner/,
+        'HomeDashboard must NOT render overnightIshaBanner'
+      );
     });
 
     it('2.3 should verify that countdown display renders accurately', () => {
