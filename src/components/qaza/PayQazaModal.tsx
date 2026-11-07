@@ -80,7 +80,7 @@ export default function PayQazaModal({
       if (initialItems && initialItems.length > 0) {
         const mapped: PayableQazaItem[] = initialItems.map((it) => {
           const totalAmount = 'totalAmount' in it ? it.totalAmount : it.amount;
-          const baseAmount = 'baseAmount' in it ? it.baseAmount : 15000;
+          const baseAmount = 'baseAmount' in it ? (it.baseAmount ?? 15000) : 15000;
           const overdueAmount = 'overdueAmount' in it ? it.overdueAmount : totalAmount - baseAmount;
           return {
             date: it.date,

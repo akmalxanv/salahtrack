@@ -27,7 +27,7 @@ export const DEFAULT_OBSERVER = Object.freeze({
 });
 
 // Calibration & filtering constants
-export const DEFAULT_DEADBAND_THRESHOLD = 0.6; // degrees
+export const DEFAULT_DEADBAND_THRESHOLD = 1.2; // degrees (suppresses sub-1.2° stationary magnetometer noise)
 export const DEFAULT_ALIGNMENT_TOLERANCE = 3.5; // degrees (+/- tolerance)
 export const EMA_ALPHA_MIN = 0.12; // High smoothing during hand tremor
 export const EMA_ALPHA_MAX = 0.45; // Low smoothing during fast intentional turn
@@ -465,4 +465,104 @@ export function getQiblaGeodesicData(observerLat: number, observerLng: number): 
     observer: { lat: observerLat, lng: observerLng },
     destination: { lat: KAABA_COORDS.lat, lng: KAABA_COORDS.lng },
   };
+}
+
+/**
+ * Compensates a compass heading for screen/display orientation rotation angle.
+ * In mobile browsers, display rotation (portrait 0°, landscape 90° or 270°, inverted 180°)
+ * rotates the viewing viewport relative to the physical chassis.
+ *
+ * Formula: (heading + screenAngle) % 360
+ *
+ * @param heading Raw compass heading in degrees [0, 360) (0 = North)
+ * @param screenAngle Screen rotation angle in degrees (0, 90, 180, 270)
+ */
+export function compensateScreenOrientation(heading: number, screenAngle: number = 0): number {
+  if (!Number.isFinite(heading)) return 0;
+  const angle = Number.isFinite(screenAngle) ? screenAngle : 0;
+  return normalizeAngle(heading + angle);
+}
+
+/**
+ * Safely queries current screen orientation rotation angle in degrees.
+ * Checks `window.screen.orientation.angle`, fallback to legacy `window.orientation`.
+ */
+export function getScreenOrientationAngle(): number {
+  if (typeof window === 'undefined') return 0;
+  try {
+    if (window.screen?.orientation && typeof window.screen.orientation.angle === 'number') {
+      return window.screen.orientation.angle;
+    }
+    if (typeof window.orientation === 'number') {
+      return (window.orientation + 360) % 360;
+    }
+  } catch {
+    // Return 0 on permission or access errors
+  }
+  return 0;
+}
+
+export interface RawOrientationInput {
+  alpha?: number | null;
+  beta?: number | null;
+  gamma?: number | null;
+  absolute?: boolean | null;
+  type?: string;
+  webkitCompassHeading?: number | null;
+}
+
+/**
+ * Extracts device heading from DeviceOrientationEvent data.
+ * Prioritizes iOS `webkitCompassHeading`, then Android `alpha`.
+ * Applies screen orientation compensation.
+ */
+export function extractCompassHeading(
+  event: RawOrientationInput,
+  screenAngle: number = 0
+): number | null {
+  if (
+    typeof event.webkitCompassHeading === 'number' &&
+    Number.isFinite(event.webkitCompassHeading)
+  ) {
+    return compensateScreenOrientation(event.webkitCompassHeading, screenAngle);
+  }
+
+  if (typeof event.alpha === 'number' && Number.isFinite(event.alpha)) {
+    const heading = (360 - event.alpha) % 360;
+    return compensateScreenOrientation(heading, screenAngle);
+  }
+
+  return null;
+}
+
+/**
+ * Determines if haptic feedback should trigger for Qibla alignment.
+ * Fires ONLY on the discrete edge transition from NOT aligned (wasAligned: false)
+ * to ALIGNED (isAligned: true), provided device is actively reading and not excessively tilted.
+ * While the user remains aligned in the green zone (+/- 3.5°), returns false (never re-triggers).
+ */
+export function shouldTriggerHaptic(
+  wasAligned: boolean,
+  isAligned: boolean,
+  isActivelyReading: boolean = true,
+  isLevel: boolean = true
+): boolean {
+  const currentlyAligned = isAligned && isActivelyReading && isLevel;
+  return currentlyAligned && !wasAligned;
+}
+
+/**
+ * Triggers a brief, subtle haptic vibration (default 30ms) confirming Qibla alignment.
+ * Catches unsupported devices, policy restrictions, and iframe permissions gracefully.
+ */
+export function triggerHapticFeedback(durationMs: number = 30): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+      return navigator.vibrate(durationMs);
+    }
+  } catch {
+    // Gracefully catch vibration policy or security rejections
+  }
+  return false;
 }

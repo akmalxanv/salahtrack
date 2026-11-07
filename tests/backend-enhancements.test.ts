@@ -1,0 +1,779 @@
+import { describe, it, beforeEach, after } from 'node:test';
+import assert from 'node:assert/strict';
+import mongoose from 'mongoose';
+import { NextRequest } from 'next/server.js';
+
+import { User } from '../src/models/User.ts';
+import { Session } from '../src/models/Session.ts';
+import { Group } from '../src/models/Group.ts';
+import { PrayerRecord } from '../src/models/Prayer.ts';
+
+import { PUT as updateProfileHandler } from '../src/app/api/user/profile/route.ts';
+import { GET as getPrayerTimesHandler, METHOD_MAP } from '../src/app/api/prayer-times/route.ts';
+import { GET as getMemberPrayersHandler } from '../src/app/api/groups/[id]/members/[memberId]/prayers/route.ts';
+import { GET as getMemberHistoryHandler } from '../src/app/api/groups/[id]/member-history/route.ts';
+import { GET as getLeaderboardHandler } from '../src/app/api/leaderboard/route.ts';
+import { findCityByNameOrId, findCityByCoordinates } from '../src/lib/cities.ts';
+
+interface MockUserDoc {
+  _id: mongoose.Types.ObjectId;
+  name: string;
+  email: string;
+  username: string;
+  role: 'user' | 'admin';
+  preferences: {
+    language: 'uz' | 'ru' | 'en';
+    calculationMethod?: string;
+    showOnLeaderboard?: boolean;
+    city?: string;
+    latitude?: number;
+    longitude?: number;
+    timezone?: string;
+  };
+  createdAt: Date;
+  updatedAt: Date;
+  save: () => Promise<MockUserDoc>;
+}
+
+interface MockSessionDoc {
+  _id: mongoose.Types.ObjectId;
+  sessionToken: string;
+  userId: mongoose.Types.ObjectId;
+  expiresAt: Date;
+  lastActiveAt: Date;
+  createdAt: Date;
+  updatedAt: Date;
+  save: () => Promise<MockSessionDoc>;
+}
+
+interface MockPrayerRecordDoc {
+  _id: mongoose.Types.ObjectId;
+  userId: mongoose.Types.ObjectId;
+  date: string;
+  prayers: Record<string, {
+    status: string;
+    prayedAt?: Date;
+    isPaid?: boolean;
+    paidAmount?: number;
+  }>;
+  finesAccrued?: number;
+}
+
+interface MockGroupDoc {
+  _id: mongoose.Types.ObjectId;
+  name: string;
+  description?: string;
+  creatorId: mongoose.Types.ObjectId;
+  inviteCode: string;
+  members: Array<{
+    userId: mongoose.Types.ObjectId;
+    role: 'owner' | 'admin' | 'member';
+    joinedAt: Date;
+  }>;
+  save: () => Promise<MockGroupDoc>;
+}
+
+let mockUsers: MockUserDoc[] = [];
+let mockSessions: MockSessionDoc[] = [];
+let mockPrayerRecords: MockPrayerRecordDoc[] = [];
+let mockGroups: MockGroupDoc[] = [];
+
+const userAId = new mongoose.Types.ObjectId();
+const userBId = new mongoose.Types.ObjectId();
+const userOutsideId = new mongoose.Types.ObjectId();
+
+const sessionTokenUserA = 'session-token-user-a';
+const sessionTokenUserB = 'session-token-user-b';
+const sessionTokenOutside = 'session-token-outside';
+
+function setupMocks() {
+  mockUsers = [
+    {
+      _id: userAId,
+      name: 'User Alpha',
+      email: 'alpha@example.com',
+      username: 'user_alpha',
+      role: 'user',
+      preferences: {
+        language: 'uz',
+        calculationMethod: 'MWL',
+        showOnLeaderboard: true,
+        city: 'Samarkand',
+        latitude: 39.6542,
+        longitude: 66.9597,
+        timezone: 'Asia/Samarkand',
+      },
+      createdAt: new Date('2026-01-01T00:00:00Z'),
+      updatedAt: new Date(),
+      save: async function () {
+        return this;
+      },
+    },
+    {
+      _id: userBId,
+      name: 'User Beta',
+      email: 'beta@example.com',
+      username: 'user_beta',
+      role: 'user',
+      preferences: {
+        language: 'en',
+        calculationMethod: 'ISNA',
+        showOnLeaderboard: true,
+        city: 'Tashkent',
+        latitude: 41.2995,
+        longitude: 69.2401,
+        timezone: 'Asia/Tashkent',
+      },
+      createdAt: new Date('2026-01-02T00:00:00Z'),
+      updatedAt: new Date(),
+      save: async function () {
+        return this;
+      },
+    },
+    {
+      _id: userOutsideId,
+      name: 'User Outside',
+      email: 'outside@example.com',
+      username: 'user_outside',
+      role: 'user',
+      preferences: {
+        language: 'ru',
+        calculationMethod: 'RUSSIA',
+        showOnLeaderboard: false,
+      },
+      createdAt: new Date('2026-01-03T00:00:00Z'),
+      updatedAt: new Date(),
+      save: async function () {
+        return this;
+      },
+    },
+  ];
+
+  mockSessions = [
+    {
+      _id: new mongoose.Types.ObjectId(),
+      sessionToken: sessionTokenUserA,
+      userId: userAId,
+      expiresAt: new Date(Date.now() + 86400000),
+      lastActiveAt: new Date(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      save: async function () {
+        return this;
+      },
+    },
+    {
+      _id: new mongoose.Types.ObjectId(),
+      sessionToken: sessionTokenUserB,
+      userId: userBId,
+      expiresAt: new Date(Date.now() + 86400000),
+      lastActiveAt: new Date(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      save: async function () {
+        return this;
+      },
+    },
+    {
+      _id: new mongoose.Types.ObjectId(),
+      sessionToken: sessionTokenOutside,
+      userId: userOutsideId,
+      expiresAt: new Date(Date.now() + 86400000),
+      lastActiveAt: new Date(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      save: async function () {
+        return this;
+      },
+    },
+  ];
+
+  mockPrayerRecords = [];
+  mockGroups = [];
+
+  global.mongooseCache = {
+    conn: mongoose,
+    promise: Promise.resolve(mongoose),
+  };
+
+  const userModel = User as unknown as Record<string, unknown>;
+  const sessionModel = Session as unknown as Record<string, unknown>;
+  const prayerModel = PrayerRecord as unknown as Record<string, unknown>;
+  const groupModel = Group as unknown as Record<string, unknown>;
+
+  userModel.findById = async (id: mongoose.Types.ObjectId | string) => {
+    return mockUsers.find((u) => u._id.toString() === id.toString()) || null;
+  };
+
+  userModel.find = (query: { 'preferences.showOnLeaderboard'?: boolean; _id?: { $in?: mongoose.Types.ObjectId[] } }) => {
+    let result = [...mockUsers];
+    if (query['preferences.showOnLeaderboard'] !== undefined) {
+      result = result.filter((u) => u.preferences?.showOnLeaderboard === query['preferences.showOnLeaderboard']);
+    }
+    if (query._id?.$in) {
+      const allowed = new Set(query._id.$in.map((id) => id.toString()));
+      result = result.filter((u) => allowed.has(u._id.toString()));
+    }
+    return {
+      select: () => ({
+        lean: async () => result,
+      }),
+      lean: async () => result,
+    };
+  };
+
+  sessionModel.findOne = async (query: { sessionToken?: string }) => {
+    return mockSessions.find((s) => s.sessionToken === query.sessionToken) || null;
+  };
+
+  prayerModel.find = (query: {
+    userId?: { $in?: mongoose.Types.ObjectId[] } | mongoose.Types.ObjectId | string;
+    date?: { $gte?: string; $lte?: string };
+  }) => {
+    let result = [...mockPrayerRecords];
+    if (query.userId) {
+      if (typeof query.userId === 'object' && '$in' in query.userId && query.userId.$in) {
+        const allowed = new Set(query.userId.$in.map((id) => id.toString()));
+        result = result.filter((r) => allowed.has(r.userId.toString()));
+      } else {
+        const targetId = query.userId.toString();
+        result = result.filter((r) => r.userId.toString() === targetId);
+      }
+    }
+    if (query.date) {
+      if (query.date.$gte) {
+        result = result.filter((r) => r.date >= query.date!.$gte!);
+      }
+      if (query.date.$lte) {
+        result = result.filter((r) => r.date <= query.date!.$lte!);
+      }
+    }
+    return {
+      select: () => ({
+        sort: () => ({
+          lean: async () => result,
+        }),
+        lean: async () => result,
+      }),
+      sort: () => ({
+        select: () => ({
+          lean: async () => result,
+        }),
+        lean: async () => result,
+      }),
+      lean: async () => result,
+    };
+  };
+
+  groupModel.findById = async (id: mongoose.Types.ObjectId | string) => {
+    return mockGroups.find((g) => g._id.toString() === id.toString()) || null;
+  };
+}
+
+let mockFetchFailure = false;
+const originalFetch = global.fetch;
+
+function setupMockFetch() {
+  global.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const urlStr = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+
+    if (urlStr.includes('api.aladhan.com')) {
+      if (mockFetchFailure) {
+        throw new Error('Upstream network connection timed out');
+      }
+
+      const parsedUrl = new URL(urlStr);
+      const lat = parseFloat(parsedUrl.searchParams.get('latitude') || '41.2995');
+      const lng = parseFloat(parsedUrl.searchParams.get('longitude') || '69.2401');
+      const method = parseInt(parsedUrl.searchParams.get('method') || '3', 10);
+
+      // Longitude progression: as longitude decreases (moving west: Tashkent 69.2° -> Samarkand 67.0° -> Bukhara 64.4°),
+      // solar noon occurs later. Calculate base minutes offset based on longitude diff from Tashkent (69.24°).
+      const lngOffsetMinutes = Math.round((69.2401 - lng) * 4);
+
+      // Method differences: MWL (method 3) uses 18° Fajr / 17° Isha, ISNA (method 2) uses 15° Fajr / 15° Isha
+      let fajrHour = 5;
+      let fajrMin = (method === 2 ? 43 : 27) + lngOffsetMinutes;
+      if (fajrMin >= 60) {
+        fajrHour += Math.floor(fajrMin / 60);
+        fajrMin = fajrMin % 60;
+      }
+
+      let ishaHour = 18;
+      let ishaMin = (method === 2 ? 30 : 41) + lngOffsetMinutes;
+      if (ishaMin >= 60) {
+        ishaHour += Math.floor(ishaMin / 60);
+        ishaMin = ishaMin % 60;
+      }
+
+      let dhuhrHour = 12;
+      let dhuhrMin = 5 + lngOffsetMinutes;
+      if (dhuhrMin >= 60) {
+        dhuhrHour += Math.floor(dhuhrMin / 60);
+        dhuhrMin = dhuhrMin % 60;
+      }
+
+      const pad = (n: number) => String(n).padStart(2, '0');
+
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          code: 200,
+          status: 'OK',
+          data: {
+            timings: {
+              Fajr: `${pad(fajrHour)}:${pad(fajrMin)}`,
+              Sunrise: `06:${pad(55 + lngOffsetMinutes)}`,
+              Dhuhr: `${pad(dhuhrHour)}:${pad(dhuhrMin)}`,
+              Asr: `15:${pad(10 + lngOffsetMinutes)}`,
+              Sunset: `17:${pad(15 + lngOffsetMinutes)}`,
+              Maghrib: `17:${pad(15 + lngOffsetMinutes)}`,
+              Isha: `${pad(ishaHour)}:${pad(ishaMin)}`,
+            },
+            meta: {
+              latitude: lat,
+              longitude: lng,
+              timezone: 'Asia/Tashkent',
+              method: { id: method },
+            },
+          },
+        }),
+      } as unknown as Response;
+    }
+
+    return originalFetch(input, init);
+  };
+}
+
+describe('Backend Enhancements: Location, Methods, Circle Prayer History & Leaderboard Streaks', () => {
+  beforeEach(() => {
+    setupMocks();
+    setupMockFetch();
+    mockFetchFailure = false;
+  });
+
+  after(() => {
+    global.fetch = originalFetch;
+  });
+
+  // =========================================================================
+  // 1. User Profile Location, Timezone & Calculation Method Persistence
+  // =========================================================================
+  describe('1. Location, Timezone & Calculation Method Preferences in User Profile', () => {
+    it('successfully updates city, latitude, longitude, and timezone in user preferences', async () => {
+      const req = new NextRequest('http://localhost:3000/api/user/profile', {
+        method: 'PUT',
+        headers: { cookie: `salahtrack_session=${sessionTokenUserA}` },
+        body: JSON.stringify({
+          preferences: {
+            city: 'Bukhara',
+            latitude: 39.7747,
+            longitude: 64.4286,
+            timezone: 'Asia/Samarkand',
+            calculationMethod: 'TURKEY',
+          },
+        }),
+      });
+
+      const res = await updateProfileHandler(req);
+      assert.equal(res.status, 200);
+      const json = await res.json();
+      assert.equal(json.success, true);
+      assert.equal(json.data.user.preferences.city, 'Bukhara');
+      assert.equal(json.data.user.preferences.latitude, 39.7747);
+      assert.equal(json.data.user.preferences.longitude, 64.4286);
+      assert.equal(json.data.user.preferences.timezone, 'Asia/Samarkand');
+      assert.equal(json.data.user.preferences.calculationMethod, 'TURKEY');
+    });
+
+    it('rejects invalid latitude and longitude values with 400', async () => {
+      // Latitude out of range (> 90)
+      const reqBadLat = new NextRequest('http://localhost:3000/api/user/profile', {
+        method: 'PUT',
+        headers: { cookie: `salahtrack_session=${sessionTokenUserA}` },
+        body: JSON.stringify({
+          preferences: {
+            latitude: 95.5,
+          },
+        }),
+      });
+      const resBadLat = await updateProfileHandler(reqBadLat);
+      assert.equal(resBadLat.status, 400);
+      const jsonBadLat = await resBadLat.json();
+      assert.equal(jsonBadLat.code, 'INVALID_LATITUDE');
+
+      // Longitude out of range (< -180)
+      const reqBadLng = new NextRequest('http://localhost:3000/api/user/profile', {
+        method: 'PUT',
+        headers: { cookie: `salahtrack_session=${sessionTokenUserA}` },
+        body: JSON.stringify({
+          preferences: {
+            longitude: -195.0,
+          },
+        }),
+      });
+      const resBadLng = await updateProfileHandler(reqBadLng);
+      assert.equal(resBadLng.status, 400);
+      const jsonBadLng = await resBadLng.json();
+      assert.equal(jsonBadLng.code, 'INVALID_LONGITUDE');
+    });
+
+    it('rejects invalid timezone values with 400', async () => {
+      // Timezone string exceeding 50 characters
+      const reqLongTz = new NextRequest('http://localhost:3000/api/user/profile', {
+        method: 'PUT',
+        headers: { cookie: `salahtrack_session=${sessionTokenUserA}` },
+        body: JSON.stringify({
+          preferences: {
+            timezone: 'A'.repeat(51),
+          },
+        }),
+      });
+      const resLongTz = await updateProfileHandler(reqLongTz);
+      assert.equal(resLongTz.status, 400);
+      const jsonLongTz = await resLongTz.json();
+      assert.equal(jsonLongTz.code, 'INVALID_TIMEZONE');
+
+      // Non-string timezone
+      const reqBadTypeTz = new NextRequest('http://localhost:3000/api/user/profile', {
+        method: 'PUT',
+        headers: { cookie: `salahtrack_session=${sessionTokenUserA}` },
+        body: JSON.stringify({
+          preferences: {
+            timezone: 12345,
+          },
+        }),
+      });
+      const resBadTypeTz = await updateProfileHandler(reqBadTypeTz);
+      assert.equal(resBadTypeTz.status, 400);
+      const jsonBadTypeTz = await resBadTypeTz.json();
+      assert.equal(jsonBadTypeTz.code, 'INVALID_TIMEZONE');
+    });
+  });
+
+  // =========================================================================
+  // 2. Prayer Times Route & Calculation Methods
+  // =========================================================================
+  describe('2. Prayer Times Route: Preferences, Method Mappings & City Fallbacks', () => {
+    it('verifies all 13 calculation methods map to authoritative Aladhan numbers', () => {
+      assert.equal(METHOD_MAP.MWL, 3, 'MWL must map to 3 (Muslim World League)');
+      assert.equal(METHOD_MAP.ISNA, 2, 'ISNA must map to 2 (Islamic Society of North America)');
+      assert.equal(METHOD_MAP.EGYPT, 5, 'EGYPT must map to 5 (Egyptian Survey Authority)');
+      assert.equal(METHOD_MAP.MAKKAH, 4, 'MAKKAH must map to 4 (Umm Al-Qura University)');
+      assert.equal(METHOD_MAP.KARACHI, 1, 'KARACHI must map to 1 (University of Islamic Sciences)');
+      assert.equal(METHOD_MAP.TEHRAN, 7, 'TEHRAN must map to 7 (University of Tehran)');
+      assert.equal(METHOD_MAP.GULF, 8, 'GULF must map to 8 (Gulf Region)');
+      assert.equal(METHOD_MAP.KUWAIT, 9, 'KUWAIT must map to 9 (Kuwait)');
+      assert.equal(METHOD_MAP.QATAR, 10, 'QATAR must map to 10 (Qatar)');
+      assert.equal(METHOD_MAP.SINGAPORE, 11, 'SINGAPORE must map to 11 (Majlis Ugama Islam Singapura)');
+      assert.equal(METHOD_MAP.FRANCE, 12, 'FRANCE must map to 12 (UOIF)');
+      assert.equal(METHOD_MAP.TURKEY, 13, 'TURKEY must map to 13 (Diyanet)');
+      assert.equal(METHOD_MAP.RUSSIA, 14, 'RUSSIA must map to 14 (Muslims of Russia)');
+    });
+
+    it('findCityByNameOrId and findCityByCoordinates resolve known cities accurately', () => {
+      const samarkand = findCityByNameOrId('samarkand');
+      assert.ok(samarkand);
+      assert.equal(samarkand.country, 'Uzbekistan');
+
+      const byCoords = findCityByCoordinates(41.2995, 69.2401);
+      assert.ok(byCoords);
+      assert.equal(byCoords.id, 'tashkent');
+    });
+
+    it('reads city and method from user preferences when not supplied in searchParams', async () => {
+      const req = new NextRequest('http://localhost:3000/api/prayer-times', {
+        headers: { cookie: `salahtrack_session=${sessionTokenUserA}` },
+      });
+
+      const res = await getPrayerTimesHandler(req);
+      assert.equal(res.status, 200);
+      const json = await res.json();
+      assert.equal(json.success, true);
+      // User A preference has city 'Samarkand' and method 'MWL' (3)
+      assert.equal(json.method, 3);
+      assert.equal(json.city, 'Samarkand');
+      assert.equal(json.location.latitude, 39.6542);
+      assert.equal(json.location.longitude, 66.9597);
+    });
+
+    it('forwards custom method in query params overriding preferences', async () => {
+      const req = new NextRequest('http://localhost:3000/api/prayer-times?method=TURKEY', {
+        headers: { cookie: `salahtrack_session=${sessionTokenUserA}` },
+      });
+
+      const res = await getPrayerTimesHandler(req);
+      assert.equal(res.status, 200);
+      const json = await res.json();
+      assert.equal(json.success, true);
+      assert.equal(json.method, 13);
+    });
+
+    it('changing calculation method (MWL vs ISNA) recalculates Fajr and Isha timings', async () => {
+      const reqMwl = new NextRequest('http://localhost:3000/api/prayer-times?city=Tashkent&method=MWL');
+      const resMwl = await getPrayerTimesHandler(reqMwl);
+      assert.equal(resMwl.status, 200);
+      const jsonMwl = await resMwl.json();
+
+      const reqIsna = new NextRequest('http://localhost:3000/api/prayer-times?city=Tashkent&method=ISNA');
+      const resIsna = await getPrayerTimesHandler(reqIsna);
+      assert.equal(resIsna.status, 200);
+      const jsonIsna = await resIsna.json();
+
+      assert.notEqual(jsonMwl.timings.fajr.time, jsonIsna.timings.fajr.time, 'Fajr must differ between MWL and ISNA');
+      assert.notEqual(jsonMwl.timings.isha.time, jsonIsna.timings.isha.time, 'Isha must differ between MWL and ISNA');
+    });
+
+    it('changing location (Tashkent vs Samarkand vs Bukhara) changes timings according to longitude progression', async () => {
+      const reqTashkent = new NextRequest('http://localhost:3000/api/prayer-times?city=tashkent');
+      const resTashkent = await getPrayerTimesHandler(reqTashkent);
+      const jsonTashkent = await resTashkent.json();
+
+      const reqSamarkand = new NextRequest('http://localhost:3000/api/prayer-times?city=samarkand');
+      const resSamarkand = await getPrayerTimesHandler(reqSamarkand);
+      const jsonSamarkand = await resSamarkand.json();
+
+      const reqBukhara = new NextRequest('http://localhost:3000/api/prayer-times?city=bukhara');
+      const resBukhara = await getPrayerTimesHandler(reqBukhara);
+      const jsonBukhara = await resBukhara.json();
+
+      assert.equal(jsonTashkent.success, true);
+      assert.equal(jsonSamarkand.success, true);
+      assert.equal(jsonBukhara.success, true);
+
+      // Moving west (Tashkent 69.2°E -> Samarkand 67.0°E -> Bukhara 64.4°E) means solar noon / prayer times occur later
+      assert.ok(
+        jsonSamarkand.timings.dhuhr.time > jsonTashkent.timings.dhuhr.time,
+        'Samarkand Dhuhr should be later than Tashkent due to lower longitude'
+      );
+      assert.ok(
+        jsonBukhara.timings.dhuhr.time > jsonSamarkand.timings.dhuhr.time,
+        'Bukhara Dhuhr should be later than Samarkand due to lower longitude'
+      );
+    });
+
+    it('non-Tashkent location returns 502 error on API failure rather than misleading Tashkent times', async () => {
+      mockFetchFailure = true;
+      try {
+        const req = new NextRequest('http://localhost:3000/api/prayer-times?city=samarkand');
+        const res = await getPrayerTimesHandler(req);
+        assert.equal(res.status, 502);
+        const json = await res.json();
+        assert.equal(json.success, false);
+        assert.equal(json.code, 'PRAYER_TIMES_UNAVAILABLE');
+        assert.equal(
+          json.error,
+          'Unable to calculate prayer times for the requested location. External service unavailable.'
+        );
+      } finally {
+        mockFetchFailure = false;
+      }
+    });
+
+    it('Tashkent location returns verified fallback timings with source: fallback on API failure', async () => {
+      mockFetchFailure = true;
+      try {
+        const req = new NextRequest('http://localhost:3000/api/prayer-times?city=tashkent');
+        const res = await getPrayerTimesHandler(req);
+        assert.equal(res.status, 200);
+        const json = await res.json();
+        assert.equal(json.success, true);
+        assert.equal(json.source, 'fallback');
+        assert.ok(json.timings);
+        assert.equal(json.city, 'Tashkent');
+      } finally {
+        mockFetchFailure = false;
+      }
+    });
+  });
+
+  // =========================================================================
+  // 3. Private Circle Prayer History API
+  // =========================================================================
+  describe('3. Private Circle Prayer History API', () => {
+    let circleId: mongoose.Types.ObjectId;
+
+    beforeEach(() => {
+      circleId = new mongoose.Types.ObjectId();
+      const circle: MockGroupDoc = {
+        _id: circleId,
+        name: 'Accountability Brothers',
+        creatorId: userAId,
+        inviteCode: 'ACC123',
+        members: [
+          { userId: userAId, role: 'owner', joinedAt: new Date() },
+          { userId: userBId, role: 'member', joinedAt: new Date() },
+        ],
+        save: async function () {
+          return this;
+        },
+      };
+      mockGroups.push(circle);
+
+      // Add prayer records for userB
+      mockPrayerRecords.push({
+        _id: new mongoose.Types.ObjectId(),
+        userId: userBId,
+        date: '2026-11-05',
+        prayers: {
+          fajr: { status: 'PRAYED_ON_TIME', prayedAt: new Date('2026-11-05T05:30:00Z'), isPaid: false, paidAmount: 0 },
+          dhuhr: { status: 'MISSED', isPaid: true, paidAmount: 15000 },
+          asr: { status: 'PRAYED_ON_TIME', prayedAt: new Date('2026-11-05T15:30:00Z') },
+          maghrib: { status: 'PRAYED_ON_TIME', prayedAt: new Date('2026-11-05T18:00:00Z') },
+          isha: { status: 'MISSED', isPaid: false, paidAmount: 0 },
+        },
+        finesAccrued: 15000,
+      });
+    });
+
+    it('rejects unauthenticated requests with 401', async () => {
+      const req = new NextRequest(
+        `http://localhost:3000/api/groups/${circleId.toString()}/members/${userBId.toString()}/prayers`
+      );
+      const res = await getMemberPrayersHandler(req, {
+        params: Promise.resolve({ id: circleId.toString(), memberId: userBId.toString() }),
+      });
+      assert.equal(res.status, 401);
+    });
+
+    it('rejects non-members of the circle with 403 Forbidden', async () => {
+      // User Outside is not in this circle
+      const req = new NextRequest(
+        `http://localhost:3000/api/groups/${circleId.toString()}/members/${userBId.toString()}/prayers`,
+        { headers: { cookie: `salahtrack_session=${sessionTokenOutside}` } }
+      );
+      const res = await getMemberPrayersHandler(req, {
+        params: Promise.resolve({ id: circleId.toString(), memberId: userBId.toString() }),
+      });
+      assert.equal(res.status, 403);
+      const json = await res.json();
+      assert.equal(json.code, 'FORBIDDEN_NOT_MEMBER');
+    });
+
+    it('rejects querying prayer history of a user who is not a member of the circle with 403', async () => {
+      // User A is in circle, but target User Outside is NOT in circle
+      const req = new NextRequest(
+        `http://localhost:3000/api/groups/${circleId.toString()}/members/${userOutsideId.toString()}/prayers`,
+        { headers: { cookie: `salahtrack_session=${sessionTokenUserA}` } }
+      );
+      const res = await getMemberPrayersHandler(req, {
+        params: Promise.resolve({ id: circleId.toString(), memberId: userOutsideId.toString() }),
+      });
+      assert.equal(res.status, 403);
+    });
+
+    it('allows fellow circle member to view sanitized prayer records with zero financial leaks', async () => {
+      const req = new NextRequest(
+        `http://localhost:3000/api/groups/${circleId.toString()}/members/${userBId.toString()}/prayers?startDate=2026-11-01&endDate=2026-11-30`,
+        { headers: { cookie: `salahtrack_session=${sessionTokenUserA}` } }
+      );
+      const res = await getMemberPrayersHandler(req, {
+        params: Promise.resolve({ id: circleId.toString(), memberId: userBId.toString() }),
+      });
+      assert.equal(res.status, 200);
+      const json = await res.json();
+      assert.equal(json.success, true);
+      assert.equal(json.data.records.length, 1);
+
+      const record = json.data.records[0];
+      assert.equal(record.date, '2026-11-05');
+      assert.equal(record.prayers.fajr.status, 'PRAYED_ON_TIME');
+      assert.equal(record.prayers.dhuhr.status, 'MISSED');
+
+      // CRITICAL SECURITY ASSERTION: Financial fields must NOT be present
+      assert.equal(record.finesAccrued, undefined, 'finesAccrued must not be exposed');
+      assert.equal(record.prayers.dhuhr.isPaid, undefined, 'isPaid must not be exposed');
+      assert.equal(record.prayers.dhuhr.paidAmount, undefined, 'paidAmount must not be exposed');
+    });
+
+    it('supports query-based alias GET /api/groups/[id]/member-history', async () => {
+      const req = new NextRequest(
+        `http://localhost:3000/api/groups/${circleId.toString()}/member-history?memberId=${userBId.toString()}&startDate=2026-11-01&endDate=2026-11-30`,
+        { headers: { cookie: `salahtrack_session=${sessionTokenUserA}` } }
+      );
+      const res = await getMemberHistoryHandler(req, {
+        params: Promise.resolve({ id: circleId.toString() }),
+      });
+      assert.equal(res.status, 200);
+      const json = await res.json();
+      assert.equal(json.success, true);
+      assert.equal(json.data.records.length, 1);
+      assert.equal(json.data.records[0].prayers.dhuhr.status, 'MISSED');
+      assert.equal(json.data.records[0].prayers.dhuhr.paidAmount, undefined);
+    });
+  });
+
+  // =========================================================================
+  // 4. Global Leaderboard with Current Streak
+  // =========================================================================
+  describe('4. Global Leaderboard with Current Streak', () => {
+    it('includes currentStreak: number for each participant and does not expose private prayer data', async () => {
+      const todayStr = new Date().toISOString().split('T')[0];
+      const yesterdayStr = new Date(Date.now() - 86400000).toISOString().split('T')[0];
+
+      // Give User A 5/5 completed prayers on yesterday and today -> current streak = 2
+      mockPrayerRecords.push(
+        {
+          _id: new mongoose.Types.ObjectId(),
+          userId: userAId,
+          date: yesterdayStr,
+          prayers: {
+            fajr: { status: 'PRAYED_ON_TIME' },
+            dhuhr: { status: 'PRAYED_ON_TIME' },
+            asr: { status: 'PRAYED_ON_TIME' },
+            maghrib: { status: 'PRAYED_ON_TIME' },
+            isha: { status: 'PRAYED_ON_TIME' },
+          },
+          finesAccrued: 0,
+        },
+        {
+          _id: new mongoose.Types.ObjectId(),
+          userId: userAId,
+          date: todayStr,
+          prayers: {
+            fajr: { status: 'PRAYED_ON_TIME' },
+            dhuhr: { status: 'PRAYED_ON_TIME' },
+            asr: { status: 'PRAYED_ON_TIME' },
+            maghrib: { status: 'PRAYED_ON_TIME' },
+            isha: { status: 'PRAYED_ON_TIME' },
+          },
+          finesAccrued: 0,
+        }
+      );
+
+      // User B has 0 completed prayers -> streak = 0
+
+      const req = new NextRequest(`http://localhost:3000/api/leaderboard?period=daily&date=${todayStr}`, {
+        headers: { cookie: `salahtrack_session=${sessionTokenUserA}` },
+      });
+
+      const res = await getLeaderboardHandler(req);
+      assert.equal(res.status, 200);
+      const json = await res.json();
+      assert.equal(json.success, true);
+      assert.ok(Array.isArray(json.data.leaderboard));
+
+      const entryA = json.data.leaderboard.find((e: { username: string }) => e.username === 'user_alpha');
+      const entryB = json.data.leaderboard.find((e: { username: string }) => e.username === 'user_beta');
+
+      assert.ok(entryA);
+      assert.ok(entryB);
+
+      // Requirement 8: currentStreak is a number
+      assert.equal(typeof entryA.currentStreak, 'number');
+      assert.equal(entryA.currentStreak, 2);
+
+      assert.equal(typeof entryB.currentStreak, 'number');
+      assert.equal(entryB.currentStreak, 0);
+
+      // Privacy verification: no private data or financial numbers
+      for (const entry of json.data.leaderboard) {
+        assert.equal(entry.prayers, undefined);
+        assert.equal(entry.finesAccrued, undefined);
+        assert.equal(entry.debt, undefined);
+        assert.equal(entry.sadaqahOwed, undefined);
+      }
+    });
+  });
+});

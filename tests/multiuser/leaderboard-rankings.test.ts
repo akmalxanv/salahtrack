@@ -98,12 +98,13 @@ function setupMocks() {
       const allowed = new Set(query._id.$in.map((id) => id.toString()));
       result = result.filter((u) => allowed.has(u._id.toString()));
     }
-    return {
-      select: () => ({
-        lean: async () => result,
-      }),
+    const queryHelper = {
+      sort: () => queryHelper,
+      select: () => queryHelper,
       lean: async () => result,
+      then: (resolve: (records: unknown[]) => void) => resolve(result),
     };
+    return queryHelper;
   };
 
   sessionModel.findOne = async (query: { sessionToken?: string }) => {
@@ -133,12 +134,13 @@ function setupMocks() {
         result = result.filter((r) => r.date <= query.date!.$lte!);
       }
     }
-    return {
-      select: () => ({
-        lean: async () => result,
-      }),
+    const queryHelper = {
+      sort: () => queryHelper,
+      select: () => queryHelper,
       lean: async () => result,
+      then: (resolve: (records: unknown[]) => void) => resolve(result),
     };
+    return queryHelper;
   };
 
   groupModel.findById = (id: mongoose.Types.ObjectId | string) => {

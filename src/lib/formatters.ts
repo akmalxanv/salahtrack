@@ -9,6 +9,7 @@
 
 import type { Language } from '@/locales/translations';
 import type { PrayerId } from '@/types/prayer';
+import { formatHijriDateString } from './hijri.ts';
 
 const UZ_MONTHS = [
   'yanvar', 'fevral', 'mart', 'aprel', 'may', 'iyun',
@@ -118,48 +119,20 @@ export function formatLocalizedDate(dateInput: Date | string, lang: Language = '
 
 /**
  * Format Hijri date with cultural adjustments
- * - uz: "18-Rabiʼus soniy 1448 hijriy"
- * - ru: "18 Раби аль-ахир 1448 г. хиджры"
- * - en: "18 Rabi al-Thani 1448 Hijri"
+ * - uz: "27-Jumodul avval, 1448 hijriy"
+ * - ru: "27 Джумада аль-уля 1448 г. хиджры"
+ * - en: "27 Jumada al-Ula 1448 AH"
  */
-export function formatLocalizedHijriDate(dateInput: Date | string = new Date(), lang: Language = 'uz'): string {
+export function formatLocalizedHijriDate(
+  dateInput: Date | string = new Date(),
+  lang: Language = 'uz',
+  adjustment: number = 0
+): string {
   const parts = parseDateInput(dateInput);
   if (!parts) return '';
 
-  try {
-    const safeDate = new Date(parts.year, parts.monthIndex, parts.day, 12, 0, 0);
-
-    const localeMap: Record<Language, string> = {
-      ru: 'ru-RU-u-ca-islamic-civil',
-      en: 'en-US-u-ca-islamic-civil',
-      uz: 'uz-UZ-u-ca-islamic-civil',
-    };
-
-    const safeLocale = (lang in localeMap && Object.prototype.hasOwnProperty.call(localeMap, lang))
-      ? localeMap[lang]
-      : 'en-US-u-ca-islamic-civil';
-
-    const formatted = new Intl.DateTimeFormat(safeLocale, {
-      day: 'numeric',
-      month: 'long',
-      year: 'numeric',
-    }).format(safeDate);
-
-    let cleaned = formatted.trim();
-    if (lang === 'ru') {
-      cleaned = cleaned.replace(/\s*г\.\s*AH\b/i, ' г. хиджры').replace(/\s*AH\b/i, ' г. хиджры');
-    } else if (lang === 'uz') {
-      cleaned = cleaned.replace(/\s*AH\b/i, ' hijriy');
-    } else {
-      cleaned = cleaned.replace(/\s*AH\b/i, ' Hijri');
-    }
-    return cleaned;
-  } catch {
-    // Fallback safe values in case Intl calendar throws
-    if (lang === 'en') return '18 Rabi al-Thani 1448 Hijri';
-    if (lang === 'uz') return '18-Rabiʼus soniy 1448 hijriy';
-    return '18 Раби аль-ахир 1448 г. хиджры';
-  }
+  const safeDateStr = `${parts.year}-${String(parts.monthIndex + 1).padStart(2, '0')}-${String(parts.day).padStart(2, '0')}`;
+  return formatHijriDateString(safeDateStr, lang, adjustment);
 }
 
 /**

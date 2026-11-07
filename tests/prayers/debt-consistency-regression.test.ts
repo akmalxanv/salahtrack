@@ -750,7 +750,8 @@ describe('Debt Consistency, Overdue Penalties & Separate Qaza Obligations Suite'
   // =========================================================================
   describe('Requirement E: Paying Financial Debt Without Completing Qaza (Spiritual Separation)', () => {
     it('clears financial debt to 0 UZS while prayer status remains MISSED and pendingQazaCount does not decrement', async () => {
-      const missedDate = '2026-10-18'; // 3 days ago
+      const todayStr = new Date().toISOString().split('T')[0];
+      const missedDate = new Date(Date.now() - 2 * 86400000).toISOString().split('T')[0]; // 2 days ago (within 7-day grace period)
       const record = createMockRecord(missedDate, userAId, {
         dhuhr: { status: 'MISSED', isPaid: false, paidAmount: 0 },
       });
@@ -758,7 +759,7 @@ describe('Debt Consistency, Overdue Penalties & Separate Qaza Obligations Suite'
 
       // Pre-settlement state:
       // spiritual debt = 1 (MISSED), financial debt = 15,000 UZS
-      const preCheck = calculateAuthoritativeDebt([record], { referenceDate: '2026-10-21' });
+      const preCheck = calculateAuthoritativeDebt([record], { referenceDate: todayStr });
       assert.equal(preCheck.pendingQazaCount, 1);
       assert.equal(preCheck.totalFinancialDebt, 15000);
 
@@ -791,7 +792,7 @@ describe('Debt Consistency, Overdue Penalties & Separate Qaza Obligations Suite'
       assert.equal(record.prayers.dhuhr.status, 'MISSED');
 
       // 4. pendingQazaCount does NOT decrement (still 1 prayer owed to Allah!)
-      const postDebt = calculateAuthoritativeDebt([record], { referenceDate: '2026-10-21' });
+      const postDebt = calculateAuthoritativeDebt([record], { referenceDate: todayStr });
       assert.equal(postDebt.pendingQazaCount, 1, 'pendingQazaCount must remain 1 because prayer has not been performed');
       assert.equal(postDebt.totalFinancialDebt, 0, 'Financial debt must be completely cleared (0 UZS)');
       assert.equal(postDebt.unpaidFinancialCount, 0);
@@ -965,12 +966,15 @@ describe('Debt Consistency, Overdue Penalties & Separate Qaza Obligations Suite'
       mockGroups.push(circleGroup);
 
       // User A records: 1 recent missed (15,000 UZS) + 1 overdue missed (30,000 UZS) = 45,000 UZS
-      const recA1 = createMockRecord('2026-10-19', userAId, { fajr: { status: 'MISSED' } });
-      const recA2 = createMockRecord('2026-10-10', userAId, { dhuhr: { status: 'MISSED' } });
+      const recentDate = new Date(Date.now() - 2 * 86400000).toISOString().split('T')[0];
+      const overdueDate = new Date(Date.now() - 14 * 86400000).toISOString().split('T')[0];
+      const madeUpDate = new Date(Date.now() - 12 * 86400000).toISOString().split('T')[0];
+      const recA1 = createMockRecord(recentDate, userAId, { fajr: { status: 'MISSED' } });
+      const recA2 = createMockRecord(overdueDate, userAId, { dhuhr: { status: 'MISSED' } });
       mockRecords.push(recA1, recA2);
 
       // User B records: 1 made up prayer (15,000 UZS capped)
-      const recB1 = createMockRecord('2026-10-12', userBId, { asr: { status: 'MADE_UP' } });
+      const recB1 = createMockRecord(madeUpDate, userBId, { asr: { status: 'MADE_UP' } });
       mockRecords.push(recB1);
 
       // Authorized User A queries private circle

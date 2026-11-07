@@ -9,6 +9,10 @@ import {
   computeTiltMetrics,
   calculateTurnGuidance,
   normalizeAngle,
+  compensateScreenOrientation,
+  getScreenOrientationAngle,
+  shouldTriggerHaptic,
+  triggerHapticFeedback,
   DEFAULT_DEADBAND_THRESHOLD,
   DEFAULT_ALIGNMENT_TOLERANCE,
 } from '@/lib/qibla';
@@ -57,7 +61,7 @@ export interface UseDeviceOrientationReturn {
 }
 
 const DEFAULT_THROTTLE_MS = 100; // 10Hz updates for React UI state
-const HAPTIC_COOLDOWN_MS = 2000; // 2-second debounce between alignment vibrations
+const HAPTIC_DEBOUNCE_MS = 1000; // Minimum interval between discrete re-entries
 
 export function useDeviceOrientation({
   qiblaBearing,
@@ -75,6 +79,10 @@ export function useDeviceOrientation({
   const rawBetaRef = useRef<number | null>(null);
   const rawGammaRef = useRef<number | null>(null);
   const simulatedHeadingRef = useRef<number | null>(initialSimulatedHeading);
+
+  // Absolute sensor detection & deconfliction tracking refs
+  const hasReceivedAbsoluteRef = useRef<boolean>(false);
+  const supportsAbsoluteApiRef = useRef<boolean>(false);
 
   // Filter & animation tracking refs
   const filteredHeadingRef = useRef<number>(initialSimulatedHeading ?? 0);
@@ -115,6 +123,7 @@ export function useDeviceOrientation({
     }
     return null;
   });
+
   const [permissionState, setPermissionState] = useState<PermissionState>(() => {
     if (typeof window === 'undefined') return 'prompt';
     if ('isSecureContext' in window && !window.isSecureContext) {
@@ -132,23 +141,6 @@ export function useDeviceOrientation({
     }
     return 'unsupported';
   });
-
-  // Trigger safe, subtle haptic vibration (Android & supporting mobile browsers)
-  const triggerHapticFeedback = useCallback(() => {
-    if (typeof window === 'undefined') return;
-    const now = performance.now();
-    if (now - lastVibrateTimestampRef.current >= HAPTIC_COOLDOWN_MS) {
-      lastVibrateTimestampRef.current = now;
-      if (typeof window !== 'undefined' && 'navigator' in window && typeof navigator.vibrate === 'function') {
-        try {
-          // Subtle 30ms pulse to confirm Qibla alignment
-          navigator.vibrate(30);
-        } catch {
-          // Gracefully ignore vibration policy rejections or unpermitted contexts
-        }
-      }
-    }
-  }, []);
 
   // Sync simulated heading state with ref
   const setSimulatedHeading = useCallback((value: number | null) => {
@@ -198,7 +190,7 @@ export function useDeviceOrientation({
     return true;
   }, []);
 
-  // Sensor Event Listener Registration
+  // Sensor Event Listener Registration with Android deconfliction and screen orientation compensation
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
@@ -206,40 +198,107 @@ export function useDeviceOrientation({
       return;
     }
 
-    const handleOrientationEvent = (event: DeviceOrientationEvent) => {
+    // Detect if device/browser exposes explicit absolute orientation API
+    supportsAbsoluteApiRef.current =
+      'ondeviceorientationabsolute' in window || 'DeviceOrientationAbsoluteEvent' in window;
+
+    // 1. Dedicated Absolute Orientation Handler (Android Chrome deviceorientationabsolute)
+    const handleAbsoluteOrientationEvent = (event: DeviceOrientationEvent) => {
+      sensorEventFiredRef.current = true;
+      hasReceivedAbsoluteRef.current = true;
+
+      // Extract raw pitch and roll for 3D spirit level
+      rawBetaRef.current = event.beta ?? null;
+      rawGammaRef.current = event.gamma ?? null;
+
+      const webkitHeading = (event as unknown as { webkitCompassHeading?: number }).webkitCompassHeading;
+      if (typeof webkitHeading === 'number' && Number.isFinite(webkitHeading)) {
+        const screenAngle = getScreenOrientationAngle();
+        rawHeadingRef.current = compensateScreenOrientation(webkitHeading, screenAngle);
+        setIsSensorAvailable(true);
+        return;
+      }
+
+      if (typeof event.alpha === 'number' && Number.isFinite(event.alpha)) {
+        const screenAngle = getScreenOrientationAngle();
+        const heading = (360 - event.alpha) % 360;
+        rawHeadingRef.current = compensateScreenOrientation(heading, screenAngle);
+        setIsSensorAvailable(true);
+      }
+    };
+
+    // 2. Standard Device Orientation Handler
+    const handleStandardOrientationEvent = (event: DeviceOrientationEvent) => {
       sensorEventFiredRef.current = true;
 
       // Extract raw pitch and roll
       rawBetaRef.current = event.beta ?? null;
       rawGammaRef.current = event.gamma ?? null;
 
-      // iOS Safari provides webkitCompassHeading directly (0 = North, clockwise)
-      const webkitCompassHeading = (event as unknown as { webkitCompassHeading?: number }).webkitCompassHeading;
-      if (typeof webkitCompassHeading === 'number' && Number.isFinite(webkitCompassHeading)) {
-        rawHeadingRef.current = webkitCompassHeading;
+      // iOS Safari provides webkitCompassHeading directly (0 = North, clockwise, absolute)
+      const webkitHeading = (event as unknown as { webkitCompassHeading?: number }).webkitCompassHeading;
+      if (typeof webkitHeading === 'number' && Number.isFinite(webkitHeading)) {
+        hasReceivedAbsoluteRef.current = true;
+        const screenAngle = getScreenOrientationAngle();
+        rawHeadingRef.current = compensateScreenOrientation(webkitHeading, screenAngle);
         setIsSensorAvailable(true);
         return;
       }
 
-      // Android provides alpha [0, 360) counter-clockwise
+      // Android event with explicit absolute flag
+      if (event.absolute === true) {
+        hasReceivedAbsoluteRef.current = true;
+        if (typeof event.alpha === 'number' && Number.isFinite(event.alpha)) {
+          const screenAngle = getScreenOrientationAngle();
+          const heading = (360 - event.alpha) % 360;
+          rawHeadingRef.current = compensateScreenOrientation(heading, screenAngle);
+          setIsSensorAvailable(true);
+        }
+        return;
+      }
+
+      // Deconfliction: Once an absolute event is received or the absolute API is active,
+      // STRICTLY IGNORE non-absolute events for heading!
+      // On Android Chrome, deviceorientation (relative) and deviceorientationabsolute (absolute)
+      // fire in parallel at 60Hz. Ignoring non-absolute events prevents violent dial oscillation!
+      if (hasReceivedAbsoluteRef.current || supportsAbsoluteApiRef.current) {
+        return;
+      }
+
+      // Fallback relative heading only if absolute API is completely unsupported
       if (typeof event.alpha === 'number' && Number.isFinite(event.alpha)) {
+        const screenAngle = getScreenOrientationAngle();
         const heading = (360 - event.alpha) % 360;
-        rawHeadingRef.current = heading;
+        rawHeadingRef.current = compensateScreenOrientation(heading, screenAngle);
         setIsSensorAvailable(true);
       }
     };
 
+    // Screen orientation angle change listener (portrait <-> landscape)
+    const handleScreenOrientationChange = () => {
+      // Re-read orientation angle on display rotation
+      if (rawHeadingRef.current !== null) {
+        // Will be updated on subsequent 60fps raf tick or next sensor event
+      }
+    };
+
     // Attach listeners
-    window.addEventListener('deviceorientation', handleOrientationEvent, true);
+    window.addEventListener('deviceorientation', handleStandardOrientationEvent, true);
     if ('ondeviceorientationabsolute' in window) {
       window.addEventListener(
         'deviceorientationabsolute' as unknown as keyof WindowEventMap,
-        handleOrientationEvent as EventListener,
+        handleAbsoluteOrientationEvent as EventListener,
         true
       );
     }
 
-    // Fallback sensor availability check (1.5s grace window)
+    if (window.screen?.orientation) {
+      window.screen.orientation.addEventListener('change', handleScreenOrientationChange);
+    } else {
+      window.addEventListener('orientationchange', handleScreenOrientationChange);
+    }
+
+    // Fallback sensor availability check (1.5s grace window for unsupported devices)
     const timeoutId = window.setTimeout(() => {
       if (!sensorEventFiredRef.current && simulatedHeadingRef.current === null) {
         setIsSensorAvailable(false);
@@ -247,13 +306,18 @@ export function useDeviceOrientation({
     }, 1500);
 
     return () => {
-      window.removeEventListener('deviceorientation', handleOrientationEvent, true);
+      window.removeEventListener('deviceorientation', handleStandardOrientationEvent, true);
       if ('ondeviceorientationabsolute' in window) {
         window.removeEventListener(
           'deviceorientationabsolute' as unknown as keyof WindowEventMap,
-          handleOrientationEvent as EventListener,
+          handleAbsoluteOrientationEvent as EventListener,
           true
         );
+      }
+      if (window.screen?.orientation) {
+        window.screen.orientation.removeEventListener('change', handleScreenOrientationChange);
+      } else {
+        window.removeEventListener('orientationchange', handleScreenOrientationChange);
       }
       window.clearTimeout(timeoutId);
     };
@@ -266,9 +330,10 @@ export function useDeviceOrientation({
     let rafId: number;
 
     const animateLoop = (timestamp: number) => {
-      const dtSeconds = lastRafTimestampRef.current > 0
-        ? Math.min(0.1, (timestamp - lastRafTimestampRef.current) / 1000)
-        : 0.016;
+      const dtSeconds =
+        lastRafTimestampRef.current > 0
+          ? Math.min(0.1, (timestamp - lastRafTimestampRef.current) / 1000)
+          : 0.016;
       lastRafTimestampRef.current = timestamp;
 
       // Determine current target heading (simulation takes precedence if active)
@@ -278,14 +343,21 @@ export function useDeviceOrientation({
           : rawHeadingRef.current;
 
       if (targetHeading !== null && Number.isFinite(targetHeading)) {
-        // 1. Adaptive Circular EMA Filter
-        const smoothed = adaptiveCircularEma(
+        // 1. Deadband filter on raw target to suppress stationary sensor noise (< deadbandThreshold, e.g. 1.2°)
+        const gatedTarget = applyDeadband(
           filteredHeadingRef.current,
           targetHeading,
+          deadbandThreshold
+        );
+
+        // 2. Velocity-Adaptive Circular EMA Filter
+        const smoothed = adaptiveCircularEma(
+          filteredHeadingRef.current,
+          gatedTarget,
           dtSeconds
         );
 
-        // 2. Deadband Filter to eliminate stationary sensor tremor
+        // 3. Second-stage deadband to prevent fractional EMA creep
         const stableHeading = applyDeadband(
           filteredHeadingRef.current,
           smoothed,
@@ -293,7 +365,7 @@ export function useDeviceOrientation({
         );
         filteredHeadingRef.current = stableHeading;
 
-        // 3. Continuous Angular Unwrapping for Jitter-Free 360°/0° Transitions
+        // 4. Continuous Angular Unwrapping for Jitter-Free 360°/0° Transitions
         const targetDial = -stableHeading;
         const targetNeedle = qiblaBearing - stableHeading;
 
@@ -303,7 +375,7 @@ export function useDeviceOrientation({
         unwrappedDialRef.current = nextDial;
         unwrappedNeedleRef.current = nextNeedle;
 
-        // 4. Direct Hardware-Accelerated DOM Transforms (60/120fps)
+        // 5. Direct Hardware-Accelerated DOM Transforms (60/120fps)
         if (dialRef.current) {
           dialRef.current.style.transform = `rotate(${nextDial}deg) translateZ(0)`;
         }
@@ -312,7 +384,7 @@ export function useDeviceOrientation({
         }
       }
 
-      // 5. Throttled React State Update (10Hz) for text readouts and semantic indicators
+      // 6. Throttled React State Update (10Hz) for text readouts and semantic indicators
       if (timestamp - lastThrottleTimestampRef.current >= throttleMs) {
         lastThrottleTimestampRef.current = timestamp;
 
@@ -321,16 +393,25 @@ export function useDeviceOrientation({
         const guidance = calculateTurnGuidance(roundedHeading, qiblaBearing, alignmentTolerance);
         const tilt = computeTiltMetrics(rawBetaRef.current, rawGammaRef.current);
 
-        // Haptic pulse ONLY on transition from unaligned to aligned with valid readings and non-excessive tilt
+        // Discrete edge-triggered haptic feedback:
+        // Fires ONLY on the discrete edge transition from NOT aligned (!wasAlignedRef.current) to ALIGNED (guidance.isAligned).
+        // While the user remains aligned in the green zone (+/- 3.5°), NEVER re-trigger vibration!
+        // Only if the user moves out of alignment and re-enters the green zone can another pulse fire.
         const isActivelyReading =
           simulatedHeadingRef.current !== null ||
           (rawHeadingRef.current !== null && sensorEventFiredRef.current);
-        const isNotExcessiveTilt = tilt.tiltStatus !== 'EXCESSIVE_TILT';
+        const isLevel = tilt.tiltStatus !== 'EXCESSIVE_TILT';
 
-        if (guidance.isAligned && !wasAlignedRef.current && isActivelyReading && isNotExcessiveTilt) {
-          triggerHapticFeedback();
+        if (shouldTriggerHaptic(wasAlignedRef.current, guidance.isAligned, isActivelyReading, isLevel)) {
+          const now = performance.now();
+          if (now - lastVibrateTimestampRef.current >= HAPTIC_DEBOUNCE_MS) {
+            lastVibrateTimestampRef.current = now;
+            triggerHapticFeedback(30);
+          }
         }
-        wasAlignedRef.current = guidance.isAligned;
+
+        // Maintain discrete aligned state
+        wasAlignedRef.current = guidance.isAligned && isActivelyReading && isLevel;
 
         setHeadingState(roundedHeading);
         setRawHeadingState(rawHeadingRef.current);
@@ -353,7 +434,6 @@ export function useDeviceOrientation({
     throttleMs,
     deadbandThreshold,
     alignmentTolerance,
-    triggerHapticFeedback,
   ]);
 
   return {

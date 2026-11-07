@@ -552,25 +552,28 @@ function ProgressContent() {
     return calculateAccountabilityLedger(recordsByDate);
   }, [recordsByDate]);
 
-  const fineItems = stats?.accountability?.breakdown || localLedger.items;
+  const isAuthoritativeLoading = Boolean(user && loadingStats && !stats);
+
+  const fineItems = useMemo(() => {
+    return stats?.accountability?.breakdown || (isAuthoritativeLoading ? [] : localLedger.items);
+  }, [stats?.accountability?.breakdown, isAuthoritativeLoading, localLedger.items]);
 
   const accountabilityTotal =
     stats?.accountability?.totalFinancialDebt ??
     stats?.accountability?.totalAmount ??
-    localLedger.totalAmount;
+    (isAuthoritativeLoading ? 0 : localLedger.totalAmount);
 
   const pendingQazaCount =
     stats?.accountability?.pendingQazaCount ??
     stats?.accountability?.totalMissed ??
-    localLedger.pendingQazaCount ??
-    localLedger.missedCount;
+    (isAuthoritativeLoading ? 0 : (localLedger.pendingQazaCount ?? localLedger.missedCount));
 
   const accountabilityOverdue =
     stats?.accountability?.totalOverdue ??
     fineItems.filter((it) => it.isOverdue && it.status === 'MISSED').length;
 
   const totalBaseFines = useMemo(() => {
-    return fineItems.reduce((sum, it) => sum + (it.baseAmount || 15000), 0);
+    return fineItems.reduce((sum, it) => sum + (it.baseAmount ?? 15000), 0);
   }, [fineItems]);
 
   const totalOverduePenalties = useMemo(() => {
@@ -688,7 +691,7 @@ function ProgressContent() {
           >
             <Scale className="w-4 h-4" />
             <span>{t.progress.tabs.qaza}</span>
-            {accountabilityTotal > 0 && (
+            {!isAuthoritativeLoading && accountabilityTotal > 0 && (
               <span className="px-1.5 py-0.5 text-[10px] rounded-full bg-rose-100 dark:bg-rose-950/80 text-rose-800 dark:text-rose-300 font-bold">
                 {formatCurrency(accountabilityTotal, lang)}
               </span>
@@ -763,10 +766,16 @@ function ProgressContent() {
                   {t.accountability.title}
                 </span>
                 <div className="flex items-baseline gap-1.5">
-                  <span className="text-xl font-bold text-rose-600 dark:text-rose-400">
-                    {accountabilityTotal.toLocaleString()}
-                  </span>
-                  <span className="text-[10px] text-slate-400">{t.common.currency}</span>
+                  {isAuthoritativeLoading ? (
+                    <div className="h-7 w-20 bg-slate-200 dark:bg-slate-700 animate-pulse rounded" />
+                  ) : (
+                    <>
+                      <span className="text-xl font-bold text-rose-600 dark:text-rose-400">
+                        {accountabilityTotal.toLocaleString()}
+                      </span>
+                      <span className="text-[10px] text-slate-400">{t.common.currency}</span>
+                    </>
+                  )}
                 </div>
                 <button
                   type="button"
@@ -1157,9 +1166,15 @@ function ProgressContent() {
                   <span className="text-xs font-semibold uppercase tracking-wider text-emerald-400">
                     {t.accountability.totalFinancialDebt}
                   </span>
-                  <p className="text-2xl font-black text-white mt-1">
-                    {formatCurrency(accountabilityTotal, lang)}
-                  </p>
+                  <div className="mt-1">
+                    {isAuthoritativeLoading ? (
+                      <div className="h-8 w-28 bg-white/20 animate-pulse rounded" />
+                    ) : (
+                      <p className="text-2xl font-black text-white">
+                        {formatCurrency(accountabilityTotal, lang)}
+                      </p>
+                    )}
+                  </div>
                 </div>
                 <div className="mt-3 pt-2.5 border-t border-slate-700/60 flex items-center justify-between text-[11px] text-slate-300">
                   <span>{fineItems.length} {t.accountability.prayersCount}</span>
@@ -1175,9 +1190,15 @@ function ProgressContent() {
                   <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
                     {t.accountability.baseFinesSubtotal}
                   </span>
-                  <p className="text-2xl font-bold text-slate-900 dark:text-slate-100 mt-1">
-                    {formatCurrency(totalBaseFines, lang)}
-                  </p>
+                  <div className="mt-1">
+                    {isAuthoritativeLoading ? (
+                      <div className="h-8 w-24 bg-slate-200 dark:bg-slate-700 animate-pulse rounded" />
+                    ) : (
+                      <p className="text-2xl font-bold text-slate-900 dark:text-slate-100">
+                        {formatCurrency(totalBaseFines, lang)}
+                      </p>
+                    )}
+                  </div>
                 </div>
                 <p className="text-[11px] text-slate-400 mt-3 pt-2.5 border-t border-slate-100 dark:border-slate-800">
                   15 000 UZS / {t.accountability.statusMissedNeedsMakeup}
@@ -1190,9 +1211,15 @@ function ProgressContent() {
                   <span className="text-xs font-semibold uppercase tracking-wider text-amber-500">
                     {t.accountability.overduePenaltiesSubtotal}
                   </span>
-                  <p className="text-2xl font-bold text-amber-600 dark:text-amber-400 mt-1">
-                    {formatCurrency(totalOverduePenalties, lang)}
-                  </p>
+                  <div className="mt-1">
+                    {isAuthoritativeLoading ? (
+                      <div className="h-8 w-24 bg-slate-200 dark:bg-slate-700 animate-pulse rounded" />
+                    ) : (
+                      <p className="text-2xl font-bold text-amber-600 dark:text-amber-400">
+                        {formatCurrency(totalOverduePenalties, lang)}
+                      </p>
+                    )}
+                  </div>
                 </div>
                 <p className="text-[11px] text-slate-400 mt-3 pt-2.5 border-t border-slate-100 dark:border-slate-800">
                   +15 000 UZS ({accountabilityOverdue > 0 ? t.progress.overduePrayersCount.replace('{count}', String(accountabilityOverdue)) : '0'})

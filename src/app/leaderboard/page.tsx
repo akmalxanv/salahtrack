@@ -12,6 +12,7 @@ import {
   LogIn,
   Users,
   Award,
+  Flame,
 } from 'lucide-react';
 import { useLanguage } from '@/context/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
@@ -360,9 +361,20 @@ export default function LeaderboardPage() {
 
                         {/* User Details */}
                         <div className="space-y-1">
-                          <h3 className="font-bold text-base text-slate-900 dark:text-slate-100 truncate">
-                            {entry.name}
-                          </h3>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h3 className="font-bold text-base text-slate-900 dark:text-slate-100 truncate">
+                              {entry.name}
+                            </h3>
+                            {entry.currentStreak !== undefined && entry.currentStreak > 0 && (
+                              <span
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 border border-amber-200/80 dark:border-amber-900/60 shrink-0"
+                                title={`${entry.currentStreak} ${t.dashboard.streakDays}`}
+                              >
+                                <Flame className="w-3 h-3 text-amber-500 fill-amber-500 shrink-0" />
+                                <span>{entry.currentStreak}</span>
+                              </span>
+                            )}
+                          </div>
                           <p className="text-xs text-slate-400 truncate">@{entry.username}</p>
                         </div>
 
@@ -439,7 +451,7 @@ export default function LeaderboardPage() {
                         {getRankBadge(entry.rank)}
 
                         <div className="min-w-0">
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
                             <span className="font-bold text-sm text-slate-900 dark:text-slate-100 truncate">
                               {entry.name}
                             </span>
@@ -448,13 +460,32 @@ export default function LeaderboardPage() {
                                 {t.leaderboard.youBadge}
                               </span>
                             )}
+                            {entry.currentStreak !== undefined && entry.currentStreak > 0 && (
+                              <span
+                                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 border border-amber-200/80 dark:border-amber-900/60 shrink-0"
+                                title={`${entry.currentStreak} ${t.dashboard.streakDays}`}
+                              >
+                                <Flame className="w-3 h-3 text-amber-500 fill-amber-500 shrink-0" />
+                                <span>{entry.currentStreak}</span>
+                              </span>
+                            )}
                           </div>
                           <p className="text-xs text-slate-400 truncate">@{entry.username}</p>
                         </div>
                       </div>
 
                       {/* Right: Metrics */}
-                      <div className="flex items-center gap-4 shrink-0 text-right">
+                      <div className="flex items-center gap-3 sm:gap-4 shrink-0 text-right">
+                        {entry.currentStreak !== undefined && entry.currentStreak > 0 && (
+                          <div
+                            className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-amber-50/80 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border border-amber-200/70 dark:border-amber-900/50 text-xs font-bold shrink-0"
+                            title={`${entry.currentStreak} ${t.dashboard.streakDays}`}
+                          >
+                            <Flame className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
+                            <span>{entry.currentStreak} {t.dashboard.streakDays}</span>
+                          </div>
+                        )}
+
                         <div className="hidden sm:block text-right">
                           <div className="flex items-center justify-end gap-1 text-xs text-slate-500 dark:text-slate-400">
                             <Clock className="w-3.5 h-3.5 text-emerald-600" />

@@ -115,10 +115,22 @@ export async function PUT(request: NextRequest) {
 
     // 3. Update Preferences if provided
     if (body.preferences && typeof body.preferences === 'object') {
-      const { language, calculationMethod, showOnLeaderboard } = body.preferences as {
+      const {
+        language,
+        calculationMethod,
+        showOnLeaderboard,
+        city,
+        latitude,
+        longitude,
+        timezone,
+      } = body.preferences as {
         language?: unknown;
         calculationMethod?: unknown;
         showOnLeaderboard?: unknown;
+        city?: unknown;
+        latitude?: unknown;
+        longitude?: unknown;
+        timezone?: unknown;
       };
 
       if (language !== undefined) {
@@ -139,6 +151,61 @@ export async function PUT(request: NextRequest) {
 
       if (typeof showOnLeaderboard === 'boolean') {
         user.preferences.showOnLeaderboard = showOnLeaderboard;
+      }
+
+      if (city !== undefined) {
+        if (city === null || city === '') {
+          user.preferences.city = undefined;
+        } else if (typeof city === 'string') {
+          user.preferences.city = city.trim().slice(0, 100);
+        }
+      }
+
+      if (latitude !== undefined) {
+        if (latitude === null) {
+          user.preferences.latitude = undefined;
+        } else if (typeof latitude === 'number' && Number.isFinite(latitude) && latitude >= -90 && latitude <= 90) {
+          user.preferences.latitude = latitude;
+        } else {
+          return NextResponse.json(
+            { success: false, error: 'Latitude must be a valid number between -90 and 90', code: 'INVALID_LATITUDE' },
+            { status: 400 }
+          );
+        }
+      }
+
+      if (longitude !== undefined) {
+        if (longitude === null) {
+          user.preferences.longitude = undefined;
+        } else if (typeof longitude === 'number' && Number.isFinite(longitude) && longitude >= -180 && longitude <= 180) {
+          user.preferences.longitude = longitude;
+        } else {
+          return NextResponse.json(
+            { success: false, error: 'Longitude must be a valid number between -180 and 180', code: 'INVALID_LONGITUDE' },
+            { status: 400 }
+          );
+        }
+      }
+
+      if (timezone !== undefined) {
+        if (timezone === null || timezone === '') {
+          user.preferences.timezone = undefined;
+        } else if (typeof timezone === 'string') {
+          const trimmedTz = timezone.trim();
+          if (trimmedTz.length <= 50) {
+            user.preferences.timezone = trimmedTz;
+          } else {
+            return NextResponse.json(
+              { success: false, error: 'Timezone must not exceed 50 characters', code: 'INVALID_TIMEZONE' },
+              { status: 400 }
+            );
+          }
+        } else {
+          return NextResponse.json(
+            { success: false, error: 'Timezone must be a valid string', code: 'INVALID_TIMEZONE' },
+            { status: 400 }
+          );
+        }
       }
     }
 

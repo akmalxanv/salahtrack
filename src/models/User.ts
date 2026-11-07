@@ -11,6 +11,10 @@ export interface IUser extends Document {
     language: 'uz' | 'ru' | 'en';
     calculationMethod?: string;
     showOnLeaderboard?: boolean;
+    city?: string;
+    latitude?: number;
+    longitude?: number;
+    timezone?: string;
   };
   passwordResetTokenHash?: string;
   passwordResetExpires?: Date;
@@ -68,6 +72,20 @@ const UserSchema = new Schema<IUser>(
       showOnLeaderboard: {
         type: Boolean,
         default: false,
+      },
+      city: {
+        type: String,
+        trim: true,
+      },
+      latitude: {
+        type: Number,
+      },
+      longitude: {
+        type: Number,
+      },
+      timezone: {
+        type: String,
+        trim: true,
       },
     },
     passwordResetTokenHash: {

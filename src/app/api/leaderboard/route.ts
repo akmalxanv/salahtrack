@@ -3,6 +3,7 @@ import { connectDB } from '../../../lib/mongodb.ts';
 import { User } from '../../../models/User.ts';
 import { PrayerRecord } from '../../../models/Prayer.ts';
 import { authenticateRequest } from '../../../lib/auth/index.ts';
+import { calculateStreakFromHistory } from '../../../lib/streak.ts';
 import type { PrayerId } from '../../../types/prayer.ts';
 
 const PRAYER_KEYS: PrayerId[] = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
@@ -15,6 +16,7 @@ export interface LeaderboardEntry {
   onTimeCount: number;
   totalPossible: number;
   consistencyPercentage: number;
+  currentStreak: number;
   isCurrentUser: boolean;
 }
 
@@ -92,12 +94,37 @@ export async function GET(request: NextRequest) {
 
     // 3. Query all records for opted-in users within the period window
     const userIds = optedInUsers.map((u) => u._id);
-    const records = await PrayerRecord.find({
-      userId: { $in: userIds },
-      date: { $gte: startDate, $lte: endDate },
-    }).select('userId date prayers').lean();
+    const [records, streakRecords] = await Promise.all([
+      PrayerRecord.find({
+        userId: { $in: userIds },
+        date: { $gte: startDate, $lte: endDate },
+      }).select('userId date prayers').lean(),
+      PrayerRecord.find({
+        userId: { $in: userIds },
+      }).sort({ date: -1 }).select('userId date prayers').lean(),
+    ]);
 
-    // 4. Aggregate score per user
+    // 4. Compute current streaks for all opted-in users
+    const userStreakMap = new Map<string, number>();
+    for (const u of optedInUsers) {
+      const uStr = u._id.toString();
+      const userRecs = streakRecords.filter((r) => r.userId.toString() === uStr);
+      const recordMap = new Map<string, number>();
+      for (const rec of userRecs) {
+        let comp = 0;
+        for (const key of PRAYER_KEYS) {
+          const st = rec.prayers?.[key]?.status;
+          if (st === 'PRAYED_ON_TIME' || st === 'PRAYED' || st === 'PRAYED_LATE') {
+            comp++;
+          }
+        }
+        recordMap.set(rec.date, comp === 5 ? 5 : 0);
+      }
+      const streakData = calculateStreakFromHistory(recordMap, targetDate);
+      userStreakMap.set(uStr, streakData.current);
+    }
+
+    // 5. Aggregate score per user
     const scoreMap = new Map<string, { completedCount: number; onTimeCount: number }>();
     for (const u of optedInUsers) {
       scoreMap.set(u._id.toString(), { completedCount: 0, onTimeCount: 0 });
@@ -119,7 +146,7 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // 5. Build participant list with clean defaults for missing/zero data
+    // 6. Build participant list with clean defaults for missing/zero data
     const participantList = optedInUsers.map((u) => {
       const uid = u._id.toString();
       const score = scoreMap.get(uid) || { completedCount: 0, onTimeCount: 0 };
@@ -135,6 +162,7 @@ export async function GET(request: NextRequest) {
         username: u.username,
         completedCount,
         onTimeCount,
+        currentStreak: userStreakMap.get(uid) || 0,
         totalPossible,
         consistencyPercentage,
         createdAt,
@@ -190,6 +218,7 @@ export async function GET(request: NextRequest) {
         username: entry.username,
         completedCount: entry.completedCount,
         onTimeCount: entry.onTimeCount,
+        currentStreak: entry.currentStreak,
         totalPossible: entry.totalPossible,
         consistencyPercentage: entry.consistencyPercentage,
         isCurrentUser: entry.isCurrentUser,

@@ -370,47 +370,50 @@ describe('Deep Sensor & Geodesic Mathematical Test Suite', () => {
   // 4. Deadband Noise Gate Suppression
   // =========================================================================
   describe('4. Deadband Noise Gate Suppression', () => {
-    it('suppresses micro-movements strictly below default 0.6° threshold', () => {
+    it('suppresses micro-movements strictly below tuned 1.2° default threshold', () => {
       const stable = 180.0;
 
-      // Positive sub-threshold variations
+      // Positive sub-threshold variations (diff < 1.2°)
       assert.equal(applyDeadband(stable, 180.1), stable);
       assert.equal(applyDeadband(stable, 180.3), stable);
       assert.equal(applyDeadband(stable, 180.5), stable);
-      assert.equal(applyDeadband(stable, 180.59), stable);
+      assert.equal(applyDeadband(stable, 180.8), stable);
+      assert.equal(applyDeadband(stable, 181.0), stable);
+      assert.equal(applyDeadband(stable, 181.19), stable);
 
-      // Negative sub-threshold variations
+      // Negative sub-threshold variations (diff < 1.2°)
       assert.equal(applyDeadband(stable, 179.9), stable);
       assert.equal(applyDeadband(stable, 179.7), stable);
       assert.equal(applyDeadband(stable, 179.5), stable);
-      assert.equal(applyDeadband(stable, 179.41), stable);
+      assert.equal(applyDeadband(stable, 179.0), stable);
+      assert.equal(applyDeadband(stable, 178.81), stable);
     });
 
-    it('passes intentional movements at or above default 0.6° threshold', () => {
+    it('passes intentional movements at or above tuned 1.2° default threshold', () => {
       const stable = 180.0;
 
-      // Exact boundary threshold: 0.6° change passes
-      assert.equal(applyDeadband(stable, 180.6), 180.6);
-      assert.equal(applyDeadband(stable, 179.4), 179.4);
+      // Exact boundary threshold: 1.2° change passes
+      assert.equal(applyDeadband(stable, 181.2), 181.2);
+      assert.equal(applyDeadband(stable, 178.8), 178.8);
 
       // Super-threshold variations
-      assert.equal(applyDeadband(stable, 180.8), 180.8);
+      assert.equal(applyDeadband(stable, 181.5), 181.5);
       assert.equal(applyDeadband(stable, 182.0), 182.0);
       assert.equal(applyDeadband(stable, 178.5), 178.5);
     });
 
     it('applies deadband noise gate correctly across 0°/360° seam', () => {
-      // Sub-threshold across 0°/360° boundary (+0.3° diff from 359.8° to 0.1°)
-      assert.equal(applyDeadband(359.8, 0.1, DEFAULT_DEADBAND_THRESHOLD), 359.8);
+      // Sub-threshold across 0°/360° boundary (+1.0° diff from 359.8° to 0.8°)
+      assert.equal(applyDeadband(359.8, 0.8, DEFAULT_DEADBAND_THRESHOLD), 359.8);
 
-      // Super-threshold across 0°/360° boundary (+0.6° diff from 359.8° to 0.4°)
-      assert.equal(applyDeadband(359.8, 0.4, DEFAULT_DEADBAND_THRESHOLD), 0.4);
+      // Super-threshold across 0°/360° boundary (+1.3° diff from 359.8° to 1.1°)
+      assert.equal(applyDeadband(359.8, 1.1, DEFAULT_DEADBAND_THRESHOLD), 1.1);
 
-      // Negative sub-threshold across seam (-0.3° diff from 0.2° to 359.9°)
-      assert.equal(applyDeadband(0.2, 359.9, DEFAULT_DEADBAND_THRESHOLD), 0.2);
+      // Negative sub-threshold across seam (-1.0° diff from 0.2° to 359.2°)
+      assert.equal(applyDeadband(0.2, 359.2, DEFAULT_DEADBAND_THRESHOLD), 0.2);
 
-      // Negative super-threshold across seam (-0.7° diff from 0.2° to 359.5°)
-      assert.equal(applyDeadband(0.2, 359.5, DEFAULT_DEADBAND_THRESHOLD), 359.5);
+      // Negative super-threshold across seam (-1.3° diff from 0.2° to 358.9°)
+      assert.equal(applyDeadband(0.2, 358.9, DEFAULT_DEADBAND_THRESHOLD), 358.9);
     });
 
     it('respects custom deadband thresholds accurately', () => {

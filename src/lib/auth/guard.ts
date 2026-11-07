@@ -19,6 +19,10 @@ export interface SafeUser {
     language: 'uz' | 'ru' | 'en';
     calculationMethod?: string;
     showOnLeaderboard: boolean;
+    city?: string;
+    latitude?: number;
+    longitude?: number;
+    timezone?: string;
   };
   createdAt: Date;
   updatedAt: Date;
@@ -43,6 +47,10 @@ export function sanitizeUser(user: IUser): SafeUser {
       language: user.preferences?.language || 'uz',
       calculationMethod: user.preferences?.calculationMethod || 'MWL',
       showOnLeaderboard: Boolean(user.preferences?.showOnLeaderboard),
+      city: user.preferences?.city,
+      latitude: user.preferences?.latitude,
+      longitude: user.preferences?.longitude,
+      timezone: user.preferences?.timezone,
     },
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,

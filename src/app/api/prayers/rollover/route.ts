@@ -105,7 +105,7 @@ export async function POST(request: NextRequest) {
         }
       }
       if (modified || fromRecord.finesAccrued === undefined) {
-        fromRecord.finesAccrued = calculateAccountabilityFines(fromDate, fromRecord.prayers);
+        fromRecord.finesAccrued = calculateAccountabilityFines(fromDate, fromRecord.prayers, toDate);
         if (typeof fromRecord.markModified === 'function') {
           fromRecord.markModified('prayers');
           fromRecord.markModified('finesAccrued');
@@ -160,7 +160,7 @@ export async function POST(request: NextRequest) {
           }
         }
         if (hasPending) {
-          interRecord.finesAccrued = calculateAccountabilityFines(interDate, interRecord.prayers);
+          interRecord.finesAccrued = calculateAccountabilityFines(interDate, interRecord.prayers, toDate);
           if (typeof interRecord.markModified === 'function') {
             interRecord.markModified('prayers');
             interRecord.markModified('finesAccrued');

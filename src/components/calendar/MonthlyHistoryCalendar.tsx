@@ -17,7 +17,8 @@ import {
 } from 'lucide-react';
 import { useLanguage } from '@/context/LanguageContext';
 import { getCalendarDate, getLiturgicalDate } from '@/lib/prayer-cycle';
-import { formatLocalizedDate } from '@/lib/formatters';
+import { formatLocalizedDate, formatLocalizedHijriDate } from '@/lib/formatters';
+import CompactHijriCalendar from './CompactHijriCalendar';
 import type { PrayerId, PrayerStatus, PrayerHistoryRecord } from '@/types/prayer';
 
 const PRAYER_IDS: PrayerId[] = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
@@ -34,12 +35,13 @@ export interface MonthlyHistoryCalendarProps {
   selectedDate: string;
   onSelectDate: (date: string) => void;
   records: Record<string, PrayerHistoryRecord>;
-  onUpdatePrayerStatus: (date: string, prayerId: PrayerId, status: PrayerStatus) => Promise<void>;
+  onUpdatePrayerStatus?: (date: string, prayerId: PrayerId, status: PrayerStatus) => Promise<void>;
   updatingPrayerKey?: string | null;
   viewYear: number;
   viewMonth: number; // 0-indexed: 0 = Jan, 11 = Dec
   onChangeMonth: (year: number, month: number) => void;
   isLoading?: boolean;
+  readOnly?: boolean;
 }
 
 export default function MonthlyHistoryCalendar({
@@ -52,6 +54,7 @@ export default function MonthlyHistoryCalendar({
   viewMonth,
   onChangeMonth,
   isLoading = false,
+  readOnly = false,
 }: MonthlyHistoryCalendarProps) {
   const { t, lang } = useLanguage();
   const calendarDate = useMemo(() => getCalendarDate(), []);
@@ -159,6 +162,10 @@ export default function MonthlyHistoryCalendar({
     return formatLocalizedDate(selectedDate, lang);
   }, [selectedDate, lang]);
 
+  const selectedHijriDate = useMemo(() => {
+    return formatLocalizedHijriDate(selectedDate, lang);
+  }, [selectedDate, lang]);
+
   // Month & Year title
   const currentMonthTitle = useMemo(() => {
     const monthName = t.calendar.months[viewMonth] || '';
@@ -205,8 +212,10 @@ export default function MonthlyHistoryCalendar({
     <div className="space-y-6">
       {/* Calendar & Inspector Layout Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-6 items-start">
-        {/* ==================== LEFT COLUMN: INTERACTIVE MONTHLY CALENDAR ==================== */}
-        <div className="lg:col-span-7 xl:col-span-7 2xl:col-span-7 rounded-2xl border border-slate-200 bg-white p-4 sm:p-6 dark:border-slate-800 dark:bg-slate-900 shadow-xs space-y-5">
+        {/* ==================== LEFT COLUMN: GREGORIAN & HIJRI CALENDARS ==================== */}
+        <div className="lg:col-span-7 xl:col-span-7 2xl:col-span-7 space-y-6">
+          {/* 1. Interactive Gregorian Monthly Calendar */}
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-6 dark:border-slate-800 dark:bg-slate-900 shadow-xs space-y-5">
           {/* Calendar Header with Navigation Controls */}
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
             <div className="flex items-center gap-2.5">
@@ -392,15 +401,15 @@ export default function MonthlyHistoryCalendar({
             <div className="flex items-center gap-3 flex-wrap">
               <div className="flex items-center gap-1.5">
                 <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
-                <span className="text-[11px]">{t.calendar.legend.perfect}</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-amber-500" />
-                <span className="text-[11px]">{t.calendar.legend.partial}</span>
+                <span className="text-[11px]">{t.calendar.legend.prayed || t.calendar.legend.perfect}</span>
               </div>
               <div className="flex items-center gap-1.5">
                 <span className="w-2.5 h-2.5 rounded-full bg-rose-500" />
                 <span className="text-[11px]">{t.calendar.legend.missed}</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded-full bg-sky-500" />
+                <span className="text-[11px]">{t.calendar.legend.madeUp}</span>
               </div>
               <div className="flex items-center gap-1.5">
                 <span className="w-2.5 h-2.5 rounded-full bg-slate-300 dark:bg-slate-700" />
@@ -410,18 +419,32 @@ export default function MonthlyHistoryCalendar({
           </div>
         </div>
 
-        {/* ==================== RIGHT COLUMN: SELECTED DATE DETAIL CARD ==================== */}
-        <div className="lg:col-span-5 xl:col-span-5 2xl:col-span-5 rounded-2xl border border-slate-200 bg-white p-4 sm:p-5 dark:border-slate-800 dark:bg-slate-900 shadow-xs space-y-5 lg:sticky lg:top-6">
-          {/* Card Header */}
-          <div className="pb-3 border-b border-slate-100 dark:border-slate-800 flex items-start justify-between gap-3">
-            <div>
-              <span className="text-xs font-semibold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
-                {t.calendar.selectedDateTitle}
-              </span>
-              <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100 mt-0.5">
-                {formattedSelectedDate}
-              </h3>
-            </div>
+        {/* 2. Compact Hijri (Islamic) Calendar directly below Gregorian Calendar */}
+        <CompactHijriCalendar
+          selectedDate={selectedDate}
+          onSelectDate={onSelectDate}
+          records={records}
+          readOnly={readOnly}
+        />
+      </div>
+
+      {/* ==================== RIGHT COLUMN: SELECTED DATE DETAIL CARD ==================== */}
+      <div className="lg:col-span-5 xl:col-span-5 2xl:col-span-5 rounded-2xl border border-slate-200 bg-white p-4 sm:p-5 dark:border-slate-800 dark:bg-slate-900 shadow-xs space-y-5 lg:sticky lg:top-6">
+        {/* Card Header */}
+        <div className="pb-3 border-b border-slate-100 dark:border-slate-800 flex items-start justify-between gap-3">
+          <div>
+            <span className="text-xs font-semibold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
+              {t.calendar.selectedDateTitle}
+            </span>
+            <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100 mt-0.5">
+              {formattedSelectedDate}
+            </h3>
+            {selectedHijriDate && (
+              <p className="text-xs font-medium text-emerald-700 dark:text-emerald-400 mt-0.5">
+                {selectedHijriDate}
+              </p>
+            )}
+          </div>
 
             {(selectedDate === liturgicalDate || selectedDate === calendarDate) && (
               <span className="px-2.5 py-1 rounded-full bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 text-xs font-bold shrink-0">
@@ -455,7 +478,7 @@ export default function MonthlyHistoryCalendar({
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <h4 className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider">
-                {t.calendar.editDayPrayers}
+                {readOnly ? t.calendar.title : t.calendar.editDayPrayers}
               </h4>
               {isLoading && <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-600" />}
             </div>
@@ -488,69 +511,73 @@ export default function MonthlyHistoryCalendar({
                       </div>
                     </div>
 
-                    {/* 3 Canonical Action Buttons */}
-                    <div className="grid grid-cols-3 gap-1.5 sm:gap-2 pt-1 text-xs">
-                      {/* 1. Prayed */}
-                      <button
-                        type="button"
-                        disabled={isRowUpdating}
-                        onClick={() => onUpdatePrayerStatus(selectedDate, p, 'PRAYED_ON_TIME')}
-                        title={t.dashboard.markPrayed}
-                        className={`min-h-[44px] rounded-xl font-semibold flex items-center justify-center gap-1 sm:gap-1.5 px-1 sm:px-2 py-2 text-[11px] sm:text-xs leading-tight transition-colors duration-150 cursor-pointer focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 focus-visible:outline-none disabled:opacity-50 disabled:cursor-not-allowed text-center ${
-                          prayerStatus === 'PRAYED_ON_TIME' || prayerStatus === 'PRAYED' || prayerStatus === 'PRAYED_LATE'
-                            ? 'bg-emerald-600 text-white font-bold shadow-xs border border-emerald-600 dark:bg-emerald-500 dark:border-emerald-500'
-                            : 'bg-emerald-50 hover:bg-emerald-100/90 text-emerald-800 border border-emerald-200/80 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/60 dark:text-emerald-300 dark:border-emerald-800/60'
-                        }`}
-                      >
-                        <Check className="w-3.5 h-3.5 shrink-0 hidden xl:inline" />
-                        <span className="truncate">{t.statuses.PRAYED}</span>
-                      </button>
+                    {/* 3 Canonical Action Buttons (Interactive Mode Only) */}
+                    {!readOnly && onUpdatePrayerStatus && (
+                      <>
+                        <div className="grid grid-cols-3 gap-1.5 sm:gap-2 pt-1 text-xs">
+                          {/* 1. Prayed */}
+                          <button
+                            type="button"
+                            disabled={isRowUpdating}
+                            onClick={() => onUpdatePrayerStatus(selectedDate, p, 'PRAYED_ON_TIME')}
+                            title={t.dashboard.markPrayed}
+                            className={`min-h-[44px] rounded-xl font-semibold flex items-center justify-center gap-1 sm:gap-1.5 px-1 sm:px-2 py-2 text-[11px] sm:text-xs leading-tight transition-colors duration-150 cursor-pointer focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 focus-visible:outline-none disabled:opacity-50 disabled:cursor-not-allowed text-center ${
+                              prayerStatus === 'PRAYED_ON_TIME' || prayerStatus === 'PRAYED' || prayerStatus === 'PRAYED_LATE'
+                                ? 'bg-emerald-600 text-white font-bold shadow-xs border border-emerald-600 dark:bg-emerald-500 dark:border-emerald-500'
+                                : 'bg-emerald-50 hover:bg-emerald-100/90 text-emerald-800 border border-emerald-200/80 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/60 dark:text-emerald-300 dark:border-emerald-800/60'
+                            }`}
+                          >
+                            <Check className="w-3.5 h-3.5 shrink-0 hidden xl:inline" />
+                            <span className="truncate">{t.statuses.PRAYED}</span>
+                          </button>
 
-                      {/* 2. Made Up */}
-                      <button
-                        type="button"
-                        disabled={isRowUpdating}
-                        onClick={() => onUpdatePrayerStatus(selectedDate, p, 'MADE_UP')}
-                        title={t.dashboard.markMadeUp}
-                        className={`min-h-[44px] rounded-xl font-semibold flex items-center justify-center gap-1 sm:gap-1.5 px-1 sm:px-2 py-2 text-[11px] sm:text-xs leading-tight transition-colors duration-150 cursor-pointer focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 focus-visible:outline-none disabled:opacity-50 disabled:cursor-not-allowed text-center ${
-                          prayerStatus === 'MADE_UP'
-                            ? 'bg-sky-600 text-white font-bold shadow-xs border border-sky-600 dark:bg-sky-500 dark:border-sky-500'
-                            : 'bg-sky-50 hover:bg-sky-100/90 text-sky-800 border border-sky-200/80 dark:bg-sky-950/40 dark:hover:bg-sky-900/60 dark:text-sky-300 dark:border-sky-800/60'
-                        }`}
-                      >
-                        <RotateCcw className="w-3.5 h-3.5 shrink-0 hidden xl:inline" />
-                        <span className="truncate">{t.statuses.MADE_UP}</span>
-                      </button>
+                          {/* 2. Made Up */}
+                          <button
+                            type="button"
+                            disabled={isRowUpdating}
+                            onClick={() => onUpdatePrayerStatus(selectedDate, p, 'MADE_UP')}
+                            title={t.dashboard.markMadeUp}
+                            className={`min-h-[44px] rounded-xl font-semibold flex items-center justify-center gap-1 sm:gap-1.5 px-1 sm:px-2 py-2 text-[11px] sm:text-xs leading-tight transition-colors duration-150 cursor-pointer focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 focus-visible:outline-none disabled:opacity-50 disabled:cursor-not-allowed text-center ${
+                              prayerStatus === 'MADE_UP'
+                                ? 'bg-sky-600 text-white font-bold shadow-xs border border-sky-600 dark:bg-sky-500 dark:border-sky-500'
+                                : 'bg-sky-50 hover:bg-sky-100/90 text-sky-800 border border-sky-200/80 dark:bg-sky-950/40 dark:hover:bg-sky-900/60 dark:text-sky-300 dark:border-sky-800/60'
+                            }`}
+                          >
+                            <RotateCcw className="w-3.5 h-3.5 shrink-0 hidden xl:inline" />
+                            <span className="truncate">{t.statuses.MADE_UP}</span>
+                          </button>
 
-                      {/* 3. Missed */}
-                      <button
-                        type="button"
-                        disabled={isRowUpdating}
-                        onClick={() => onUpdatePrayerStatus(selectedDate, p, 'MISSED')}
-                        title={t.dashboard.markMissed}
-                        className={`min-h-[44px] rounded-xl font-semibold flex items-center justify-center gap-1 sm:gap-1.5 px-1 sm:px-2 py-2 text-[11px] sm:text-xs leading-tight transition-colors duration-150 cursor-pointer focus-visible:ring-2 focus-visible:ring-rose-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 focus-visible:outline-none disabled:opacity-50 disabled:cursor-not-allowed text-center ${
-                          prayerStatus === 'MISSED'
-                            ? 'bg-rose-600 text-white font-bold shadow-xs border border-rose-600 dark:bg-rose-500 dark:border-rose-500'
-                            : 'bg-rose-50 hover:bg-rose-100/90 text-rose-800 border border-rose-200/80 dark:bg-rose-950/40 dark:hover:bg-rose-900/60 dark:text-rose-300 dark:border-rose-800/60'
-                        }`}
-                      >
-                        <AlertCircle className="w-3.5 h-3.5 shrink-0 hidden xl:inline" />
-                        <span className="truncate">{t.statuses.MISSED}</span>
-                      </button>
-                    </div>
+                          {/* 3. Missed */}
+                          <button
+                            type="button"
+                            disabled={isRowUpdating}
+                            onClick={() => onUpdatePrayerStatus(selectedDate, p, 'MISSED')}
+                            title={t.dashboard.markMissed}
+                            className={`min-h-[44px] rounded-xl font-semibold flex items-center justify-center gap-1 sm:gap-1.5 px-1 sm:px-2 py-2 text-[11px] sm:text-xs leading-tight transition-colors duration-150 cursor-pointer focus-visible:ring-2 focus-visible:ring-rose-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 focus-visible:outline-none disabled:opacity-50 disabled:cursor-not-allowed text-center ${
+                              prayerStatus === 'MISSED'
+                                ? 'bg-rose-600 text-white font-bold shadow-xs border border-rose-600 dark:bg-rose-500 dark:border-rose-500'
+                                : 'bg-rose-50 hover:bg-rose-100/90 text-rose-800 border border-rose-200/80 dark:bg-rose-950/40 dark:hover:bg-rose-900/60 dark:text-rose-300 dark:border-rose-800/60'
+                            }`}
+                          >
+                            <AlertCircle className="w-3.5 h-3.5 shrink-0 hidden xl:inline" />
+                            <span className="truncate">{t.statuses.MISSED}</span>
+                          </button>
+                        </div>
 
-                    {/* Reset to Pending (if already marked) */}
-                    {prayerStatus !== 'PENDING' && (
-                      <div className="flex justify-end pt-0.5">
-                        <button
-                          type="button"
-                          disabled={isRowUpdating}
-                          onClick={() => onUpdatePrayerStatus(selectedDate, p, 'PENDING')}
-                          className="min-h-[44px] px-2.5 py-1 text-xs text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 underline cursor-pointer flex items-center gap-1 focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 focus-visible:outline-none rounded-lg font-medium disabled:opacity-50"
-                        >
-                          {t.dashboard.resetToPending}
-                        </button>
-                      </div>
+                        {/* Reset to Pending (if already marked) */}
+                        {prayerStatus !== 'PENDING' && (
+                          <div className="flex justify-end pt-0.5">
+                            <button
+                              type="button"
+                              disabled={isRowUpdating}
+                              onClick={() => onUpdatePrayerStatus(selectedDate, p, 'PENDING')}
+                              className="min-h-[44px] px-2.5 py-1 text-xs text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 underline cursor-pointer flex items-center gap-1 focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 focus-visible:outline-none rounded-lg font-medium disabled:opacity-50"
+                            >
+                              {t.dashboard.resetToPending}
+                            </button>
+                          </div>
+                        )}
+                      </>
                     )}
                   </div>
                 );

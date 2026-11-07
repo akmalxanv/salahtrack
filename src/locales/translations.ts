@@ -265,6 +265,7 @@ export interface TranslationContent {
     calcMethodBased: string;
     overnightIshaActive: string;
     overnightIshaBadge: string;
+    hijriBadge: string;
   };
   accountability: {
     title: string;
@@ -356,6 +357,21 @@ export interface TranslationContent {
     profileUpdated: string;
     languagePref: string;
     calcMethod: string;
+    cityLocation?: string;
+    cityLocationDesc?: string;
+    detectGps?: string;
+    detectingGps?: string;
+    locationSaved?: string;
+    uzbekistanCities?: string;
+    internationalCities?: string;
+    currentLocation?: string;
+    changeLocation?: string;
+    customCoordinates?: string;
+    country?: string;
+    coordinates?: string;
+    timezone?: string;
+    saveLocation?: string;
+    savingLocation?: string;
     discipline: string;
     disciplineDesc: string;
     basePledge: string;
@@ -496,13 +512,38 @@ export interface TranslationContent {
     legend: {
       title: string;
       perfect: string;
-      partial: string;
+      prayed?: string;
+      partial?: string;
       missed: string;
+      madeUp?: string;
       pending: string;
     };
     summary: {
       prayersCompleted: string;
       onTimeRate: string;
+    };
+    hijri: {
+      title: string;
+      subtitle: string;
+      sightingAdjustment: string;
+      adjustmentTooltip: string;
+      standard: string;
+      minusDay: string;
+      plusDay: string;
+      today: string;
+      jumpToCurrentMonth: string;
+      selectedDate: string;
+      era: string;
+      arabicEra: string;
+      gregorianSubtext: string;
+      months: [
+        string, string, string, string, string, string,
+        string, string, string, string, string, string
+      ];
+      arabicMonths: [
+        string, string, string, string, string, string,
+        string, string, string, string, string, string
+      ];
     };
   };
   groups: {
@@ -531,6 +572,9 @@ export interface TranslationContent {
     failedCreate: string;
     failedJoin: string;
     networkError: string;
+    viewMemberHistory?: string;
+    memberHistoryTitle?: string;
+    readOnlyNotice?: string;
   };
   progress: {
     title: string;
@@ -831,6 +875,7 @@ export const translations: Record<Language, TranslationContent> = {
       calcMethodBased: 'По методу {method}',
       overnightIshaActive: 'Время ночного намаза (Иша) продолжается до наступления рассвета (Фаджр). Литургический день обновляется с наступлением Фаджра.',
       overnightIshaBadge: 'Иша продолжается',
+      hijriBadge: 'Хиджра',
     },
     accountability: {
       title: 'Общая задолженность по садака (Штрафы за каза)',
@@ -922,6 +967,21 @@ export const translations: Record<Language, TranslationContent> = {
       profileUpdated: 'Профиль успешно обновлен',
       languagePref: 'Язык интерфейса',
       calcMethod: 'Метод расчета времени намазов',
+      cityLocation: 'Город / Местоположение',
+      cityLocationDesc: 'Выберите город или используйте GPS для точного расчета времени намаза.',
+      detectGps: 'Определить через GPS',
+      detectingGps: 'Определение...',
+      locationSaved: 'Местоположение успешно сохранено!',
+      uzbekistanCities: 'Города Узбекистана',
+      internationalCities: 'Международные центры',
+      currentLocation: 'Текущее местоположение',
+      changeLocation: 'Изменить город',
+      customCoordinates: 'Указать координаты вручную',
+      country: 'Страна',
+      coordinates: 'Координаты',
+      timezone: 'Часовой пояс',
+      saveLocation: 'Сохранить местоположение',
+      savingLocation: 'Сохранение...',
       discipline: 'Система обязательств',
       disciplineDesc: 'Параметры личной ответственности за пропущенные намазы.',
       basePledge: 'Базовая ставка обязательства',
@@ -1061,14 +1121,59 @@ export const translations: Record<Language, TranslationContent> = {
       futureDateDisabled: 'Нельзя отмечать молитвы на будущие даты',
       legend: {
         title: 'Обозначения',
-        perfect: '5/5 прочитано',
+        perfect: 'Прочитано',
+        prayed: 'Прочитано',
         partial: 'Частично',
-        missed: 'Есть пропущенные',
-        pending: 'Не заполнено',
+        missed: 'Пропущено',
+        madeUp: 'Восполнено',
+        pending: 'В ожидании',
       },
       summary: {
         prayersCompleted: 'Прочитано молитв',
         onTimeRate: 'Вовремя',
+      },
+      hijri: {
+        title: 'Календарь Хиджры',
+        subtitle: 'Лунный исламский календарь и статус молитв',
+        sightingAdjustment: 'Наблюдение луны',
+        adjustmentTooltip: 'Корректировка даты по наблюдению серпа луны (±1 день)',
+        standard: 'Стандарт (0)',
+        minusDay: '-1 день',
+        plusDay: '+1 день',
+        today: 'Сегодня',
+        jumpToCurrentMonth: 'Текущий месяц',
+        selectedDate: 'Выбранный день по Хиджре',
+        era: 'г. хиджры',
+        arabicEra: 'هـ',
+        gregorianSubtext: 'Григорианская дата',
+        months: [
+          'Мухаррам',
+          'Сафар',
+          'Раби аль-авваль',
+          'Раби аль-ахир',
+          'Джумада аль-уля',
+          'Джумада аль-ахира',
+          'Раджаб',
+          'Шаабан',
+          'Рамадан',
+          'Шавваль',
+          'Зуль-каада',
+          'Зуль-хиджа',
+        ],
+        arabicMonths: [
+          'المُحَرَّم',
+          'صَفَر',
+          'رَبِيع الأَوَّل',
+          'رَبِيع الآخِر',
+          'جُمَادَى الأُولَى',
+          'جُمَادَى الآخِرَة',
+          'رَجَب',
+          'شَعْبَان',
+          'رَمَضَان',
+          'شَوَّال',
+          'ذُو القَعْدَة',
+          'ذُو الحِجَّة',
+        ],
       },
     },
     groups: {
@@ -1097,6 +1202,9 @@ export const translations: Record<Language, TranslationContent> = {
       failedCreate: 'Не удалось создать группу',
       failedJoin: 'Не удалось присоединиться к группе',
       networkError: 'Ошибка сети при отправке запроса',
+      viewMemberHistory: 'История намазов',
+      memberHistoryTitle: 'История намазов участника',
+      readOnlyNotice: 'Режим просмотра (только для чтения)',
     },
     progress: {
       title: 'Личный прогресс',
@@ -1396,6 +1504,7 @@ export const translations: Record<Language, TranslationContent> = {
       calcMethodBased: 'Based on {method} method',
       overnightIshaActive: 'Isha prayer continues overnight until the dawn of Fajr. The liturgical prayer day rolls over at Fajr adhan.',
       overnightIshaBadge: 'Isha is active',
+      hijriBadge: 'Hijri',
     },
     accountability: {
       title: 'Total Sadaqah Owed (Qaza Fines)',
@@ -1487,6 +1596,21 @@ export const translations: Record<Language, TranslationContent> = {
       profileUpdated: 'Profile updated successfully',
       languagePref: 'Interface Language',
       calcMethod: 'Prayer Calculation Method',
+      cityLocation: 'City / Location',
+      cityLocationDesc: 'Select your city or detect GPS coordinates for accurate prayer times.',
+      detectGps: 'Detect via GPS',
+      detectingGps: 'Detecting...',
+      locationSaved: 'Location saved successfully!',
+      uzbekistanCities: 'Cities of Uzbekistan',
+      internationalCities: 'International Hubs',
+      currentLocation: 'Current Location',
+      changeLocation: 'Change Location',
+      customCoordinates: 'Enter Custom Coordinates',
+      country: 'Country',
+      coordinates: 'Coordinates',
+      timezone: 'Timezone',
+      saveLocation: 'Save Location',
+      savingLocation: 'Saving...',
       discipline: 'Accountability System',
       disciplineDesc: 'Personal discipline parameters for missed prayer pledges.',
       basePledge: 'Base Pledge Rate',
@@ -1626,14 +1750,59 @@ export const translations: Record<Language, TranslationContent> = {
       futureDateDisabled: 'Cannot log prayers for future dates',
       legend: {
         title: 'Legend',
-        perfect: '5/5 completed',
+        perfect: 'Prayed',
+        prayed: 'Prayed',
         partial: 'Partially completed',
-        missed: 'Has missed',
-        pending: 'No data',
+        missed: 'Missed',
+        madeUp: 'Made up',
+        pending: 'Pending',
       },
       summary: {
         prayersCompleted: 'Prayers completed',
         onTimeRate: 'On-time rate',
+      },
+      hijri: {
+        title: 'Hijri Calendar',
+        subtitle: 'Lunar Islamic calendar and prayer status',
+        sightingAdjustment: 'Moon Sighting',
+        adjustmentTooltip: 'Adjust date based on local crescent moon sighting (±1 day)',
+        standard: 'Standard (0)',
+        minusDay: '-1 day',
+        plusDay: '+1 day',
+        today: 'Today',
+        jumpToCurrentMonth: 'Current month',
+        selectedDate: 'Selected Hijri date',
+        era: 'AH',
+        arabicEra: 'هـ',
+        gregorianSubtext: 'Gregorian date',
+        months: [
+          'Muharram',
+          'Safar',
+          "Rabi' al-Awwal",
+          "Rabi' al-Thani",
+          'Jumada al-Ula',
+          'Jumada al-Akhirah',
+          'Rajab',
+          "Sha'ban",
+          'Ramadan',
+          'Shawwal',
+          "Dhu al-Qi'dah",
+          'Dhu al-Hijjah',
+        ],
+        arabicMonths: [
+          'المُحَرَّم',
+          'صَفَر',
+          'رَبِيع الأَوَّل',
+          'رَبِيع الآخِر',
+          'جُمَادَى الأُولَى',
+          'جُمَادَى الآخِرَة',
+          'رَجَب',
+          'شَعْبَان',
+          'رَمَضَان',
+          'شَوَّال',
+          'ذُو القَعْدَة',
+          'ذُو الحِجَّة',
+        ],
       },
     },
     groups: {
@@ -1662,6 +1831,9 @@ export const translations: Record<Language, TranslationContent> = {
       failedCreate: 'Failed to create group',
       failedJoin: 'Failed to join group',
       networkError: 'Network error while sending request',
+      viewMemberHistory: 'Prayer History',
+      memberHistoryTitle: 'Member Prayer History',
+      readOnlyNotice: 'Read-only view mode',
     },
     progress: {
       title: 'Personal Progress',
@@ -1961,6 +2133,7 @@ export const translations: Record<Language, TranslationContent> = {
       calcMethodBased: '{method} usuli bo‘yicha',
       overnightIshaActive: 'Tong (Bomdod) otguncha Xufton namozi vaqti davom etadi. Diniy kun Bomdod kirishi bilan yangilanadi.',
       overnightIshaBadge: 'Xufton davom etmoqda',
+      hijriBadge: 'Hijriy',
     },
     accountability: {
       title: 'Umumiy sadaqa qarzi (Qazo jarimalari)',
@@ -2052,6 +2225,21 @@ export const translations: Record<Language, TranslationContent> = {
       profileUpdated: 'Profil muvaffaqiyatli saqlandi',
       languagePref: 'Interfeys tili',
       calcMethod: 'Namoz vaqtlarini hisoblash usuli',
+      cityLocation: 'Shahar / Joylashuv',
+      cityLocationDesc: 'Aniq namoz vaqtlarini hisoblash uchun shahringizni tanlang yoki GPS orqali aniqlang.',
+      detectGps: 'GPS orqali aniqlash',
+      detectingGps: 'Aniqlanmoqda...',
+      locationSaved: 'Joylashuv muvaffaqiyatli saqlandi!',
+      uzbekistanCities: 'O‘zbekiston shaharlari',
+      internationalCities: 'Xalqaro markazlar',
+      currentLocation: 'Hozirgi joylashuv',
+      changeLocation: 'Shaharni oʻzgartirish',
+      customCoordinates: 'Koordinatalarni qoʻlda kiritish',
+      country: 'Davlat',
+      coordinates: 'Koordinatalar',
+      timezone: 'Vaqt mintaqasi',
+      saveLocation: 'Joylashuvni saqlash',
+      savingLocation: 'Saqlanmoqda...',
       discipline: 'Mas’uliyat tizimi',
       disciplineDesc: 'Qazo qilingan namozlar uchun shaxsiy intizom parametrlari.',
       basePledge: 'Asosiy badal stavkasi',
@@ -2191,14 +2379,59 @@ export const translations: Record<Language, TranslationContent> = {
       futureDateDisabled: 'Kelgusi sanalar uchun namoz belgilab bo‘lmaydi',
       legend: {
         title: 'Holatlar',
-        perfect: '5/5 to‘liq',
+        perfect: "O'qildi",
+        prayed: "O'qildi",
         partial: 'Qisman',
-        missed: 'Qazo bor',
-        pending: 'Kiritilmagan',
+        missed: "Qazo bo'ldi",
+        madeUp: "Qazo o'qildi",
+        pending: 'Kutilmoqda',
       },
       summary: {
         prayersCompleted: 'O‘qilgan namozlar',
         onTimeRate: 'O‘z vaqtida',
+      },
+      hijri: {
+        title: 'Hijriy taqvim',
+        subtitle: 'Qamariy islom taqvimi va namozlar holati',
+        sightingAdjustment: 'Hilol ko‘rinishi',
+        adjustmentTooltip: 'Mahalliy hilol ko‘rinishiga ko‘ra sanani moslashtirish (±1 kun)',
+        standard: 'Standart (0)',
+        minusDay: '-1 kun',
+        plusDay: '+1 kun',
+        today: 'Bugun',
+        jumpToCurrentMonth: 'Hozirgi oy',
+        selectedDate: 'Tanlangan hijriy sana',
+        era: 'hijriy',
+        arabicEra: 'هـ',
+        gregorianSubtext: 'Milodiy sana',
+        months: [
+          'Muharram',
+          'Safar',
+          'Rabiʼul avval',
+          'Rabiʼus soniy',
+          'Jumodul avval',
+          'Jumodus soniy',
+          'Rajab',
+          'Shaʼbon',
+          'Ramazon',
+          'Shavvol',
+          'Zulqaʼda',
+          'Zulhijja',
+        ],
+        arabicMonths: [
+          'المُحَرَّم',
+          'صَفَر',
+          'رَبِيع الأَوَّل',
+          'رَبِيع الآخِر',
+          'جُمَادَى الأُولَى',
+          'جُمَادَى الآخِرَة',
+          'رَجَب',
+          'شَعْبَان',
+          'رَمَضَان',
+          'شَوَّال',
+          'ذُو القَعْدَة',
+          'ذُو الحِجَّة',
+        ],
       },
     },
     groups: {
@@ -2227,6 +2460,9 @@ export const translations: Record<Language, TranslationContent> = {
       failedCreate: 'Guruh yaratishda xatolik yuz berdi',
       failedJoin: 'Guruhga qo‘shilishda xatolik yuz berdi',
       networkError: 'So‘rov yuborishda tarmoq xatoligi yuz berdi',
+      viewMemberHistory: 'Namozlar tarixi',
+      memberHistoryTitle: 'A’zoning namozlar tarixi',
+      readOnlyNotice: 'Faqat ko‘rish rejimi',
     },
     progress: {
       title: 'Shaxsiy rivojlanish',

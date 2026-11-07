@@ -413,7 +413,8 @@ describe('End-to-End Qaza / Sadaqah Security & DevOps Audit', () => {
     });
 
     it('ignores client-supplied amounts and enforces server-calculated fines', async () => {
-      const rec = createRecordForUser(userAId, '2026-10-18');
+      const recentDate = new Date(Date.now() - 2 * 86400000).toISOString().split('T')[0];
+      const rec = createRecordForUser(userAId, recentDate);
       rec.prayers.fajr = { status: 'MISSED', isPaid: false };
       mockRecords.push(rec);
 
@@ -421,7 +422,7 @@ describe('End-to-End Qaza / Sadaqah Security & DevOps Audit', () => {
         method: 'POST',
         headers: { cookie: `salahtrack_session=${sessionTokenUserA}` },
         body: JSON.stringify({
-          items: [{ date: '2026-10-18', prayerId: 'fajr', amount: 100 }], // Attempt to pay 100 UZS
+          items: [{ date: recentDate, prayerId: 'fajr', amount: 100 }], // Attempt to pay 100 UZS
           confirmedMadeUp: true,
         }),
       });

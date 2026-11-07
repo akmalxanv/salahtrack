@@ -518,3 +518,41 @@ export function searchCities(query: string): CityPreset[] {
   scored.sort((a, b) => b.score - a.score);
   return scored.map((s) => s.city);
 }
+
+/**
+ * Resolves a city preset by city name or ID (case-insensitive, multilingual).
+ */
+export function findCityByNameOrId(nameOrId: string): CityPreset | undefined {
+  if (!nameOrId || typeof nameOrId !== 'string') return undefined;
+  const direct = findCityById(nameOrId);
+  if (direct) return direct;
+  const results = searchCities(nameOrId);
+  return results.length > 0 ? results[0] : undefined;
+}
+
+/**
+ * Resolves the closest known city preset within a given distance threshold (default ~30km).
+ * Defends against invalid or non-finite coordinates.
+ */
+export function findCityByCoordinates(lat: number, lng: number, maxDistanceKm: number = 30): CityPreset | undefined {
+  if (typeof lat !== 'number' || typeof lng !== 'number' || !Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return undefined;
+  }
+  let closest: CityPreset | undefined;
+  let minDiff = Infinity;
+
+  for (const city of CITIES) {
+    const dLat = (city.coordinates.lat - lat) * 111;
+    const dLng = (city.coordinates.lng - lng) * 111 * Math.cos((lat * Math.PI) / 180);
+    const dist = Math.sqrt(dLat * dLat + dLng * dLng);
+    if (dist < minDiff) {
+      minDiff = dist;
+      closest = city;
+    }
+  }
+
+  if (closest && minDiff <= maxDistanceKm) {
+    return closest;
+  }
+  return undefined;
+}

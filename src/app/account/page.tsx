@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, Suspense } from 'react';
+import React, { useState, Suspense } from 'react';
 import Link from 'next/link';
 import {
   User as UserIcon,
@@ -14,10 +14,16 @@ import {
   AlertCircle,
   Eye,
   EyeOff,
+  MapPin,
+  Crosshair,
 } from 'lucide-react';
 import { useLanguage } from '@/context/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
 import ContactCreator from '@/components/ContactCreator';
+import { findCityByCoordinates, findCityByNameOrId } from '@/lib/cities';
+import { CityPickerModal } from '@/components/qibla/CityPickerModal';
+import type { CityPreset } from '@/types/qibla';
+import type { SafeUser } from '@/lib/auth/guard';
 
 const CALCULATION_METHODS = [
   { id: 'MWL', name: 'Muslim World League (MWL)' },
@@ -28,13 +34,20 @@ const CALCULATION_METHODS = [
   { id: 'Tehran', name: 'Institute of Geophysics, University of Tehran' },
 ];
 
-function AccountContent() {
+function AuthenticatedAccountView({
+  user,
+  refreshUser,
+  logout,
+}: {
+  user: SafeUser;
+  refreshUser: () => Promise<SafeUser | null>;
+  logout: () => Promise<void>;
+}) {
   const { t, lang } = useLanguage();
-  const { user, refreshUser, logout } = useAuth();
 
-  // Personal Information State
-  const [name, setName] = useState('');
-  const [calculationMethod, setCalculationMethod] = useState('MWL');
+  // Personal Information State initialized directly from user
+  const [name, setName] = useState(user.name || '');
+  const [calculationMethod, setCalculationMethod] = useState(user.preferences?.calculationMethod || 'MWL');
   const [profileSaving, setProfileSaving] = useState(false);
   const [profileSuccess, setProfileSuccess] = useState<string | null>(null);
   const [profileError, setProfileError] = useState<string | null>(null);
@@ -53,15 +66,201 @@ function AccountContent() {
   const [passwordSuccess, setPasswordSuccess] = useState<string | null>(null);
   const [passwordError, setPasswordError] = useState<string | null>(null);
 
-  // Sync state when user object loads
-  useEffect(() => {
-    if (user) {
-      queueMicrotask(() => {
-        setName(user.name || '');
-        setCalculationMethod(user.preferences?.calculationMethod || 'MWL');
-      });
+  // City / Location State initialized directly from user or localStorage
+  const [locationData, setLocationData] = useState(() => {
+    let initialName = user.preferences?.city || '';
+    let initialLat = user.preferences?.latitude;
+    let initialLng = user.preferences?.longitude;
+    let initialTz = user.preferences?.timezone || '';
+
+    if (!initialName && typeof initialLat !== 'number') {
+      try {
+        const stored = typeof window !== 'undefined' ? localStorage.getItem('salahtrack_location') : null;
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (parsed.city) initialName = parsed.city;
+          if (typeof parsed.lat === 'number') initialLat = parsed.lat;
+          if (typeof parsed.lng === 'number') initialLng = parsed.lng;
+          if (parsed.timezone) initialTz = parsed.timezone;
+        }
+      } catch {
+        // ignore
+      }
     }
-  }, [user]);
+
+    const finalLat = typeof initialLat === 'number' && Number.isFinite(initialLat) ? initialLat : 41.2995;
+    const finalLng = typeof initialLng === 'number' && Number.isFinite(initialLng) ? initialLng : 69.2401;
+
+    const preset = findCityByCoordinates(finalLat, finalLng, 25) || (initialName ? findCityByNameOrId(initialName) : undefined);
+    const finalName = initialName || (preset ? (preset.nativeNames[lang] || preset.name) : 'Tashkent');
+    const finalCountry = preset?.country || (Math.abs(finalLat - 41.2995) < 0.05 ? 'Uzbekistan' : '');
+    const finalTimezone = initialTz || preset?.timezone || 'Asia/Tashkent';
+
+    return {
+      cityName: finalName,
+      country: finalCountry,
+      latitude: finalLat,
+      longitude: finalLng,
+      timezone: finalTimezone,
+    };
+  });
+
+  const [isCityModalOpen, setIsCityModalOpen] = useState(false);
+  const [isCustomCoordOpen, setIsCustomCoordOpen] = useState(false);
+  const [customLatInput, setCustomLatInput] = useState('');
+  const [customLngInput, setCustomLngInput] = useState('');
+  const [customCoordError, setCustomCoordError] = useState<string | null>(null);
+  const [locationSaving, setLocationSaving] = useState(false);
+  const [locationSuccess, setLocationSuccess] = useState<string | null>(null);
+  const [locationError, setLocationError] = useState<string | null>(null);
+  const [gpsDetecting, setGpsDetecting] = useState(false);
+
+  const handleDetectGps = () => {
+    if (typeof window === 'undefined' || !navigator.geolocation) {
+      setLocationError(t.dashboard.locationUnavailable || 'Geolocation is not supported by your browser');
+      return;
+    }
+
+    setGpsDetecting(true);
+    setLocationError(null);
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const lat = position.coords.latitude;
+        const lng = position.coords.longitude;
+        const preset = findCityByCoordinates(lat, lng, 35);
+        if (preset) {
+          const localizedName = preset.nativeNames[lang] || preset.name;
+          setLocationData({
+            cityName: localizedName,
+            country: preset.country,
+            latitude: lat,
+            longitude: lng,
+            timezone: preset.timezone || 'Asia/Tashkent',
+          });
+        } else {
+          setLocationData({
+            cityName: `${lat.toFixed(4)}°, ${lng.toFixed(4)}°`,
+            country: '',
+            latitude: lat,
+            longitude: lng,
+            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Tashkent',
+          });
+        }
+        setGpsDetecting(false);
+      },
+      (err) => {
+        let errorMsg = 'Could not determine GPS coordinates';
+        if (err.code === 1) {
+          errorMsg = lang === 'uz'
+            ? 'GPS ruxsati berilmadi. Iltimos, brauzer sozlamalarida joylashuvga ruxsat bering.'
+            : lang === 'ru'
+            ? 'Доступ к GPS отклонен. Пожалуйста, разрешите геолокацию в настройках браузера.'
+            : 'GPS permission denied. Please allow location access in your browser settings.';
+        } else if (err.code === 2) {
+          errorMsg = lang === 'uz' ? 'GPS signali topilmadi.' : lang === 'ru' ? 'Сигнал GPS недоступен.' : 'GPS position unavailable.';
+        } else if (err.code === 3) {
+          errorMsg = lang === 'uz' ? 'GPS aniqlash vaqti tugadi.' : lang === 'ru' ? 'Время ожидания GPS истекло.' : 'GPS detection timed out.';
+        }
+        setLocationError(errorMsg);
+        setGpsDetecting(false);
+      },
+      { timeout: 10000, enableHighAccuracy: true }
+    );
+  };
+
+  const handleSelectCityPreset = (city: CityPreset) => {
+    const localizedName = city.nativeNames[lang] || city.name;
+    setLocationData({
+      cityName: localizedName,
+      country: city.country,
+      latitude: city.coordinates.lat,
+      longitude: city.coordinates.lng,
+      timezone: city.timezone || 'Asia/Tashkent',
+    });
+    setIsCityModalOpen(false);
+  };
+
+  const handleSelectCustomCoords = (lat: number, lng: number, label: string) => {
+    const preset = findCityByCoordinates(lat, lng, 35);
+    setLocationData({
+      cityName: preset ? (preset.nativeNames[lang] || preset.name) : label,
+      country: preset ? preset.country : '',
+      latitude: lat,
+      longitude: lng,
+      timezone: preset?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Tashkent',
+    });
+    setIsCityModalOpen(false);
+  };
+
+  const handleApplyManualCoords = () => {
+    setCustomCoordError(null);
+    const lat = parseFloat(customLatInput);
+    const lng = parseFloat(customLngInput);
+    if (isNaN(lat) || lat < -90 || lat > 90 || isNaN(lng) || lng < -180 || lng > 180) {
+      setCustomCoordError(t.qibla.invalidCoordinates);
+      return;
+    }
+    const preset = findCityByCoordinates(lat, lng, 35);
+    setLocationData({
+      cityName: preset ? (preset.nativeNames[lang] || preset.name) : `${lat.toFixed(4)}°, ${lng.toFixed(4)}°`,
+      country: preset ? preset.country : '',
+      latitude: lat,
+      longitude: lng,
+      timezone: preset?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Tashkent',
+    });
+    setIsCustomCoordOpen(false);
+  };
+
+  const handleSaveLocation = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setLocationSuccess(null);
+    setLocationError(null);
+    setLocationSaving(true);
+
+    try {
+      const res = await fetch('/api/user/profile', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          preferences: {
+            city: locationData.cityName,
+            latitude: locationData.latitude,
+            longitude: locationData.longitude,
+            timezone: locationData.timezone,
+          },
+        }),
+      });
+
+      const json = await res.json();
+      if (!res.ok || !json.success) {
+        setLocationError(json.error || t.common.error);
+        setLocationSaving(false);
+        return;
+      }
+
+      localStorage.setItem(
+        'salahtrack_location',
+        JSON.stringify({
+          city: locationData.cityName,
+          lat: locationData.latitude,
+          lng: locationData.longitude,
+          timezone: locationData.timezone,
+        })
+      );
+
+      window.dispatchEvent(new Event('local-storage-update'));
+      window.dispatchEvent(new Event('storage'));
+
+      setLocationSuccess(t.profile.locationSaved || 'Location saved');
+      await refreshUser();
+      setTimeout(() => setLocationSuccess(null), 3500);
+    } catch {
+      setLocationError(t.common.error);
+    } finally {
+      setLocationSaving(false);
+    }
+  };
 
   // Save Personal Info
   const handleSaveProfile = async (e: React.FormEvent) => {
@@ -180,56 +379,6 @@ function AccountContent() {
     }
   };
 
-  // Unauthenticated View
-  if (!user) {
-    return (
-      <div className="space-y-4 sm:space-y-6">
-        <header>
-          <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2.5">
-            <span className="p-2 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400">
-              <UserIcon className="w-5 h-5" />
-            </span>
-            <span>{t.account.title}</span>
-          </h1>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-            {t.account.subtitle}
-          </p>
-        </header>
-
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-6 md:p-8 dark:border-slate-800 dark:bg-slate-900 shadow-sm text-center space-y-4">
-          <div className="w-16 h-16 rounded-2xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 mx-auto flex items-center justify-center">
-            <UserIcon className="w-8 h-8" />
-          </div>
-          <div className="space-y-1">
-            <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">
-              {t.account.signInTitle}
-            </h2>
-            <p className="text-sm text-slate-500 dark:text-slate-400 max-w-md mx-auto">
-              {t.account.signInSubtitle}
-            </p>
-          </div>
-          <div className="pt-2 flex items-center justify-center gap-3">
-            <Link
-              href="/login"
-              className="py-2.5 px-5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-xs transition-colors flex items-center gap-2"
-            >
-              <LogIn className="w-4 h-4" />
-              <span>{t.nav.login}</span>
-            </Link>
-            <Link
-              href="/signup"
-              className="py-2.5 px-5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 text-xs font-semibold transition-colors"
-            >
-              {t.nav.signup}
-            </Link>
-          </div>
-        </div>
-
-        <ContactCreator className="pt-2" />
-      </div>
-    );
-  }
-
   // Streamlined Cohesive Authenticated View (All settings in one primary view)
   return (
     <div className="space-y-6 max-w-4xl mx-auto pb-12">
@@ -268,10 +417,6 @@ function AccountContent() {
               <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100 truncate">
                 {user.name}
               </h2>
-              <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200/70 dark:border-emerald-800/70">
-                <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                <span>{t.profile.accountDesc}</span>
-              </span>
             </div>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 truncate">
               @{user.username} • {user.email}
@@ -373,6 +518,203 @@ function AccountContent() {
             </button>
           </div>
         </form>
+      </div>
+
+      {/* Section 2: City / Location Selector (Uzbekistan 14 regions + International hubs + GPS) */}
+      <div className="rounded-2xl border border-slate-200 bg-white p-5 sm:p-6 dark:border-slate-800 dark:bg-slate-900 shadow-2xs space-y-5">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div>
+            <h2 className="text-base font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+              <MapPin className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+              <span>{t.profile.cityLocation}</span>
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              {t.profile.cityLocationDesc}
+            </p>
+          </div>
+
+          {/* GPS Quick Action */}
+          <button
+            type="button"
+            onClick={handleDetectGps}
+            disabled={gpsDetecting}
+            className="self-start sm:self-auto min-h-[44px] px-3.5 py-2 rounded-xl border border-emerald-200 dark:border-emerald-800/80 bg-emerald-50/60 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100/80 dark:hover:bg-emerald-900/60 text-xs font-semibold flex items-center gap-2 transition-colors cursor-pointer disabled:opacity-60"
+            title={t.profile.detectGps}
+          >
+            {gpsDetecting ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-600 dark:text-emerald-400" />
+            ) : (
+              <Crosshair className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+            )}
+            <span>{gpsDetecting ? t.profile.detectingGps : t.profile.detectGps}</span>
+          </button>
+        </div>
+
+        {locationSuccess && (
+          <div
+            role="status"
+            className="p-3.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 text-xs font-medium flex items-center gap-2"
+          >
+            <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
+            <span>{locationSuccess}</span>
+          </div>
+        )}
+        {locationError && (
+          <div
+            role="alert"
+            className="p-3.5 rounded-xl bg-red-50 dark:bg-red-950/60 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 text-xs font-medium flex items-center gap-2"
+          >
+            <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
+            <span>{locationError}</span>
+          </div>
+        )}
+
+        {/* Selected Location Card Display */}
+        <div className="p-4 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/50 space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div className="space-y-1">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                {t.profile.currentLocation || 'Current Location'}
+              </span>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-lg font-bold text-slate-900 dark:text-slate-100">
+                  {locationData.cityName}
+                </span>
+                {locationData.country && (
+                  <span className="text-xs px-2 py-0.5 rounded-md bg-emerald-100/70 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 font-medium">
+                    {locationData.country}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Change Location Action Button */}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setIsCityModalOpen(true)}
+                className="min-h-[44px] px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs rounded-xl shadow-xs transition-colors flex items-center gap-2 cursor-pointer"
+              >
+                <Compass className="w-4 h-4" />
+                <span>{t.profile.changeLocation || t.qibla.selectCity}</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Details: Coordinates & Timezone */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-200/60 dark:border-slate-700/60 text-xs text-slate-600 dark:text-slate-400">
+            <div className="flex items-center gap-1.5">
+              <span className="font-semibold text-slate-700 dark:text-slate-300">
+                {t.profile.coordinates || 'Coordinates'}:
+              </span>
+              <span className="font-mono">
+                {locationData.latitude.toFixed(4)}°N, {locationData.longitude.toFixed(4)}°E
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="font-semibold text-slate-700 dark:text-slate-300">
+                {t.profile.timezone || 'Timezone'}:
+              </span>
+              <span>{locationData.timezone}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Optional Manual Coordinate Input Expandable */}
+        <div className="space-y-3">
+          <button
+            type="button"
+            onClick={() => setIsCustomCoordOpen((prev) => !prev)}
+            className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 hover:underline inline-flex items-center gap-1 cursor-pointer"
+          >
+            <span>{t.profile.customCoordinates || 'Enter coordinates manually'}</span>
+          </button>
+
+          {isCustomCoordOpen && (
+            <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 space-y-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label htmlFor="customLatInput" className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+                    Latitude (-90 to 90)
+                  </label>
+                  <input
+                    id="customLatInput"
+                    type="number"
+                    step="0.0001"
+                    min="-90"
+                    max="90"
+                    value={customLatInput}
+                    onChange={(e) => setCustomLatInput(e.target.value)}
+                    placeholder={locationData.latitude.toString()}
+                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label htmlFor="customLngInput" className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+                    Longitude (-180 to 180)
+                  </label>
+                  <input
+                    id="customLngInput"
+                    type="number"
+                    step="0.0001"
+                    min="-180"
+                    max="180"
+                    value={customLngInput}
+                    onChange={(e) => setCustomLngInput(e.target.value)}
+                    placeholder={locationData.longitude.toString()}
+                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+                  />
+                </div>
+              </div>
+
+              {customCoordError && (
+                <p className="text-xs text-red-600 dark:text-red-400">{customCoordError}</p>
+              )}
+
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={handleApplyManualCoords}
+                  className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-medium transition-colors cursor-pointer"
+                >
+                  {t.qibla.applyCoords || 'Apply'}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Save Location Button */}
+        <div className="flex justify-end pt-2">
+          <button
+            type="button"
+            onClick={handleSaveLocation}
+            disabled={locationSaving}
+            className="min-h-[44px] py-2.5 px-5 bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs rounded-xl shadow-xs transition-colors flex items-center gap-2 cursor-pointer disabled:opacity-60"
+          >
+            {locationSaving ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                <span>{t.profile.savingLocation || t.common.loading}</span>
+              </>
+            ) : (
+              <span>{t.profile.saveLocation || t.profile.saveProfile}</span>
+            )}
+          </button>
+        </div>
+
+        {/* CityPickerModal Dialog */}
+        {isCityModalOpen && (
+          <CityPickerModal
+            isOpen={isCityModalOpen}
+            onClose={() => setIsCityModalOpen(false)}
+            onSelectCity={handleSelectCityPreset}
+            onSelectCustomCoords={handleSelectCustomCoords}
+            onDetectGps={handleDetectGps}
+            isLocatingGps={gpsDetecting}
+            currentCoords={{ lat: locationData.latitude, lng: locationData.longitude }}
+          />
+        )}
       </div>
 
       {/* Section 2: Prayer Calculation Method (Clear, Dedicated Section) */}
@@ -581,6 +923,69 @@ function AccountContent() {
 
       <ContactCreator className="pt-2" />
     </div>
+  );
+}
+
+function AccountContent() {
+  const { t } = useLanguage();
+  const { user, refreshUser, logout } = useAuth();
+
+  if (!user) {
+    return (
+      <div className="space-y-4 sm:space-y-6">
+        <header>
+          <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2.5">
+            <span className="p-2 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400">
+              <UserIcon className="w-5 h-5" />
+            </span>
+            <span>{t.account.title}</span>
+          </h1>
+          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+            {t.account.subtitle}
+          </p>
+        </header>
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-6 md:p-8 dark:border-slate-800 dark:bg-slate-900 shadow-sm text-center space-y-4">
+          <div className="w-16 h-16 rounded-2xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 mx-auto flex items-center justify-center">
+            <UserIcon className="w-8 h-8" />
+          </div>
+          <div className="space-y-1">
+            <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">
+              {t.account.signInTitle}
+            </h2>
+            <p className="text-sm text-slate-500 dark:text-slate-400 max-w-md mx-auto">
+              {t.account.signInSubtitle}
+            </p>
+          </div>
+          <div className="pt-2 flex items-center justify-center gap-3">
+            <Link
+              href="/login"
+              className="py-2.5 px-5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-xs transition-colors flex items-center gap-2"
+            >
+              <LogIn className="w-4 h-4" />
+              <span>{t.nav.login}</span>
+            </Link>
+            <Link
+              href="/signup"
+              className="py-2.5 px-5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 text-xs font-semibold transition-colors"
+            >
+              {t.nav.signup}
+            </Link>
+          </div>
+        </div>
+
+        <ContactCreator className="pt-2" />
+      </div>
+    );
+  }
+
+  return (
+    <AuthenticatedAccountView
+      key={user.id}
+      user={user}
+      refreshUser={refreshUser}
+      logout={logout}
+    />
   );
 }
 

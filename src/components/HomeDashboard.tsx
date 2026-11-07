@@ -405,27 +405,41 @@ export default function HomeDashboard({
 
       try {
         const statsRes = await fetch(`/api/stats?today=${activeLiturgicalDate}`);
-        if (!statsRes.ok) return;
-        const statsJson = await statsRes.json();
-        if (!isCancelled && statsJson?.success) {
-          if (statsJson.data?.streaks) {
-            setStreak(statsJson.data.streaks);
+        if (!statsRes.ok) {
+          if (!isCancelled) {
+            setServerAccountability({ totalAmount: 0, pendingQazaCount: 0 });
           }
-          if (statsJson.data?.accountability) {
-            setServerAccountability({
-              totalAmount:
-                statsJson.data.accountability.totalFinancialDebt ??
-                statsJson.data.accountability.totalAmount ??
-                0,
-              pendingQazaCount:
-                statsJson.data.accountability.pendingQazaCount ??
-                statsJson.data.accountability.totalMissed ??
-                0,
-            });
+          return;
+        }
+        const statsJson = await statsRes.json();
+        if (!isCancelled) {
+          if (statsJson?.success) {
+            if (statsJson.data?.streaks) {
+              setStreak(statsJson.data.streaks);
+            }
+            if (statsJson.data?.accountability) {
+              setServerAccountability({
+                totalAmount:
+                  statsJson.data.accountability.totalFinancialDebt ??
+                  statsJson.data.accountability.totalAmount ??
+                  0,
+                pendingQazaCount:
+                  statsJson.data.accountability.pendingQazaCount ??
+                  statsJson.data.accountability.totalMissed ??
+                  0,
+              });
+            } else {
+              setServerAccountability({ totalAmount: 0, pendingQazaCount: 0 });
+            }
+          } else {
+            setServerAccountability({ totalAmount: 0, pendingQazaCount: 0 });
           }
         }
       } catch (err) {
         console.warn('Could not sync initial streak stats:', err);
+        if (!isCancelled) {
+          setServerAccountability({ totalAmount: 0, pendingQazaCount: 0 });
+        }
       }
     }
 
@@ -436,9 +450,37 @@ export default function HomeDashboard({
     };
   }, [user, isMounted, lastSavedDate, activeLiturgicalDate, setPrayers, setStreak]);
 
+  // Sighting offset for Hijri date display
+  const [hijriAdjustment, setHijriAdjustment] = useState<number>(0);
+
+  useEffect(() => {
+    const readAdjustment = () => {
+      try {
+        const stored = localStorage.getItem('salahtrack_hijri_adjustment');
+        if (stored !== null) {
+          const parsed = parseInt(stored, 10);
+          if (!isNaN(parsed) && parsed >= -1 && parsed <= 1) {
+            setHijriAdjustment(parsed);
+          }
+        }
+      } catch {
+        // Storage access blocked or unavailable
+      }
+    };
+
+    readAdjustment();
+    window.addEventListener('salahtrack_hijri_update', readAdjustment);
+    return () => {
+      window.removeEventListener('salahtrack_hijri_update', readAdjustment);
+    };
+  }, []);
+
   // Gregorian & Hijri date displays (reflecting the active liturgical date)
   const gregorianDate = useMemo(() => formatLocalizedDate(activeLiturgicalDate, lang), [activeLiturgicalDate, lang]);
-  const hijriDate = useMemo(() => formatLocalizedHijriDate(activeLiturgicalDate, lang), [activeLiturgicalDate, lang]);
+  const hijriDate = useMemo(
+    () => formatLocalizedHijriDate(activeLiturgicalDate, lang, hijriAdjustment),
+    [activeLiturgicalDate, lang, hijriAdjustment]
+  );
 
   // Sync authentic prayer times (location-aware & user calculation method)
   useEffect(() => {
@@ -451,20 +493,45 @@ export default function HomeDashboard({
         setApiStatus('loading');
         let lat: number | null = null;
         let lng: number | null = null;
+        let resolvedCityName: string | null = null;
 
-        // Check if user previously stored a location in localStorage
-        try {
-          const cached = localStorage.getItem('salahtrack_location');
-          if (cached) {
-            const parsed = JSON.parse(cached);
-            const validation = validateCoordinates(parsed?.lat, parsed?.lng);
-            if (validation.valid && validation.lat !== undefined && validation.lng !== undefined) {
-              lat = validation.lat;
-              lng = validation.lng;
-            }
+        // Prioritize authenticated user preferences if available
+        if (
+          typeof user?.preferences?.latitude === 'number' &&
+          typeof user?.preferences?.longitude === 'number'
+        ) {
+          const validation = validateCoordinates(user.preferences.latitude, user.preferences.longitude);
+          if (validation.valid && validation.lat !== undefined && validation.lng !== undefined) {
+            lat = validation.lat;
+            lng = validation.lng;
           }
-        } catch {
-          // ignore
+        }
+        if (user?.preferences?.city) {
+          resolvedCityName = user.preferences.city;
+        }
+
+        // Check if user previously stored a location in localStorage if not in preferences
+        if (lat === null || lng === null) {
+          try {
+            const cached = localStorage.getItem('salahtrack_location');
+            if (cached) {
+              const parsed = JSON.parse(cached);
+              const validation = validateCoordinates(parsed?.lat, parsed?.lng);
+              if (validation.valid && validation.lat !== undefined && validation.lng !== undefined) {
+                lat = validation.lat;
+                lng = validation.lng;
+              }
+              if (!resolvedCityName && parsed?.city) {
+                resolvedCityName = parsed.city;
+              }
+            }
+          } catch {
+            // ignore
+          }
+        }
+
+        if (resolvedCityName) {
+          setLocationName(resolvedCityName);
         }
 
         const queryParams = new URLSearchParams();
@@ -472,26 +539,46 @@ export default function HomeDashboard({
           queryParams.set('latitude', lat.toString());
           queryParams.set('longitude', lng.toString());
         }
+        if (resolvedCityName) {
+          queryParams.set('city', resolvedCityName);
+        }
         const method = user?.preferences?.calculationMethod || 'MWL';
         queryParams.set('method', method);
+        queryParams.set('date', activeLiturgicalDate);
 
         const url = `/api/prayer-times?${queryParams.toString()}`;
         const res = await fetch(url);
         if (!res.ok) {
-          if (!isCancelled) setApiStatus('fallback');
+          if (!isCancelled) setApiStatus('error');
           return;
         }
 
         const data = await res.json();
         if (isCancelled || !data?.timings) {
-          if (!isCancelled) setApiStatus('fallback');
+          if (!isCancelled) setApiStatus('error');
           return;
         }
 
-        if (data.city) {
+        if (resolvedCityName) {
+          setLocationName(resolvedCityName);
+        } else if (data.city) {
           setLocationName(data.city);
         }
-        setApiStatus(data.source === 'live' ? 'live' : 'fallback');
+
+        // If external API returned fallback, check if this is the default Tashkent location
+        const isDefaultLocation = lat === null || (Math.abs(lat - 41.2995) < 0.1 && Math.abs((lng ?? 69.2401) - 69.2401) < 0.1);
+
+        if (data.source === 'fallback' && !isDefaultLocation) {
+          // External API failed for a non-default city, do NOT overwrite with Tashkent fallback timings!
+          if (!isCancelled) setApiStatus('error');
+          return;
+        }
+
+        if (data.source === 'fallback') {
+          setApiStatus('fallback');
+        } else {
+          setApiStatus('live');
+        }
 
         setPrayers((prev) => {
           let hasChanges = false;
@@ -503,6 +590,9 @@ export default function HomeDashboard({
             }
             return item;
           });
+          if (hasChanges) {
+            saveDailyPrayersSync(activeLiturgicalDate, updated);
+          }
           return hasChanges ? updated : prev;
         });
       } catch (err) {
@@ -516,7 +606,15 @@ export default function HomeDashboard({
     return () => {
       isCancelled = true;
     };
-  }, [isMounted, setPrayers, user?.preferences?.calculationMethod]);
+  }, [
+    isMounted,
+    setPrayers,
+    user?.preferences?.calculationMethod,
+    user?.preferences?.city,
+    user?.preferences?.latitude,
+    user?.preferences?.longitude,
+    activeLiturgicalDate,
+  ]);
 
   // Live Next Prayer Countdown (calculated dynamically from current ticking time)
   const nextPrayer = useMemo(() => calculateNextPrayerCountdown(prayers, now), [prayers, now]);
@@ -675,15 +773,15 @@ export default function HomeDashboard({
     };
   }, [isMounted, prayers, historyVersion, now]);
 
-  const unpaidQazaCount =
-    serverAccountability !== null
-      ? serverAccountability.pendingQazaCount
-      : localAccountability.pendingQazaCount;
+  const isStatsLoading = Boolean(user && serverAccountability === null);
 
-  const totalSadaqahOwed =
-    serverAccountability !== null
-      ? serverAccountability.totalAmount
-      : localAccountability.totalAmount;
+  const unpaidQazaCount = user
+    ? (serverAccountability ? serverAccountability.pendingQazaCount : 0)
+    : localAccountability.pendingQazaCount;
+
+  const totalSadaqahOwed = user
+    ? (serverAccountability ? serverAccountability.totalAmount : 0)
+    : localAccountability.totalAmount;
 
   const handlePaymentSuccess = useCallback(async () => {
     if (user) {
@@ -800,6 +898,18 @@ export default function HomeDashboard({
                 </span>
               </div>
 
+              {/* Hijri Date Display Badge */}
+              {hijriDate && (
+                <span
+                  suppressHydrationWarning
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-semibold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border border-emerald-200/80 dark:border-emerald-800/80 shadow-2xs"
+                  title={t.calendar.hijri?.title || t.dashboard.hijriBadge}
+                >
+                  <Moon className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                  <span>{hijriDate}</span>
+                </span>
+              )}
+
               {isPostMidnight && (
                 <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200/80 dark:border-indigo-800/80 shadow-2xs">
                   <Moon className="w-3 h-3 text-indigo-600 dark:text-indigo-400 shrink-0" />
@@ -809,14 +919,8 @@ export default function HomeDashboard({
             </div>
 
             <div className="flex items-center gap-2.5 text-xs flex-wrap">
-              {hijriDate && (
-                <span suppressHydrationWarning className="font-medium text-emerald-600 dark:text-emerald-400 bg-emerald-50/60 dark:bg-emerald-950/40 px-2 py-0.5 rounded-md border border-emerald-200/60 dark:border-emerald-900/40">
-                  {hijriDate}
-                </span>
-              )}
-              <span className="text-slate-300 dark:text-slate-700 hidden sm:inline">•</span>
-              <div className="inline-flex items-center gap-1 text-slate-500 dark:text-slate-400 font-medium bg-slate-100/70 dark:bg-slate-800/70 px-2 py-0.5 rounded-md border border-slate-200/60 dark:border-slate-700/60">
-                <MapPin className="w-3 h-3 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <div className="inline-flex items-center gap-1.5 text-slate-500 dark:text-slate-400 font-medium bg-slate-100/70 dark:bg-slate-800/70 px-2.5 py-1 rounded-lg border border-slate-200/60 dark:border-slate-700/60">
+                <MapPin className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
                 <span>{locationName}</span>
               </div>
             </div>
@@ -1015,9 +1119,7 @@ export default function HomeDashboard({
                   strokeDashoffset={ringOffset}
                   strokeLinecap="round"
                   className={`transition-all duration-700 ease-out ${
-                    completedCount > 0
-                      ? 'drop-shadow-[0_2px_10px_rgba(16,185,129,0.45)]'
-                      : 'text-transparent'
+                    completedCount > 0 ? '' : 'text-transparent'
                   }`}
                   fill="transparent"
                 />
@@ -1107,7 +1209,7 @@ export default function HomeDashboard({
           <button
             type="button"
             onClick={() => setIsPayModalOpen(true)}
-            disabled={totalSadaqahOwed === 0}
+            disabled={isStatsLoading || totalSadaqahOwed === 0}
             className="self-start sm:self-auto min-h-[44px] flex items-center gap-2 px-4 py-2 rounded-xl bg-white hover:bg-emerald-50 text-emerald-900 text-xs font-bold transition-all active:scale-95 cursor-pointer shadow-xs disabled:opacity-50 disabled:cursor-not-allowed"
             title={t.accountability.payQaza}
           >
@@ -1119,18 +1221,26 @@ export default function HomeDashboard({
         <div className="mt-4 flex items-baseline justify-between">
           <div>
             <div className="flex items-center gap-2">
-              <span className="text-3xl font-black tracking-tight">
-                {unpaidQazaCount}
-              </span>
+              {isStatsLoading ? (
+                <div className="h-9 w-12 bg-white/20 rounded-md animate-pulse" />
+              ) : (
+                <span className="text-3xl font-black tracking-tight">
+                  {unpaidQazaCount}
+                </span>
+              )}
             </div>
             <p className="text-xs text-emerald-100 font-medium mt-0.5">
               {t.accountability.spiritualPendingCount}
             </p>
           </div>
           <div className="text-right">
-            <span className="text-2xl font-black tracking-tight">
-              {formatCurrency(totalSadaqahOwed, lang)}
-            </span>
+            {isStatsLoading ? (
+              <div className="h-8 w-28 bg-white/20 rounded-md animate-pulse ml-auto" />
+            ) : (
+              <span className="text-2xl font-black tracking-tight">
+                {formatCurrency(totalSadaqahOwed, lang)}
+              </span>
+            )}
             <p className="text-xs text-emerald-100 font-medium mt-0.5">
               {t.accountability.totalFinancialDebt}
             </p>
