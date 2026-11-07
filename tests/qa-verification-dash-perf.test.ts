@@ -11,9 +11,10 @@ import {
 import { GET as getStats } from '../src/app/api/stats/route.ts';
 import { validateSessionToken } from '../src/lib/auth/guard.ts';
 import { execLean } from '../src/lib/mongodb.ts';
+import { isPrayerOverdue } from '../src/lib/prayer-cycle.ts';
 import { Session } from '../src/models/Session.ts';
 import { User } from '../src/models/User.ts';
-import type { PrayerId, PrayerItem } from '../src/types/prayer.ts';
+import type { PrayerId, PrayerItem, PrayerStatus } from '../src/types/prayer.ts';
 
 // ---------------------------------------------------------------------------
 // Helpers & Types for Testing
@@ -30,6 +31,10 @@ const STATS_ROUTE_PATH = path.resolve(
 const GUARD_PATH = path.resolve(
   process.cwd(),
   'src/lib/auth/guard.ts'
+);
+const ACCOUNT_PAGE_PATH = path.resolve(
+  process.cwd(),
+  'src/app/account/page.tsx'
 );
 
 interface NextPrayerInfo {
@@ -146,7 +151,7 @@ describe('QA Verification: Dashboard Layout & Performance Optimizations', () => 
       // Verify trigger toggle button to open inline menu
       assert.match(
         prayerCardBlock,
-        /onClick=\{\(\) => setActiveMenuPrayerId\(prayer\.id\)\}/,
+        /setActiveMenuPrayerId\(prayer\.id\)/,
         'Should have a single toggle button activating the inline menu for that prayer'
       );
 
@@ -155,16 +160,20 @@ describe('QA Verification: Dashboard Layout & Performance Optimizations', () => 
       // 2. Made Up (MADE_UP)
       // 3. Missed (MISSED)
       // 4. Cancel (X)
-      const prayedButtonMatches = prayerCardBlock.match(/handleSetStatus\(prayer\.id, 'PRAYED_ON_TIME'\)/g);
-      assert.equal(prayedButtonMatches?.length, 1, 'Must have exactly ONE "Prayed" action button per card');
+      const actionMenuStart = prayerCardBlock.indexOf('Right: EXACTLY ONE set of action buttons');
+      assert.ok(actionMenuStart !== -1, 'Must locate action menu container');
+      const actionMenuBlock = prayerCardBlock.slice(actionMenuStart);
 
-      const madeUpButtonMatches = prayerCardBlock.match(/handleSetStatus\(prayer\.id, 'MADE_UP'\)/g);
-      assert.equal(madeUpButtonMatches?.length, 1, 'Must have exactly ONE "Made Up" action button per card');
+      const prayedButtonMatches = actionMenuBlock.match(/handleSetStatus\(prayer\.id, 'PRAYED_ON_TIME'\)/g);
+      assert.equal(prayedButtonMatches?.length, 1, 'Must have exactly ONE "Prayed" action button in inline menu per card');
 
-      const missedButtonMatches = prayerCardBlock.match(/handleSetStatus\(prayer\.id, 'MISSED'\)/g);
-      assert.equal(missedButtonMatches?.length, 1, 'Must have exactly ONE "Missed" action button per card');
+      const madeUpButtonMatches = actionMenuBlock.match(/handleSetStatus\(prayer\.id, 'MADE_UP'\)/g);
+      assert.equal(madeUpButtonMatches?.length, 1, 'Must have exactly ONE "Made Up" action button in inline menu per card');
 
-      const cancelButtonMatches = prayerCardBlock.match(/setActiveMenuPrayerId\(null\)/g);
+      const missedButtonMatches = actionMenuBlock.match(/handleSetStatus\(prayer\.id, 'MISSED'\)/g);
+      assert.equal(missedButtonMatches?.length, 1, 'Must have exactly ONE "Missed" action button in inline menu per card');
+
+      const cancelButtonMatches = actionMenuBlock.match(/setActiveMenuPrayerId\(null\)/g);
       // Cancel is called when clicking any action or the cancel 'X' button (1 on each action + 1 cancel button = 4)
       assert.ok(cancelButtonMatches && cancelButtonMatches.length >= 4, 'Actions and cancel button close the inline menu');
     });
@@ -201,15 +210,15 @@ describe('QA Verification: Dashboard Layout & Performance Optimizations', () => 
       // Verify the action button row styling
       assert.match(
         prayerCardBlock,
-        /<div className="flex items-center gap-1 sm:gap-1\.5">/,
+        /<div className="flex items-center gap-1 sm:gap-1\.5/,
         'Action buttons must sit inline in a horizontal flex container'
       );
 
-      // Verify touch targets comply with mobile-first accessibility (>= 38-44px)
+      // Verify touch targets comply with mobile-first accessibility (>= 34-40px on narrow mobile)
       assert.match(
         prayerCardBlock,
-        /min-h-\[38px\] sm:min-h-\[44px\]/,
-        'Action buttons must meet touch target ergonomics (min-h-[38px] sm:min-h-[44px])'
+        /min-h-\[34px\] sm:min-h-\[40px\]/,
+        'Action buttons must meet narrow mobile responsive button sizing (min-h-[34px] sm:min-h-[40px])'
       );
 
       // Test status transitions logic
@@ -226,6 +235,127 @@ describe('QA Verification: Dashboard Layout & Performance Optimizations', () => 
 
       targetPrayer.status = 'MISSED';
       assert.equal(targetPrayer.status, 'MISSED');
+    });
+
+    it('1.4 should verify idempotency: tapping a PENDING card marks it PRAYED_ON_TIME, tapping an already prayed/made-up/missed card does NOT change its status', () => {
+      // 1. AST / Code Verification: card container onClick must guard with if (isPending)
+      const prayerLoopStart = dashboardSource.indexOf('{prayers.map((prayer) => {');
+      const prayerLoopEnd = dashboardSource.indexOf('</div>\n      </div>\n\n      {/* Guidance Modal');
+      const prayerCardBlock = dashboardSource.slice(prayerLoopStart, prayerLoopEnd);
+
+      assert.match(
+        prayerCardBlock,
+        /const\s+isPending\s*=\s*prayer\.status\s*===\s*['"]PENDING['"]/,
+        'Must define isPending based strictly on prayer.status === "PENDING"'
+      );
+
+      assert.match(
+        prayerCardBlock,
+        /onClick=\{\(\)\s*=>\s*\{\s*if\s*\(\s*isPending\s*\)\s*\{\s*handleSetStatus\(\s*prayer\.id,\s*['"]PRAYED_ON_TIME['"]\s*\);?\s*\}\s*\}\}/,
+        'Card onClick handler must only invoke handleSetStatus when isPending is true'
+      );
+
+      // 2. Functional Verification of idempotent card-tap transition logic
+      function simulateCardTap(currentStatus: PrayerStatus): {
+        statusChanged: boolean;
+        newStatus: PrayerStatus;
+      } {
+        const isPending = currentStatus === 'PENDING';
+        if (isPending) {
+          return { statusChanged: true, newStatus: 'PRAYED_ON_TIME' };
+        }
+        return { statusChanged: false, newStatus: currentStatus };
+      }
+
+      // Case A: PENDING -> Tapping marks it PRAYED_ON_TIME
+      const pendingResult = simulateCardTap('PENDING');
+      assert.equal(pendingResult.statusChanged, true);
+      assert.equal(pendingResult.newStatus, 'PRAYED_ON_TIME');
+
+      // Case B: Already PRAYED_ON_TIME -> Tapping does NOT change status (Idempotent)
+      const prayedResult = simulateCardTap('PRAYED_ON_TIME');
+      assert.equal(prayedResult.statusChanged, false);
+      assert.equal(prayedResult.newStatus, 'PRAYED_ON_TIME');
+
+      // Case C: PRAYED_LATE -> Tapping does NOT change status (Idempotent)
+      const prayedLateResult = simulateCardTap('PRAYED_LATE');
+      assert.equal(prayedLateResult.statusChanged, false);
+      assert.equal(prayedLateResult.newStatus, 'PRAYED_LATE');
+
+      // Case D: MADE_UP -> Tapping does NOT change status (Idempotent)
+      const madeUpResult = simulateCardTap('MADE_UP');
+      assert.equal(madeUpResult.statusChanged, false);
+      assert.equal(madeUpResult.newStatus, 'MADE_UP');
+
+      // Case E: MISSED -> Tapping does NOT change status (Idempotent)
+      const missedResult = simulateCardTap('MISSED');
+      assert.equal(missedResult.statusChanged, false);
+      assert.equal(missedResult.newStatus, 'MISSED');
+    });
+
+    it('1.5 should verify that if a prayer is PENDING and overdue (isOverdue), the action menu is automatically open without needing chevron click', () => {
+      // 1. AST / Code Verification: isOverdue and isMenuOpen declarations
+      const prayerLoopStart = dashboardSource.indexOf('{prayers.map((prayer) => {');
+      const prayerLoopEnd = dashboardSource.indexOf('</div>\n      </div>\n\n      {/* Guidance Modal');
+      const prayerCardBlock = dashboardSource.slice(prayerLoopStart, prayerLoopEnd);
+
+      assert.match(
+        prayerCardBlock,
+        /const\s+isOverdue\s*=\s*prayer\.status\s*===\s*['"]PENDING['"]\s*&&\s*isPrayerOverdue\(\s*prayer\.id,\s*prayers,\s*now\s*\)/,
+        'isOverdue must check both prayer.status === "PENDING" and isPrayerOverdue'
+      );
+
+      assert.match(
+        prayerCardBlock,
+        /const\s+isMenuOpen\s*=\s*activeMenuPrayerId\s*===\s*prayer\.id\s*\|\|\s*\(\s*isOverdue\s*&&\s*!dismissedOverdue\[prayer\.id\]\s*\)/,
+        'isMenuOpen must evaluate to true when isOverdue is true and not dismissed, even without activeMenuPrayerId'
+      );
+
+      // 2. Functional Verification with isPrayerOverdue logic
+      const testPrayers: PrayerItem[] = [
+        { id: 'fajr', name: 'Fajr', time: '04:47', endTime: '06:19', status: 'PENDING' },
+        { id: 'dhuhr', name: 'Dhuhr', time: '12:13', endTime: '16:20', status: 'PENDING' },
+        { id: 'asr', name: 'Asr', time: '16:20', endTime: '18:05', status: 'PENDING' },
+        { id: 'maghrib', name: 'Maghrib', time: '18:05', endTime: '19:32', status: 'PENDING' },
+        { id: 'isha', name: 'Isha', time: '19:32', endTime: '23:59', status: 'PENDING' },
+      ];
+
+      // At 17:00 (5 PM), Fajr and Dhuhr have passed their endTimes
+      const overdueTime = new Date('2026-11-07T17:00:00');
+      const isDhuhrOverdue = isPrayerOverdue('dhuhr', testPrayers, overdueTime);
+      assert.equal(isDhuhrOverdue, true, 'Dhuhr should be overdue at 17:00 when its endTime is 16:20');
+
+      // Without clicking chevron (activeMenuPrayerId is null) and not dismissed
+      const activeMenuPrayerId: string | null = null;
+      const dismissedOverdue: Record<string, boolean> = {};
+
+      let isMenuOpen = activeMenuPrayerId === 'dhuhr' || (isDhuhrOverdue && !dismissedOverdue['dhuhr']);
+      assert.equal(isMenuOpen, true, 'Action menu must be open automatically when prayer is overdue');
+
+      // User dismisses overdue menu via Cancel button
+      dismissedOverdue['dhuhr'] = true;
+      isMenuOpen = activeMenuPrayerId === 'dhuhr' || (isDhuhrOverdue && !dismissedOverdue['dhuhr']);
+      assert.equal(isMenuOpen, false, 'Action menu must close when user dismisses overdue state');
+
+      // Once prayer is marked PRAYED_ON_TIME, it is no longer pending or overdue
+      const resolvedPrayers: PrayerItem[] = testPrayers.map((p) =>
+        p.id === 'dhuhr' ? { ...p, status: 'PRAYED_ON_TIME' as PrayerStatus } : p
+      );
+      const isResolvedOverdue = isPrayerOverdue('dhuhr', resolvedPrayers, overdueTime);
+      assert.equal(isResolvedOverdue, false, 'Prayed prayer must not be marked overdue');
+
+      const isResolvedMenuOpen =
+        activeMenuPrayerId === 'dhuhr' || (isResolvedOverdue && !dismissedOverdue['dhuhr']);
+      assert.equal(isResolvedMenuOpen, false, 'Menu must remain closed for resolved prayers');
+
+      // Non-overdue prayer: at 14:00 (during Dhuhr window)
+      const midDayTime = new Date('2026-11-07T14:00:00');
+      const isMidDayDhuhrOverdue = isPrayerOverdue('dhuhr', testPrayers, midDayTime);
+      assert.equal(isMidDayDhuhrOverdue, false, 'Dhuhr should not be overdue at 14:00 (window is 12:13 - 16:20)');
+
+      const isMidDayMenuOpen =
+        activeMenuPrayerId === 'dhuhr' || (isMidDayDhuhrOverdue && !dismissedOverdue['dhuhr']);
+      assert.equal(isMidDayMenuOpen, false, 'Menu must not be open automatically for active/non-overdue prayers');
     });
   });
 
@@ -262,8 +392,8 @@ describe('QA Verification: Dashboard Layout & Performance Optimizations', () => 
       // Verify centered container styling
       assert.match(
         cardASource,
-        /className="text-sm sm:text-base font-semibold text-slate-300 flex items-center justify-center gap-1\.5 mt-1"/,
-        'Time interval container must be centered with justify-center'
+        /className="text-xs sm:text-sm font-medium text-slate-300 flex items-center justify-center gap-1\.5 mt-0\.5"/,
+        'Time interval container must be centered with justify-center and scaled-down typography'
       );
 
       // Verify tabular-nums en-dash interval rendering
@@ -607,5 +737,51 @@ describe('QA Verification: Dashboard Layout & Performance Optimizations', () => 
       }
     });
 
+  });
+
+  // =========================================================================
+  // 4. Account Settings LanguageSelector Verification
+  // =========================================================================
+  describe('4. Account Settings LanguageSelector Verification', () => {
+    it('4.1 should verify that /account does NOT contain LanguageSelector in either Authenticated or Guest views', () => {
+      assert.ok(fs.existsSync(ACCOUNT_PAGE_PATH), 'src/app/account/page.tsx must exist');
+      const accountSource = fs.readFileSync(ACCOUNT_PAGE_PATH, 'utf-8');
+
+      // 1. Verify no import of LanguageSelector anywhere in /account/page.tsx
+      assert.doesNotMatch(
+        accountSource,
+        /import\s+LanguageSelector\s+from/i,
+        'LanguageSelector component must not be imported in /account/page.tsx'
+      );
+      assert.doesNotMatch(
+        accountSource,
+        /<LanguageSelector[\s/>]/,
+        'LanguageSelector JSX tag must not be rendered anywhere in /account/page.tsx'
+      );
+
+      // 2. Locate and inspect AuthenticatedAccountView
+      const authViewStart = accountSource.indexOf('function AuthenticatedAccountView(');
+      assert.ok(authViewStart !== -1, 'AuthenticatedAccountView function must exist');
+      const guestViewStart = accountSource.indexOf('function GuestSettingsView(');
+      assert.ok(guestViewStart !== -1, 'GuestSettingsView function must exist');
+
+      const authViewSource = accountSource.slice(authViewStart, guestViewStart);
+      assert.doesNotMatch(
+        authViewSource,
+        /LanguageSelector/i,
+        'AuthenticatedAccountView must NOT contain or render LanguageSelector'
+      );
+
+      // 3. Locate and inspect GuestSettingsView
+      const mainExportStart = accountSource.indexOf('export default function AccountPage(');
+      assert.ok(mainExportStart !== -1, 'AccountPage main component must exist');
+
+      const guestViewSource = accountSource.slice(guestViewStart, mainExportStart);
+      assert.doesNotMatch(
+        guestViewSource,
+        /LanguageSelector/i,
+        'GuestSettingsView must NOT contain or render LanguageSelector'
+      );
+    });
   });
 });

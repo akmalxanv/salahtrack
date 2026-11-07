@@ -16,10 +16,10 @@ import {
   EyeOff,
   MapPin,
   Crosshair,
+  ChevronDown,
 } from 'lucide-react';
 import { useLanguage } from '@/context/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
-import LanguageSelector from '@/components/LanguageSelector';
 import ContactCreator from '@/components/ContactCreator';
 import { findCityByCoordinates, findCityByNameOrId } from '@/lib/cities';
 import { CityPickerModal } from '@/components/qibla/CityPickerModal';
@@ -458,55 +458,8 @@ function AuthenticatedAccountView({
             />
           </div>
 
-          {/* Read-Only Username & Email */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between">
-                <span className="block text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300">
-                  {t.auth.signup.usernameLabel}
-                </span>
-                <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-400 font-medium">
-                  {t.groups.strictlyReadOnly}
-                </span>
-              </div>
-              <input
-                type="text"
-                disabled
-                value={`@${user.username}`}
-                className="w-full px-3.5 py-2.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-500 dark:text-slate-400 cursor-not-allowed select-none"
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between">
-                <span className="block text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300">
-                  {t.auth.signup.emailLabel}
-                </span>
-                <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 font-medium">
-                  {t.common.saved}
-                </span>
-              </div>
-              <input
-                type="email"
-                disabled
-                value={user.email}
-                className="w-full px-3.5 py-2.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-500 dark:text-slate-400 cursor-not-allowed select-none"
-              />
-            </div>
-          </div>
-
-          {/* Language Selector */}
-          <div className="space-y-1.5 pt-1">
-            <span className="block text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300">
-              {t.account.sections.preferences}
-            </span>
-            <div className="pt-0.5">
-              <LanguageSelector />
-            </div>
-          </div>
-
           {/* Save Profile Button */}
-          <div className="flex justify-end pt-2">
+          <div className="flex justify-end pt-1">
             <button
               type="submit"
               disabled={profileSaving}
@@ -649,44 +602,38 @@ function AuthenticatedAccountView({
           </div>
         </div>
 
-        {/* Calculation Method Segmented Control (Instant Auto-Save) */}
-        <div className="space-y-3 pt-2">
-          <div>
-            <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+        {/* Calculation Method Sleek Selector (Instant Auto-Save) */}
+        <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
+            <label
+              htmlFor="calcMethodSelect"
+              className="text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300 flex items-center gap-1.5"
+            >
               <Compass className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
               <span>{t.profile.calcMethod}</span>
               {calcSaving && <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-600 ml-1" />}
-            </h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+            </label>
+            <span className="text-[11px] text-slate-500 dark:text-slate-400">
               {t.account.sections.preferencesDesc}
-            </p>
+            </span>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-            {CALCULATION_METHODS.map((method) => {
-              const isSelected = calculationMethod === method.id;
-              return (
-                <button
-                  key={method.id}
-                  type="button"
-                  onClick={() => handleSelectCalcMethod(method.id)}
-                  className={`min-h-[44px] p-3 rounded-xl border text-left transition-all cursor-pointer flex items-center justify-between gap-2 ${
-                    isSelected
-                      ? 'border-emerald-600 bg-emerald-50/70 dark:bg-emerald-950/40 ring-1 ring-emerald-500/30'
-                      : 'border-slate-200 dark:border-slate-750 bg-slate-50/40 dark:bg-slate-800/40 hover:bg-slate-100 dark:hover:bg-slate-800'
-                  }`}
-                >
-                  <span className={`text-xs font-semibold ${isSelected ? 'text-emerald-900 dark:text-emerald-100' : 'text-slate-700 dark:text-slate-300'}`}>
-                    {method.name}
-                  </span>
-                  {isSelected && (
-                    <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-600 text-white shrink-0">
-                      {t.profile.activeBadge || 'Active'}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
+          <div className="relative">
+            <select
+              id="calcMethodSelect"
+              value={calculationMethod}
+              onChange={(e) => handleSelectCalcMethod(e.target.value)}
+              className="w-full min-h-[44px] appearance-none px-3.5 py-2.5 pr-10 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-xl text-xs sm:text-sm font-medium text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500 cursor-pointer transition-colors"
+            >
+              {CALCULATION_METHODS.map((method) => (
+                <option key={method.id} value={method.id} className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">
+                  {method.name}
+                </option>
+              ))}
+            </select>
+            <div className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400">
+              <ChevronDown className="w-4 h-4" />
+            </div>
           </div>
         </div>
 
@@ -1008,53 +955,37 @@ function GuestSettingsView() {
           </button>
         </div>
 
-        {/* Calculation Method Segmented Control */}
-        <div className="space-y-3 pt-2">
-          <div>
-            <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+        {/* Calculation Method Sleek Selector */}
+        <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
+            <label
+              htmlFor="guestCalcMethodSelect"
+              className="text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300 flex items-center gap-1.5"
+            >
               <Compass className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
               <span>{t.profile.calcMethod}</span>
-            </h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+            </label>
+            <span className="text-[11px] text-slate-500 dark:text-slate-400">
               {t.account.sections.preferencesDesc}
-            </p>
+            </span>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-            {CALCULATION_METHODS.map((method) => {
-              const isSelected = calcMethod === method.id;
-              return (
-                <button
-                  key={method.id}
-                  type="button"
-                  onClick={() => handleSaveMethod(method.id)}
-                  className={`min-h-[44px] p-3 rounded-xl border text-left transition-all cursor-pointer flex items-center justify-between gap-2 ${
-                    isSelected
-                      ? 'border-emerald-600 bg-emerald-50/70 dark:bg-emerald-950/40 ring-1 ring-emerald-500/30'
-                      : 'border-slate-200 dark:border-slate-750 bg-slate-50/40 dark:bg-slate-800/40 hover:bg-slate-100 dark:hover:bg-slate-800'
-                  }`}
-                >
-                  <span className={`text-xs font-semibold ${isSelected ? 'text-emerald-900 dark:text-emerald-100' : 'text-slate-700 dark:text-slate-300'}`}>
-                    {method.name}
-                  </span>
-                  {isSelected && (
-                    <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-600 text-white shrink-0">
-                      {t.profile.activeBadge || 'Active'}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Language Selector */}
-        <div className="space-y-1.5 pt-3 border-t border-slate-100 dark:border-slate-800">
-          <span className="block text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300">
-            {t.account.sections.preferences}
-          </span>
-          <div className="pt-0.5">
-            <LanguageSelector />
+          <div className="relative">
+            <select
+              id="guestCalcMethodSelect"
+              value={calcMethod}
+              onChange={(e) => handleSaveMethod(e.target.value)}
+              className="w-full min-h-[44px] appearance-none px-3.5 py-2.5 pr-10 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-xl text-xs sm:text-sm font-medium text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500 cursor-pointer transition-colors"
+            >
+              {CALCULATION_METHODS.map((method) => (
+                <option key={method.id} value={method.id} className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">
+                  {method.name}
+                </option>
+              ))}
+            </select>
+            <div className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400">
+              <ChevronDown className="w-4 h-4" />
+            </div>
           </div>
         </div>
 

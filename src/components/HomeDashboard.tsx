@@ -266,6 +266,7 @@ export default function HomeDashboard({
   );
 
   const [activeMenuPrayerId, setActiveMenuPrayerId] = useState<string | null>(null);
+  const [dismissedOverdue, setDismissedOverdue] = useState<Record<string, boolean>>({});
   const [isPayModalOpen, setIsPayModalOpen] = useState(false);
   const [serverAccountability, setServerAccountability] = useState<{
     totalAmount: number;
@@ -303,6 +304,15 @@ export default function HomeDashboard({
 
   const lastSyncedKeyRef = useRef<string>('');
   const lastSyncedStatusRef = useRef<'idle' | 'loading' | 'live' | 'fallback' | 'error'>('idle');
+  const statsDebounceRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (statsDebounceRef.current) {
+        clearTimeout(statsDebounceRef.current);
+      }
+    };
+  }, []);
   const [locationRevision, setLocationRevision] = useState(0);
 
   // Location and Prayer API states
@@ -1000,38 +1010,43 @@ export default function HomeDashboard({
               setSavingStatus((prev) => ({ ...prev, [id]: 'idle' }));
             }, 2000);
 
-            // Background sync stats to reconcile streak & accountability with MongoDB Atlas
-            try {
-              const statsRes = await fetch(`/api/stats?today=${targetDate}`);
-              if (statsRes.ok) {
-                const statsJson = await statsRes.json();
-                if (statsJson?.success) {
-                  if (statsJson.data?.streaks) {
-                    setStreak(statsJson.data.streaks);
-                  }
-                  if (statsJson.data?.accountability) {
-                    const acct = {
-                      totalAmount:
-                        statsJson.data.accountability.totalFinancialDebt ??
-                        statsJson.data.accountability.totalAmount ??
-                        0,
-                      pendingQazaCount:
-                        statsJson.data.accountability.pendingQazaCount ??
-                        statsJson.data.accountability.totalMissed ??
-                        0,
-                    };
-                    setServerAccountability(acct);
-                    try {
-                      localStorage.setItem('salahtrack_accountability_cache', JSON.stringify(acct));
-                    } catch {
-                      // Storage access blocked or quota exceeded
+            // Debounced background sync stats to coalesce rapid multiple prayer updates into a single network call
+            if (statsDebounceRef.current) {
+              clearTimeout(statsDebounceRef.current);
+            }
+            statsDebounceRef.current = setTimeout(async () => {
+              try {
+                const statsRes = await fetch(`/api/stats?today=${targetDate}`);
+                if (statsRes.ok) {
+                  const statsJson = await statsRes.json();
+                  if (statsJson?.success) {
+                    if (statsJson.data?.streaks) {
+                      setStreak(statsJson.data.streaks);
+                    }
+                    if (statsJson.data?.accountability) {
+                      const acct = {
+                        totalAmount:
+                          statsJson.data.accountability.totalFinancialDebt ??
+                          statsJson.data.accountability.totalAmount ??
+                          0,
+                        pendingQazaCount:
+                          statsJson.data.accountability.pendingQazaCount ??
+                          statsJson.data.accountability.totalMissed ??
+                          0,
+                      };
+                      setServerAccountability(acct);
+                      try {
+                        localStorage.setItem('salahtrack_accountability_cache', JSON.stringify(acct));
+                      } catch {
+                        // Storage access blocked or quota exceeded
+                      }
                     }
                   }
                 }
+              } catch (statsErr) {
+                console.warn('Background stats sync error:', statsErr);
               }
-            } catch (statsErr) {
-              console.warn('Background stats sync error:', statsErr);
-            }
+            }, 600);
           } else {
             setSavingStatus((prev) => ({ ...prev, [id]: 'error' }));
             setTimeout(() => {
@@ -1056,15 +1071,13 @@ export default function HomeDashboard({
     [user, activeLiturgicalDate, prayers, setPrayers, setStreak, setQazaCount]
   );
 
-  // Quick toggle (done / pending)
+  // Quick toggle: Tapping a PENDING prayer marks it as Prayed.
+  // Tapping again is a safe idempotent no-op (never reverts to Pending).
   const handleQuickToggle = (id: PrayerId) => {
     const current = prayers.find((p) => p.id === id);
-    const isCompleted =
-      current?.status === 'PRAYED' ||
-      current?.status === 'PRAYED_ON_TIME' ||
-      current?.status === 'PRAYED_LATE';
-    const nextStatus: PrayerStatus = isCompleted ? 'PENDING' : 'PRAYED_ON_TIME';
-    handleSetStatus(id, nextStatus);
+    if (current?.status === 'PENDING') {
+      handleSetStatus(id, 'PRAYED_ON_TIME');
+    }
   };
 
   // Local accountability ledger calculated from historical prayer records using single source of truth
@@ -1321,14 +1334,14 @@ export default function HomeDashboard({
               </div>
             </div>
 
-            {/* Centered, prominent, heroic display */}
-            <div className="py-2 text-center">
-              <h3 className="text-3xl sm:text-4xl font-black text-white text-center tracking-tight">
+            {/* Centered, balanced next prayer display */}
+            <div className="py-1 text-center">
+              <h3 className="text-xl sm:text-2xl font-bold text-white text-center tracking-tight">
                 {t.prayers[nextPrayer.prayerId]}
               </h3>
 
-              <div className="text-sm sm:text-base font-semibold text-slate-300 flex items-center justify-center gap-1.5 mt-1">
-                <Clock className="w-4 h-4 text-emerald-400 shrink-0" />
+              <div className="text-xs sm:text-sm font-medium text-slate-300 flex items-center justify-center gap-1.5 mt-0.5">
+                <Clock className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                 <span className="tabular-nums">
                   {nextPrayerItem?.endTime
                     ? `${nextPrayer.prayerTime} – ${nextPrayerItem.endTime}`
@@ -1336,13 +1349,13 @@ export default function HomeDashboard({
                 </span>
               </div>
 
-              <div className="my-3 flex flex-col items-center justify-center">
-                <span className="text-xs font-medium uppercase tracking-widest text-slate-400 mb-1">
+              <div className="my-1.5 flex flex-col items-center justify-center">
+                <span className="text-[10px] sm:text-xs font-semibold uppercase tracking-wider text-slate-400 mt-2 mb-0.5">
                   {t.dashboard.in}
                 </span>
                 <p
                   suppressHydrationWarning
-                  className="text-4xl sm:text-5xl font-mono font-black text-emerald-400 tracking-tight text-center my-3"
+                  className="text-2xl sm:text-3xl font-mono font-bold text-emerald-400 tracking-tight text-center my-1.5 tabular-nums"
                 >
                   {String(nextPrayer.hours).padStart(2, '0')}:
                   {String(nextPrayer.mins).padStart(2, '0')}:
@@ -1612,24 +1625,35 @@ export default function HomeDashboard({
         <div className="space-y-3">
           {prayers.map((prayer) => {
             const config = STATUS_CONFIG[prayer.status];
-            const isMenuOpen = activeMenuPrayerId === prayer.id;
             const prayerLabel = t.prayers[prayer.id] || prayer.name;
             const statusLabel = prayer.status === 'PRAYED_LATE' ? t.statuses.PRAYED : t.statuses[prayer.status];
             const itemSaveStatus = savingStatus[prayer.id];
             const isOverdue = prayer.status === 'PENDING' && isPrayerOverdue(prayer.id, prayers, now);
+            const isMenuOpen = activeMenuPrayerId === prayer.id || (isOverdue && !dismissedOverdue[prayer.id]);
+            const isPending = prayer.status === 'PENDING';
 
             return (
               <div
                 key={prayer.id}
-                className={`relative rounded-2xl border p-3 sm:p-4 transition-all shadow-xs select-none ${config.bgClass} ${config.borderClass}`}
+                onClick={() => {
+                  if (isPending) {
+                    handleSetStatus(prayer.id, 'PRAYED_ON_TIME');
+                  }
+                }}
+                className={`relative rounded-2xl border p-3 sm:p-4 transition-all shadow-xs select-none ${config.bgClass} ${config.borderClass} ${
+                  isPending ? 'cursor-pointer hover:border-slate-300 dark:hover:border-slate-700' : 'cursor-default'
+                }`}
               >
                 {/* Main Prayer Row: Rigid identical alignment for all 5 prayers */}
                 <div className="flex items-center justify-between gap-2 sm:gap-3 min-w-0">
                   {/* Left: Checkmark quick-toggle + Prayer Info */}
-                  <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1">
+                  <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
                     <button
                       type="button"
-                      onClick={() => handleQuickToggle(prayer.id)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleQuickToggle(prayer.id);
+                      }}
                       className="min-h-[44px] min-w-[36px] sm:min-w-[44px] flex items-center justify-center -ml-1 sm:ml-0 cursor-pointer focus:outline-hidden focus-visible:ring-2 focus-visible:ring-emerald-500 rounded-xl shrink-0"
                       aria-label={`${t.dashboard.markPrayed}: ${prayerLabel}`}
                     >
@@ -1672,31 +1696,31 @@ export default function HomeDashboard({
                     {!isMenuOpen ? (
                       <button
                         type="button"
-                        onClick={() => setActiveMenuPrayerId(prayer.id)}
-                        className={`min-h-[44px] inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl border transition-all cursor-pointer focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:outline-none ${
-                          isOverdue
-                            ? 'border-amber-400/80 bg-amber-500/10 text-amber-700 dark:text-amber-300 dark:border-amber-600/70 hover:bg-amber-500/20'
-                            : 'border-transparent hover:border-slate-300 dark:hover:border-slate-700 bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10'
-                        }`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setActiveMenuPrayerId(prayer.id);
+                          setDismissedOverdue((prev) => ({ ...prev, [prayer.id]: false }));
+                        }}
+                        className="min-h-[44px] inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl border border-transparent hover:border-slate-300 dark:hover:border-slate-700 bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 transition-all cursor-pointer focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:outline-none"
                         title={t.dashboard.changeStatus}
                         aria-label={`${t.dashboard.changeStatus}: ${prayerLabel}`}
                         aria-expanded={false}
                       >
-                        <span className={`text-[11px] sm:text-xs font-semibold px-2 py-0.5 rounded-full border ${config.badgeClass} inline-flex items-center gap-1`}>
-                          {isOverdue && <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse shrink-0" />}
+                        <span className={`text-[11px] sm:text-xs font-semibold px-2 py-0.5 rounded-full border ${config.badgeClass} inline-flex items-center`}>
                           {statusLabel}
                         </span>
                         <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                       </button>
                     ) : (
-                      <div className="flex items-center gap-1 sm:gap-1.5">
+                      <div className="flex items-center gap-1 sm:gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
                         <button
                           type="button"
-                          onClick={() => {
+                          onClick={(e) => {
+                            e.stopPropagation();
                             handleSetStatus(prayer.id, 'PRAYED_ON_TIME');
                             setActiveMenuPrayerId(null);
                           }}
-                          className="min-h-[38px] sm:min-h-[44px] px-2 py-1 sm:px-2.5 sm:py-1.5 rounded-xl text-xs font-semibold leading-tight text-center transition-all duration-150 flex items-center justify-center cursor-pointer bg-emerald-50 hover:bg-emerald-100 active:bg-emerald-200 text-emerald-800 border border-emerald-300 dark:bg-emerald-950/60 dark:hover:bg-emerald-900/80 dark:text-emerald-300 dark:border-emerald-700/80 shadow-2xs focus-visible:ring-2 focus-visible:ring-emerald-500 whitespace-nowrap"
+                          className="px-1.5 py-1 sm:px-2.5 sm:py-1.5 text-[10px] sm:text-xs min-h-[34px] sm:min-h-[40px] rounded-xl font-semibold leading-tight text-center transition-all duration-150 flex items-center justify-center cursor-pointer bg-emerald-50 hover:bg-emerald-100 active:bg-emerald-200 text-emerald-800 border border-emerald-300 dark:bg-emerald-950/60 dark:hover:bg-emerald-900/80 dark:text-emerald-300 dark:border-emerald-700/80 shadow-2xs focus-visible:ring-2 focus-visible:ring-emerald-500 shrink-0 whitespace-nowrap"
                           aria-label={`${t.dashboard.markPrayed}: ${prayerLabel}`}
                         >
                           {t.statuses.PRAYED}
@@ -1704,11 +1728,12 @@ export default function HomeDashboard({
 
                         <button
                           type="button"
-                          onClick={() => {
+                          onClick={(e) => {
+                            e.stopPropagation();
                             handleSetStatus(prayer.id, 'MADE_UP');
                             setActiveMenuPrayerId(null);
                           }}
-                          className="min-h-[38px] sm:min-h-[44px] px-2 py-1 sm:px-2.5 sm:py-1.5 rounded-xl text-xs font-semibold leading-tight text-center transition-all duration-150 flex items-center justify-center cursor-pointer bg-sky-50 hover:bg-sky-100 active:bg-sky-200 text-sky-800 border border-sky-300 dark:bg-sky-950/60 dark:hover:bg-sky-900/80 dark:text-sky-300 dark:border-sky-700/80 shadow-2xs focus-visible:ring-2 focus-visible:ring-sky-500 whitespace-nowrap"
+                          className="px-1.5 py-1 sm:px-2.5 sm:py-1.5 text-[10px] sm:text-xs min-h-[34px] sm:min-h-[40px] rounded-xl font-semibold leading-tight text-center transition-all duration-150 flex items-center justify-center cursor-pointer bg-sky-50 hover:bg-sky-100 active:bg-sky-200 text-sky-800 border border-sky-300 dark:bg-sky-950/60 dark:hover:bg-sky-900/80 dark:text-sky-300 dark:border-sky-700/80 shadow-2xs focus-visible:ring-2 focus-visible:ring-sky-500 shrink-0 whitespace-nowrap"
                           aria-label={`${t.dashboard.markMadeUp}: ${prayerLabel}`}
                         >
                           {t.statuses.MADE_UP}
@@ -1716,11 +1741,12 @@ export default function HomeDashboard({
 
                         <button
                           type="button"
-                          onClick={() => {
+                          onClick={(e) => {
+                            e.stopPropagation();
                             handleSetStatus(prayer.id, 'MISSED');
                             setActiveMenuPrayerId(null);
                           }}
-                          className="min-h-[38px] sm:min-h-[44px] px-2 py-1 sm:px-2.5 sm:py-1.5 rounded-xl text-xs font-semibold leading-tight text-center transition-all duration-150 flex items-center justify-center cursor-pointer bg-rose-50 hover:bg-rose-100 active:bg-rose-200 text-rose-800 border border-rose-300 dark:bg-rose-950/60 dark:hover:bg-rose-900/80 dark:text-rose-300 dark:border-rose-700/80 shadow-2xs focus-visible:ring-2 focus-visible:ring-rose-500 whitespace-nowrap"
+                          className="px-1.5 py-1 sm:px-2.5 sm:py-1.5 text-[10px] sm:text-xs min-h-[34px] sm:min-h-[40px] rounded-xl font-semibold leading-tight text-center transition-all duration-150 flex items-center justify-center cursor-pointer bg-rose-50 hover:bg-rose-100 active:bg-rose-200 text-rose-800 border border-rose-300 dark:bg-rose-950/60 dark:hover:bg-rose-900/80 dark:text-rose-300 dark:border-rose-700/80 shadow-2xs focus-visible:ring-2 focus-visible:ring-rose-500 shrink-0 whitespace-nowrap"
                           aria-label={`${t.dashboard.markMissed}: ${prayerLabel}`}
                         >
                           {t.statuses.MISSED}
@@ -1728,12 +1754,18 @@ export default function HomeDashboard({
 
                         <button
                           type="button"
-                          onClick={() => setActiveMenuPrayerId(null)}
-                          className="min-h-[38px] sm:min-h-[44px] w-8 sm:w-9 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors flex items-center justify-center cursor-pointer focus-visible:ring-2 focus-visible:ring-slate-400 shrink-0"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setActiveMenuPrayerId(null);
+                            if (isOverdue) {
+                              setDismissedOverdue((prev) => ({ ...prev, [prayer.id]: true }));
+                            }
+                          }}
+                          className="min-h-[34px] sm:min-h-[40px] w-7 sm:w-8 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors flex items-center justify-center cursor-pointer focus-visible:ring-2 focus-visible:ring-slate-400 shrink-0"
                           aria-label={t.common.cancel}
                           title={t.common.cancel}
                         >
-                          <X className="w-4 h-4" />
+                          <X className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                         </button>
                       </div>
                     )}
