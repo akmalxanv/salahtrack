@@ -8,6 +8,25 @@ import SessionExpiredModal from '@/components/auth/SessionExpiredModal';
 const STORAGE_KEY_MODE = 'salahtrack_mode';
 const STORAGE_KEY_HAD_SESSION = 'salahtrack_had_session';
 
+/**
+ * Safely writes or clears the guest mode cookie for SSR hydration synchronization.
+ * Uses 1-year max-age (31536000s) on activate or max-age=0 on deactivate, SameSite=Lax, and Secure on HTTPS.
+ */
+function writeGuestModeCookie(val: boolean): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const isSecure = window.location.protocol === 'https:';
+    const secureAttr = isSecure ? '; Secure' : '';
+    if (val) {
+      document.cookie = `${STORAGE_KEY_MODE}=guest; path=/; max-age=31536000; SameSite=Lax${secureAttr}`;
+    } else {
+      document.cookie = `${STORAGE_KEY_MODE}=; path=/; max-age=0; SameSite=Lax${secureAttr}`;
+    }
+  } catch {
+    // Cookie write blocked or unavailable
+  }
+}
+
 interface AuthContextType {
   user: SafeUser | null;
   loading: boolean;
@@ -27,31 +46,34 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export function AuthProvider({
   children,
   initialUser = undefined,
+  initialIsGuest = false,
 }: {
   children: React.ReactNode;
   initialUser?: SafeUser | null;
+  initialIsGuest?: boolean;
 }) {
   const [user, setUser] = useState<SafeUser | null>(initialUser ?? null);
   const [loading, setLoading] = useState<boolean>(initialUser === undefined);
-  const [isGuest, setIsGuest] = useState<boolean>(false);
+  const [isGuest, setIsGuest] = useState<boolean>(initialIsGuest);
   const [sessionExpired, setSessionExpired] = useState<boolean>(false);
   const router = useRouter();
   const lastMeCheckRef = useRef<number>(0);
   const [prevInitialUser, setPrevInitialUser] = useState<SafeUser | null | undefined>(initialUser);
 
   useEffect(() => {
-    queueMicrotask(() => {
-      try {
-        if (typeof window !== 'undefined') {
-          const mode = window.localStorage.getItem(STORAGE_KEY_MODE);
-          if (mode === 'guest') {
+    try {
+      if (typeof window !== 'undefined') {
+        const mode = window.localStorage.getItem(STORAGE_KEY_MODE);
+        if (mode === 'guest') {
+          queueMicrotask(() => {
             setIsGuest(true);
-          }
+          });
+          writeGuestModeCookie(true);
         }
-      } catch {
-        // Storage access blocked or unavailable
       }
-    });
+    } catch {
+      // Storage access blocked or unavailable
+    }
   }, []);
 
   if (initialUser !== prevInitialUser) {
@@ -63,12 +85,17 @@ export function AuthProvider({
   const setGuestMode = useCallback((val: boolean) => {
     setIsGuest(val);
     if (typeof window !== 'undefined') {
-      if (val) {
-        window.localStorage.setItem(STORAGE_KEY_MODE, 'guest');
-      } else {
-        window.localStorage.removeItem(STORAGE_KEY_MODE);
+      try {
+        if (val) {
+          window.localStorage.setItem(STORAGE_KEY_MODE, 'guest');
+        } else {
+          window.localStorage.removeItem(STORAGE_KEY_MODE);
+        }
+      } catch {
+        // Storage access blocked or unavailable
       }
     }
+    writeGuestModeCookie(val);
   }, []);
 
   const dismissSessionExpired = useCallback(() => {
@@ -94,6 +121,7 @@ export function AuthProvider({
             window.localStorage.setItem(STORAGE_KEY_HAD_SESSION, 'true');
             window.localStorage.removeItem(STORAGE_KEY_MODE);
           }
+          writeGuestModeCookie(false);
           setIsGuest(false);
           setSessionExpired(false);
           return json.data.user;
@@ -140,6 +168,7 @@ export function AuthProvider({
               window.localStorage.setItem(STORAGE_KEY_HAD_SESSION, 'true');
               window.localStorage.removeItem(STORAGE_KEY_MODE);
             }
+            writeGuestModeCookie(false);
             setIsGuest(false);
             setSessionExpired(false);
           } else {
@@ -221,6 +250,7 @@ export function AuthProvider({
           window.localStorage.setItem(STORAGE_KEY_HAD_SESSION, 'true');
           window.localStorage.removeItem(STORAGE_KEY_MODE);
         }
+        writeGuestModeCookie(false);
         setIsGuest(false);
         setSessionExpired(false);
         return { success: true };
@@ -264,6 +294,7 @@ export function AuthProvider({
           window.localStorage.setItem(STORAGE_KEY_HAD_SESSION, 'true');
           window.localStorage.removeItem(STORAGE_KEY_MODE);
         }
+        writeGuestModeCookie(false);
         setIsGuest(false);
         setSessionExpired(false);
         return { success: true };
@@ -290,6 +321,7 @@ export function AuthProvider({
         window.localStorage.removeItem(STORAGE_KEY_HAD_SESSION);
         window.localStorage.removeItem(STORAGE_KEY_MODE);
       }
+      writeGuestModeCookie(false);
       setIsGuest(false);
       setSessionExpired(false);
       setUser(null);

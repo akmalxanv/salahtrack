@@ -14,7 +14,17 @@ export default function LoginPage() {
   const { login, setGuestMode } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const redirectParam = searchParams.get('redirect') || '/';
+  const rawRedirect = searchParams.get('redirect') || '/';
+  const redirectParam =
+    !rawRedirect ||
+    rawRedirect.startsWith('//') ||
+    !rawRedirect.startsWith('/') ||
+    rawRedirect === '/login' ||
+    rawRedirect.startsWith('/login') ||
+    rawRedirect === '/signup' ||
+    rawRedirect.startsWith('/signup')
+      ? '/'
+      : rawRedirect;
 
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');

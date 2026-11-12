@@ -21,6 +21,13 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   // First-time visitor handling: redirect unauthenticated non-guest visitors to /login
   useEffect(() => {
     if (!loading && !user && !isGuest && !isAuthRoute) {
+      try {
+        if (typeof window !== 'undefined' && window.localStorage.getItem('salahtrack_mode') === 'guest') {
+          return;
+        }
+      } catch {
+        // ignore
+      }
       router.replace('/login');
     }
   }, [loading, user, isGuest, isAuthRoute, router]);

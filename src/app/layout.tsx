@@ -51,6 +51,9 @@ export default async function RootLayout({
   const session = await getCurrentSession();
   const initialUser = session?.user || null;
 
+  const rawMode = cookieStore.get('salahtrack_mode')?.value;
+  const initialIsGuest = !initialUser && rawMode === 'guest';
+
   return (
     <html lang={initialLang} suppressHydrationWarning>
       <body 
@@ -58,7 +61,7 @@ export default async function RootLayout({
         className={`${inter.className} bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 antialiased min-h-screen`}
       >
         <LanguageProvider initialLang={initialLang}>
-          <AuthProvider initialUser={initialUser}>
+          <AuthProvider initialUser={initialUser} initialIsGuest={initialIsGuest}>
             <AppShell>
               {children}
             </AppShell>

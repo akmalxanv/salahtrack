@@ -1143,8 +1143,8 @@ export default function HomeDashboard({
 
   const completionPercentage = Math.round((completedCount / 5) * 100);
 
-  // SVG Progress Ring calculations: larger, prominent, and vibrant (radius = 46, circumference = ~289.03)
-  const ringRadius = 46;
+  // SVG Progress Ring calculations: streamlined (radius = 40, circumference = ~251.33)
+  const ringRadius = 40;
   const ringCircumference = 2 * Math.PI * ringRadius;
   const ringOffset = ringCircumference - (completedCount / 5) * ringCircumference;
 
@@ -1249,71 +1249,101 @@ export default function HomeDashboard({
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* Card A: Next Prayer Card */}
         <div className="rounded-2xl bg-gradient-to-br from-slate-900 via-slate-850 to-slate-800 text-white p-5 shadow-sm border border-slate-700/80 flex flex-col justify-between">
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-500/20 text-emerald-400">
-                <Timer className="w-4 h-4" />
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-500/20 text-emerald-400">
+                  <Timer className="w-4 h-4" />
+                </div>
+                <span className="text-xs font-semibold uppercase tracking-wider text-slate-300">
+                  {t.dashboard.nextPrayer}
+                </span>
               </div>
-              <span className="text-xs font-semibold uppercase tracking-wider text-slate-300">
-                {t.dashboard.nextPrayer}
-              </span>
+
+              {/* Authoritative Single City Badge with Live Calculation Indicator */}
+              <div className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full bg-slate-800/90 text-slate-200 border border-slate-700/80 shadow-2xs">
+                <MapPin className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <span>{locationName}</span>
+                {apiStatus === 'live' && (
+                  <span
+                    className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"
+                    title="Live calculation"
+                  />
+                )}
+                {apiStatus === 'loading' && (
+                  <Loader2 className="w-3 h-3 text-slate-400 animate-spin" />
+                )}
+                {apiStatus === 'fallback' && (
+                  <span
+                    className="w-1.5 h-1.5 rounded-full bg-amber-400"
+                    title={t.dashboard.apiError}
+                  />
+                )}
+                {apiStatus === 'error' && (
+                  <span
+                    className="w-1.5 h-1.5 rounded-full bg-rose-400"
+                    title={t.dashboard.apiError}
+                  />
+                )}
+              </div>
             </div>
 
-            {/* Authoritative Single City Badge with Live Calculation Indicator */}
-            <div className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full bg-slate-800/90 text-slate-200 border border-slate-700/80 shadow-2xs">
-              <MapPin className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-              <span>{locationName}</span>
-              {apiStatus === 'live' && (
-                <span
-                  className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"
-                  title="Live calculation"
-                />
-              )}
-              {apiStatus === 'loading' && (
-                <Loader2 className="w-3 h-3 text-slate-400 animate-spin" />
-              )}
-              {apiStatus === 'fallback' && (
-                <span
-                  className="w-1.5 h-1.5 rounded-full bg-amber-400"
-                  title={t.dashboard.apiError}
-                />
-              )}
-              {apiStatus === 'error' && (
-                <span
-                  className="w-1.5 h-1.5 rounded-full bg-rose-400"
-                  title={t.dashboard.apiError}
-                />
-              )}
+            <div className="flex items-baseline justify-between mt-2">
+              <div>
+                <p className="text-2xl font-black tracking-tight text-white">
+                  {t.prayers[nextPrayer.prayerId]}
+                </p>
+                <div className="flex items-center gap-1.5 text-xs text-slate-400 mt-0.5">
+                  <Clock className="w-3.5 h-3.5" />
+                  <span className="tabular-nums">
+                    {nextPrayerItem?.endTime
+                      ? `${nextPrayer.prayerTime} – ${nextPrayerItem.endTime}`
+                      : nextPrayer.prayerTime}
+                  </span>
+                </div>
+              </div>
+
+              {/* Live Ticking Countdown */}
+              <div className="text-right">
+                <span className="text-[11px] font-medium text-slate-400 block mb-0.5">
+                  {t.dashboard.in}
+                </span>
+                <p
+                  className="text-xl sm:text-2xl font-black text-emerald-400 font-mono tracking-tight"
+                >
+                  {String(nextPrayer.hours).padStart(2, '0')}:
+                  {String(nextPrayer.mins).padStart(2, '0')}:
+                  {String(nextPrayer.secs).padStart(2, '0')}
+                </p>
+              </div>
             </div>
           </div>
 
-          <div className="flex items-baseline justify-between mt-2">
-            <div>
-              <p className="text-2xl font-black tracking-tight text-white">
-                {t.prayers[nextPrayer.prayerId]}
-              </p>
-              <div className="flex items-center gap-1.5 text-xs text-slate-400 mt-0.5">
-                <Clock className="w-3.5 h-3.5" />
-                <span className="tabular-nums">
-                  {nextPrayerItem?.endTime
-                    ? `${nextPrayer.prayerTime} – ${nextPrayerItem.endTime}`
-                    : nextPrayer.prayerTime}
-                </span>
-              </div>
-            </div>
-
-            {/* Live Ticking Countdown */}
-            <div className="text-right">
-              <span className="text-[11px] font-medium text-slate-400 block mb-0.5">
-                {t.dashboard.in}
-              </span>
-              <p
-                className="text-xl sm:text-2xl font-black text-emerald-400 font-mono tracking-tight"
-              >
-                {String(nextPrayer.hours).padStart(2, '0')}:
-                {String(nextPrayer.mins).padStart(2, '0')}:
-                {String(nextPrayer.secs).padStart(2, '0')}
-              </p>
+          {/* 5-Prayer Progression Schedule Bar at bottom of Card A */}
+          <div className="mt-4 pt-3 border-t border-slate-700/60">
+            <div className="grid grid-cols-5 gap-1.5">
+              {prayers.map((p) => {
+                const isCompleted = p.status === 'PRAYED' || p.status === 'PRAYED_ON_TIME' || p.status === 'PRAYED_LATE';
+                const isNext = p.id === nextPrayer.prayerId;
+                return (
+                  <div key={p.id} className="text-center">
+                    <div
+                      className={`h-1.5 w-full rounded-full mb-1 transition-all ${
+                        isCompleted
+                          ? 'bg-emerald-400'
+                          : isNext
+                          ? 'bg-amber-400 animate-pulse'
+                          : 'bg-slate-700'
+                      }`}
+                    />
+                    <span className={`text-[10px] font-semibold block truncate ${
+                      isNext ? 'text-amber-300 font-bold' : isCompleted ? 'text-emerald-300' : 'text-slate-400'
+                    }`}>
+                      {t.prayers[p.id]}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>
@@ -1330,9 +1360,9 @@ export default function HomeDashboard({
           </div>
 
           <div className="my-3 flex items-center gap-4 sm:gap-6">
-            {/* Visual Prominent SVG Progress Ring */}
-            <div className="relative w-28 h-28 sm:w-32 sm:h-32 shrink-0 flex items-center justify-center">
-              <svg className="w-28 h-28 sm:w-32 sm:h-32 -rotate-90 transform" viewBox="0 0 108 108">
+            {/* Visual Streamlined SVG Progress Ring */}
+            <div className="relative w-20 h-20 sm:w-24 sm:h-24 shrink-0 flex items-center justify-center">
+              <svg className="w-20 h-20 sm:w-24 sm:h-24 -rotate-90 transform" viewBox="0 0 96 96">
                 <defs>
                   <linearGradient id="emeraldProgressGradient" x1="0%" y1="0%" x2="100%" y2="100%">
                     <stop offset="0%" stopColor="#34d399" />
@@ -1341,21 +1371,21 @@ export default function HomeDashboard({
                 </defs>
                 {/* Background Track Ring */}
                 <circle
-                  cx="54"
-                  cy="54"
+                  cx="48"
+                  cy="48"
                   r={ringRadius}
                   stroke="currentColor"
-                  strokeWidth="8.5"
+                  strokeWidth="7.5"
                   className="text-slate-100 dark:text-slate-800/80"
                   fill="transparent"
                 />
                 {/* Foreground Active Ring */}
                 <circle
-                  cx="54"
-                  cy="54"
+                  cx="48"
+                  cy="48"
                   r={ringRadius}
                   stroke={completedCount > 0 ? "url(#emeraldProgressGradient)" : "currentColor"}
-                  strokeWidth="8.5"
+                  strokeWidth="7.5"
                   strokeDasharray={ringCircumference}
                   strokeDashoffset={ringOffset}
                   strokeLinecap="round"
@@ -1366,9 +1396,9 @@ export default function HomeDashboard({
                 />
               </svg>
               <div className="absolute inset-0 flex items-center justify-center text-center select-none pointer-events-none">
-                <span className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-slate-100 leading-none tracking-tight">
+                <span className="text-xl sm:text-2xl font-black text-slate-900 dark:text-slate-100 leading-none tracking-tight">
                   {completedCount}
-                  <span className="text-sm sm:text-base text-slate-400 dark:text-slate-500 font-bold ml-0.5">/5</span>
+                  <span className="text-xs sm:text-sm text-slate-400 dark:text-slate-500 font-bold ml-0.5">/5</span>
                 </span>
               </div>
             </div>
@@ -1378,27 +1408,27 @@ export default function HomeDashboard({
               {/* Row 1: Prayed & Pending */}
               <div className="grid grid-cols-2 divide-x divide-slate-200/80 dark:divide-slate-800/80">
                 {/* Prayed Cell */}
-                <div className="p-2 sm:p-2.5 bg-emerald-50/40 dark:bg-emerald-950/20 flex items-center justify-between gap-1.5">
+                <div className="p-1.5 sm:p-2 bg-emerald-50/40 dark:bg-emerald-950/20 flex items-center justify-between gap-1.5">
                   <div className="flex items-center gap-1.5 min-w-0">
                     <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0 shadow-2xs" />
                     <span className="text-[11px] sm:text-xs font-semibold text-slate-700 dark:text-slate-300 truncate">
                       {t.statuses.PRAYED}
                     </span>
                   </div>
-                  <span className="text-sm sm:text-base font-extrabold text-emerald-700 dark:text-emerald-400 shrink-0">
+                  <span className="text-xs sm:text-sm font-extrabold text-emerald-700 dark:text-emerald-400 shrink-0">
                     {completedCount}
                   </span>
                 </div>
 
                 {/* Pending Cell */}
-                <div className="p-2 sm:p-2.5 flex items-center justify-between gap-1.5">
+                <div className="p-1.5 sm:p-2 flex items-center justify-between gap-1.5">
                   <div className="flex items-center gap-1.5 min-w-0">
                     <span className="w-2 h-2 rounded-full bg-slate-400 shrink-0" />
                     <span className="text-[11px] sm:text-xs font-semibold text-slate-700 dark:text-slate-300 truncate">
                       {t.statuses.PENDING}
                     </span>
                   </div>
-                  <span className="text-sm sm:text-base font-extrabold text-slate-800 dark:text-slate-200 shrink-0">
+                  <span className="text-xs sm:text-sm font-extrabold text-slate-800 dark:text-slate-200 shrink-0">
                     {pendingCount}
                   </span>
                 </div>
@@ -1407,27 +1437,27 @@ export default function HomeDashboard({
               {/* Row 2: Missed & Made Up */}
               <div className="grid grid-cols-2 divide-x divide-slate-200/80 dark:divide-slate-800/80">
                 {/* Missed Cell */}
-                <div className="p-2 sm:p-2.5 bg-rose-50/40 dark:bg-rose-950/20 flex items-center justify-between gap-1.5">
+                <div className="p-1.5 sm:p-2 bg-rose-50/40 dark:bg-rose-950/20 flex items-center justify-between gap-1.5">
                   <div className="flex items-center gap-1.5 min-w-0">
                     <span className="w-2 h-2 rounded-full bg-rose-500 shrink-0 shadow-2xs" />
                     <span className="text-[11px] sm:text-xs font-semibold text-slate-700 dark:text-slate-300 truncate">
                       {t.statuses.MISSED}
                     </span>
                   </div>
-                  <span className="text-sm sm:text-base font-extrabold text-rose-700 dark:text-rose-400 shrink-0">
+                  <span className="text-xs sm:text-sm font-extrabold text-rose-700 dark:text-rose-400 shrink-0">
                     {missedCount}
                   </span>
                 </div>
 
                 {/* Made-Up Cell */}
-                <div className="p-2 sm:p-2.5 bg-sky-50/40 dark:bg-sky-950/20 flex items-center justify-between gap-1.5">
+                <div className="p-1.5 sm:p-2 bg-sky-50/40 dark:bg-sky-950/20 flex items-center justify-between gap-1.5">
                   <div className="flex items-center gap-1.5 min-w-0">
                     <span className="w-2 h-2 rounded-full bg-sky-500 shrink-0 shadow-2xs" />
                     <span className="text-[11px] sm:text-xs font-semibold text-slate-700 dark:text-slate-300 truncate">
                       {t.statuses.MADE_UP}
                     </span>
                   </div>
-                  <span className="text-sm sm:text-base font-extrabold text-sky-700 dark:text-sky-400 shrink-0">
+                  <span className="text-xs sm:text-sm font-extrabold text-sky-700 dark:text-sky-400 shrink-0">
                     {madeUpCount}
                   </span>
                 </div>
@@ -1566,8 +1596,22 @@ export default function HomeDashboard({
                   </div>
 
                   {/* Right: Status badge & dropdown trigger */}
-                  <div className="flex items-center gap-1 sm:gap-2">
+                  <div className="flex items-center gap-1.5 sm:gap-2">
                     <span
+                      role="button"
+                      tabIndex={0}
+                      style={{ cursor: 'pointer' }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setActiveMenuPrayerId(isMenuOpen ? null : prayer.id);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setActiveMenuPrayerId(isMenuOpen ? null : prayer.id);
+                        }
+                      }}
                       className={`text-[11px] font-semibold px-2.5 py-1 rounded-full border ${config.badgeClass}`}
                     >
                       {statusLabel}
@@ -1579,7 +1623,7 @@ export default function HomeDashboard({
                         e.stopPropagation();
                         setActiveMenuPrayerId(isMenuOpen ? null : prayer.id);
                       }}
-                      className="min-h-[44px] min-w-[44px] flex items-center justify-center -mr-2 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 dark:hover:text-slate-200 cursor-pointer transition-colors"
+                      className="min-h-[44px] min-w-[44px] px-2.5 sm:px-3 flex items-center justify-center gap-1 rounded-xl border border-slate-200/90 dark:border-slate-800 bg-slate-50/80 hover:bg-slate-100 dark:bg-slate-800/60 dark:hover:bg-slate-800 text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 cursor-pointer transition-colors focus-visible:outline-hidden"
                       title={t.dashboard.changeStatus}
                       aria-label={t.dashboard.changeStatus}
                     >
