@@ -28,6 +28,15 @@ import { PrayerItem, PrayerStatus, PrayerId, StreakData, DEFAULT_STREAK } from '
 import { calculateAccountabilityLedger } from '@/lib/accountability';
 import { calculateStreakTransition, evaluateRolloverStreak } from '@/lib/streak';
 import { validateCoordinates, sanitizeLocationName } from '@/lib/qibla';
+import {
+  readStoredLocation,
+  saveLocation,
+  distanceKm,
+  getBrowserTimezone,
+  LOCATION_CHANGE_THRESHOLD_KM,
+  LOCATION_UPDATE_EVENT,
+} from '@/lib/location';
+import { findCityByCoordinates } from '@/lib/cities';
 import { formatLocalizedDate, formatLocalizedHijriDate, formatCurrency } from '@/lib/formatters';
 import {
   getLiturgicalDate,
@@ -179,7 +188,7 @@ function calculateNextPrayerCountdown(prayers: PrayerItem[], now: Date): NextPra
 // Client-side module-level caching and in-flight request deduplication for prayer times
 interface CachedPrayerTimesResponse {
   city?: string;
-  source?: 'live' | 'fallback';
+  source?: 'live';
   timings: Record<string, { time: string; endTime: string; isOvernight?: boolean }>;
   [key: string]: unknown;
 }
@@ -304,7 +313,7 @@ export default function HomeDashboard({
   }, []);
 
   const lastSyncedKeyRef = useRef<string>('');
-  const lastSyncedStatusRef = useRef<'idle' | 'loading' | 'live' | 'fallback' | 'error'>('idle');
+  const lastSyncedStatusRef = useRef<'idle' | 'loading' | 'live' | 'error'>('idle');
   const statsDebounceRef = useRef<NodeJS.Timeout | null>(null);
   const prayerAbortControllersRef = useRef<Map<PrayerId, AbortController>>(new Map());
   const prayersRef = useRef<PrayerItem[]>(prayers);
@@ -330,26 +339,23 @@ export default function HomeDashboard({
   const [locationName, setLocationName] = useState<string>(() =>
     user?.preferences?.city ? sanitizeLocationName(user.preferences.city) || 'Tashkent' : 'Tashkent'
   );
-  const [apiStatus, setApiStatus] = useState<'loading' | 'live' | 'fallback' | 'error'>('loading');
+  const [apiStatus, setApiStatus] = useState<'loading' | 'live' | 'error'>('loading');
 
-  // Synchronize cached prayer timings status on mount
+  // One-time cleanup of data left by the retired prayer-time system (Aladhan +
+  // calculation methods): its cached timings and method preference are never read again.
   useEffect(() => {
-    queueMicrotask(() => {
-      try {
-        const today = getLiturgicalDate(new Date());
-        const loc = getInitialLocationName(user?.preferences?.city);
-        const cached = localStorage.getItem(`salahtrack_timings_${today}_${loc}`);
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          if (parsed?.timings) {
-            setApiStatus(parsed.source === 'fallback' ? 'fallback' : 'live');
-          }
+    try {
+      localStorage.removeItem('salahtrack_calc_method');
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const key = localStorage.key(i);
+        if (key?.startsWith('salahtrack_timings_') && !key.startsWith('salahtrack_timings_v2_')) {
+          localStorage.removeItem(key);
         }
-      } catch {
-        // Storage access blocked or unavailable
       }
-    });
-  }, [user?.preferences?.city]);
+    } catch {
+      // Storage access blocked or unavailable
+    }
+  }, []);
 
   // Synchronize location when component mounts or user preferences load
   useEffect(() => {
@@ -361,7 +367,7 @@ export default function HomeDashboard({
     });
   }, [user?.preferences?.city]);
 
-  // Dedicated listener for location and calculation method changes
+  // Dedicated listener for location changes
   useEffect(() => {
     const handleLocationUpdate = () => {
       const resolved = getInitialLocationName(user?.preferences?.city);
@@ -370,10 +376,10 @@ export default function HomeDashboard({
       }
       setLocationRevision((v) => v + 1);
     };
-    window.addEventListener('salahtrack_location_update', handleLocationUpdate);
+    window.addEventListener(LOCATION_UPDATE_EVENT, handleLocationUpdate);
     window.addEventListener('storage', handleLocationUpdate);
     return () => {
-      window.removeEventListener('salahtrack_location_update', handleLocationUpdate);
+      window.removeEventListener(LOCATION_UPDATE_EVENT, handleLocationUpdate);
       window.removeEventListener('storage', handleLocationUpdate);
     };
   }, [user?.preferences?.city]);
@@ -628,7 +634,7 @@ export default function HomeDashboard({
     [activeLiturgicalDate, lang, hijriAdjustment]
   );
 
-  // Sync authentic prayer times (location-aware & user calculation method)
+  // Sync prayer times from fatvo.uz (via /api/prayer-times) for the current location
   useEffect(() => {
     if (!isMounted) return;
 
@@ -640,8 +646,19 @@ export default function HomeDashboard({
         let lng: number | null = null;
         let resolvedCityName: string | null = null;
 
-        // Prioritize authenticated user preferences if available
+        // 0. A location saved on this device via saveLocation() (has updatedAt) is the
+        //    freshest signal — it was just picked or detected, so it wins over the
+        //    possibly-stale profile copy until the profile refreshes.
+        const stored = readStoredLocation();
+        if (stored?.updatedAt) {
+          lat = stored.lat;
+          lng = stored.lng;
+          resolvedCityName = stored.city ? sanitizeLocationName(stored.city) || null : null;
+        }
+
+        // Otherwise prioritize authenticated user preferences if available
         if (
+          lat === null &&
           typeof user?.preferences?.latitude === 'number' &&
           typeof user?.preferences?.longitude === 'number'
         ) {
@@ -651,7 +668,7 @@ export default function HomeDashboard({
             lng = validation.lng;
           }
         }
-        if (user?.preferences?.city) {
+        if (!stored?.updatedAt && user?.preferences?.city) {
           resolvedCityName = user.preferences.city;
         }
 
@@ -690,30 +707,36 @@ export default function HomeDashboard({
           setLocationName(resolvedCityName);
         }
 
-        const storedMethod = typeof window !== 'undefined' ? localStorage.getItem('salahtrack_calc_method') : null;
-        const method = user?.preferences?.calculationMethod || storedMethod || 'MWL';
 
-        const currentKey = `${activeLiturgicalDate}|${lat ?? ''}|${lng ?? ''}|${resolvedCityName ?? ''}|${method}`;
+        const timezone =
+          (stored?.updatedAt ? stored.timezone : undefined) ||
+          user?.preferences?.timezone ||
+          stored?.timezone ||
+          getBrowserTimezone();
+
+        const currentKey = `${activeLiturgicalDate}|${lat ?? ''}|${lng ?? ''}|${resolvedCityName ?? ''}|${timezone ?? ''}|${lang}`;
 
         // If parameters haven't changed and prayer times are already successfully loaded, skip entirely
         if (
           currentKey === lastSyncedKeyRef.current &&
-          (lastSyncedStatusRef.current === 'live' || lastSyncedStatusRef.current === 'fallback')
+          lastSyncedStatusRef.current === 'live'
         ) {
           return;
         }
 
         // Helper function to update state and synchronize timings
         const applyTimings = (data: CachedPrayerTimesResponse) => {
-          if (resolvedCityName) {
+          // Coordinate labels like "41.2462°, 69.3722°" are replaced by the
+          // human-readable city that fatvo.uz reverse-geocodes for us.
+          const isCoordLabel = !!resolvedCityName && /^-?\d/.test(resolvedCityName);
+          if (resolvedCityName && !(isCoordLabel && data.city)) {
             setLocationName(resolvedCityName);
-          } else if (data.city) {
-            setLocationName(data.city);
+          } else if (typeof data.city === 'string' && data.city !== 'Custom Location') {
+            setLocationName(sanitizeLocationName(data.city) || data.city);
           }
 
-          const status = data.source === 'fallback' ? 'fallback' : 'live';
-          setApiStatus(status);
-          lastSyncedStatusRef.current = status;
+          setApiStatus('live');
+          lastSyncedStatusRef.current = 'live';
 
           setPrayers((prev) => {
             let hasChanges = false;
@@ -745,7 +768,8 @@ export default function HomeDashboard({
         }
 
         // Check persistent localStorage cache for instant 0ms reload
-        const storageCacheKey = `salahtrack_timings_${activeLiturgicalDate}_${resolvedCityName || 'Tashkent'}`;
+        const locationCacheId = lat !== null && lng !== null ? `${lat.toFixed(3)}_${lng.toFixed(3)}` : resolvedCityName || 'Tashkent';
+        const storageCacheKey = `salahtrack_timings_v2_${activeLiturgicalDate}_${locationCacheId}_${lang}`;
         if (typeof window !== 'undefined') {
           try {
             const rawStored = localStorage.getItem(storageCacheKey);
@@ -773,13 +797,17 @@ export default function HomeDashboard({
 
         const queryParams = new URLSearchParams();
         if (lat !== null && lng !== null) {
+          // Exact coordinates only — sending `city` too would make the server snap
+          // to the preset city centre instead of the user's real position.
           queryParams.set('latitude', lat.toString());
           queryParams.set('longitude', lng.toString());
-        }
-        if (resolvedCityName) {
+        } else if (resolvedCityName) {
           queryParams.set('city', resolvedCityName);
         }
-        queryParams.set('method', method);
+        if (timezone) {
+          queryParams.set('timezone', timezone);
+        }
+        queryParams.set('lang', lang);
         queryParams.set('date', activeLiturgicalDate);
 
         const url = `/api/prayer-times?${queryParams.toString()}`;
@@ -793,24 +821,14 @@ export default function HomeDashboard({
               if (!res.ok) return null;
               const data = await res.json();
               if (data?.timings) {
-                const isDefault =
-                  lat === null ||
-                  (Math.abs(lat - 41.2995) < 0.1 && Math.abs((lng ?? 69.2401) - 69.2401) < 0.1);
-
-                // Do not cache fallback data for non-default locations
-                if (!(data.source === 'fallback' && !isDefault)) {
-                  prayerTimesCache.set(currentKey, {
-                    data,
-                    timestamp: Date.now(),
-                  });
-                  if (typeof window !== 'undefined') {
-                    try {
-                      const timingsStorageKey = `salahtrack_timings_${activeLiturgicalDate}_${resolvedCityName || data.city || 'Tashkent'}`;
-                      localStorage.setItem(timingsStorageKey, JSON.stringify(data));
-                    } catch {
-                      // Storage access blocked or quota exceeded
-                    }
-                  }
+                prayerTimesCache.set(currentKey, {
+                  data,
+                  timestamp: Date.now(),
+                });
+                try {
+                  localStorage.setItem(storageCacheKey, JSON.stringify(data));
+                } catch {
+                  // Storage access blocked or quota exceeded
                 }
                 return data;
               }
@@ -829,17 +847,7 @@ export default function HomeDashboard({
         if (isCancelled) return;
 
         if (!data?.timings) {
-          setApiStatus('error');
-          lastSyncedStatusRef.current = 'error';
-          return;
-        }
-
-        const isDefaultLocation =
-          lat === null ||
-          (Math.abs(lat - 41.2995) < 0.1 && Math.abs((lng ?? 69.2401) - 69.2401) < 0.1);
-
-        if (data.source === 'fallback' && !isDefaultLocation) {
-          // External API failed for a non-default city, do NOT overwrite with Tashkent fallback timings!
+          // fatvo.uz unreachable: keep the last times already on screen, flag the status dot
           setApiStatus('error');
           lastSyncedStatusRef.current = 'error';
           return;
@@ -863,13 +871,72 @@ export default function HomeDashboard({
   }, [
     isMounted,
     setPrayers,
-    user?.preferences?.calculationMethod,
     user?.preferences?.city,
     user?.preferences?.latitude,
     user?.preferences?.longitude,
+    user?.preferences?.timezone,
     activeLiturgicalDate,
     locationRevision,
+    lang,
   ]);
+
+  // Auto-follow the device: if the user chose GPS (or never chose anything) and has
+  // ALREADY granted geolocation permission, re-check position on mount and whenever the
+  // tab becomes visible again. If they moved > LOCATION_CHANGE_THRESHOLD_KM, save the
+  // new coordinates (localStorage + profile) which re-triggers the prayer-times sync.
+  // We never prompt for permission here — that only happens on an explicit user tap.
+  useEffect(() => {
+    if (!isMounted || typeof navigator === 'undefined' || !navigator.geolocation) return;
+
+    let lastCheck = 0;
+    const MIN_CHECK_INTERVAL_MS = 10 * 60 * 1000;
+
+    const checkPosition = async () => {
+      if (document.visibilityState !== 'visible') return;
+      if (Date.now() - lastCheck < MIN_CHECK_INTERVAL_MS) return;
+
+      const stored = readStoredLocation();
+      if (stored?.source === 'manual') return; // user pinned a city — respect it
+
+      try {
+        const status = await navigator.permissions?.query({ name: 'geolocation' as PermissionName });
+        if (!status || status.state !== 'granted') return;
+      } catch {
+        return; // Permissions API unavailable (older Safari) — don't risk a prompt
+      }
+
+      lastCheck = Date.now();
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const { latitude, longitude } = pos.coords;
+          const refLat = stored?.lat ?? user?.preferences?.latitude;
+          const refLng = stored?.lng ?? user?.preferences?.longitude;
+          const moved =
+            typeof refLat !== 'number' ||
+            typeof refLng !== 'number' ||
+            distanceKm(refLat, refLng, latitude, longitude) > LOCATION_CHANGE_THRESHOLD_KM;
+          if (!moved) return;
+
+          const preset = findCityByCoordinates(latitude, longitude, 35);
+          void saveLocation({
+            lat: latitude,
+            lng: longitude,
+            city: preset ? preset.nativeNames[lang] || preset.name : undefined,
+            timezone: preset?.timezone || getBrowserTimezone(),
+            source: 'gps',
+          });
+        },
+        () => {
+          // Position unavailable / timed out — keep the last known location
+        },
+        { enableHighAccuracy: false, timeout: 10000, maximumAge: 5 * 60 * 1000 }
+      );
+    };
+
+    void checkPosition();
+    document.addEventListener('visibilitychange', checkPosition);
+    return () => document.removeEventListener('visibilitychange', checkPosition);
+  }, [isMounted, lang, user?.preferences?.latitude, user?.preferences?.longitude]);
 
   // Live Next Prayer Countdown (calculated dynamically from current ticking time)
   const nextPrayer = useMemo(() => calculateNextPrayerCountdown(prayers, now), [prayers, now]);
@@ -1273,12 +1340,6 @@ export default function HomeDashboard({
                 {apiStatus === 'loading' && (
                   <Loader2 className="w-3 h-3 text-slate-400 animate-spin" />
                 )}
-                {apiStatus === 'fallback' && (
-                  <span
-                    className="w-1.5 h-1.5 rounded-full bg-amber-400"
-                    title={t.dashboard.apiError}
-                  />
-                )}
                 {apiStatus === 'error' && (
                   <span
                     className="w-1.5 h-1.5 rounded-full bg-rose-400"
@@ -1301,6 +1362,15 @@ export default function HomeDashboard({
                       : nextPrayer.prayerTime}
                   </span>
                 </div>
+                {/* Data source attribution (prayer times come only from fatvo.uz) */}
+                <a
+                  href="https://fatvo.uz"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-block mt-1 text-[10px] text-slate-500 hover:text-slate-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40 rounded transition-colors"
+                >
+                  {t.dashboard.timesSource}
+                </a>
               </div>
 
               {/* Live Ticking Countdown */}

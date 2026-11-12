@@ -31,6 +31,8 @@ import { TurnGuidanceCard } from '@/components/qibla/TurnGuidanceCard';
 import { CityPickerModal } from '@/components/qibla/CityPickerModal';
 import { CalibrationModal } from '@/components/qibla/CalibrationModal';
 import type { CityPreset } from '@/types/qibla';
+import { saveLocation } from '@/lib/location';
+import { findCityByCoordinates } from '@/lib/cities';
 
 export default function QiblaPage() {
   const { t, lang } = useLanguage();
@@ -161,12 +163,15 @@ export default function QiblaPage() {
         setLocating(false);
 
         try {
-          localStorage.setItem('salahtrack_location', JSON.stringify({
-            lat: newCoords.lat,
-            lng: newCoords.lng,
-          }));
-          localStorage.setItem('salahtrack_city_name', label);
-          window.dispatchEvent(new CustomEvent('salahtrack_location_update'));
+          // Use the full-precision fix for prayer times (qibla display is rounded above)
+          const preset = findCityByCoordinates(validation.lat, validation.lng, 35);
+          void saveLocation({
+            lat: validation.lat,
+            lng: validation.lng,
+            city: preset ? preset.nativeNames[lang] || preset.name : label,
+            timezone: preset?.timezone,
+            source: 'gps',
+          });
           window.dispatchEvent(new Event('storage'));
         } catch {
           // Ignore storage errors
@@ -179,7 +184,7 @@ export default function QiblaPage() {
       },
       { timeout: 8000, enableHighAccuracy: true }
     );
-  }, [t.qibla.permissionDenied, t.qibla.sensorNotSupported, t.qibla.invalidCoordinates]);
+  }, [t.qibla.permissionDenied, t.qibla.sensorNotSupported, t.qibla.invalidCoordinates, lang]);
 
   // Handle selection of a preset city with coordinate validation & name sanitization
   const handleSelectCity = useCallback((city: CityPreset) => {
@@ -199,12 +204,13 @@ export default function QiblaPage() {
     setGeoError(null);
 
     try {
-      localStorage.setItem('salahtrack_location', JSON.stringify({
+      void saveLocation({
         lat: newCoords.lat,
         lng: newCoords.lng,
-      }));
-      localStorage.setItem('salahtrack_city_name', cityLabel);
-      window.dispatchEvent(new CustomEvent('salahtrack_location_update'));
+        city: cityLabel,
+        timezone: city.timezone,
+        source: 'manual',
+      });
       window.dispatchEvent(new Event('storage'));
     } catch {
       // Ignore storage errors
@@ -229,12 +235,12 @@ export default function QiblaPage() {
     setGeoError(null);
 
     try {
-      localStorage.setItem('salahtrack_location', JSON.stringify({
+      void saveLocation({
         lat: validation.lat,
         lng: validation.lng,
-      }));
-      localStorage.setItem('salahtrack_city_name', cleanLabel);
-      window.dispatchEvent(new CustomEvent('salahtrack_location_update'));
+        city: cleanLabel,
+        source: 'manual',
+      });
       window.dispatchEvent(new Event('storage'));
     } catch {
       // Ignore storage errors

@@ -256,9 +256,8 @@ export interface TranslationContent {
     saveFailed: string;
     locationUnavailable: string;
     apiError: string;
-    calcMethod: string;
+    timesSource: string;
     tomorrowPrayer: string;
-    calcMethodBased: string;
     overnightIshaActive: string;
     overnightIshaBadge: string;
     hijriBadge: string;
@@ -356,7 +355,6 @@ export interface TranslationContent {
     savingProfile: string;
     profileUpdated: string;
     languagePref: string;
-    calcMethod: string;
     cityLocation?: string;
     cityLocationDesc?: string;
     detectGps?: string;
@@ -676,7 +674,6 @@ export interface TranslationContent {
       personalInfo: string;
       personalInfoDesc: string;
       preferences: string;
-      preferencesDesc: string;
       privacy: string;
       privacyDesc: string;
       security: string;
@@ -883,9 +880,8 @@ export const translations: Record<Language, TranslationContent> = {
       saveFailed: 'Ошибка сохранения',
       locationUnavailable: 'Геолокация недоступна',
       apiError: 'Ошибка загрузки расписания',
-      calcMethod: 'Метод расчёта',
+      timesSource: 'Время: fatvo.uz',
       tomorrowPrayer: 'Завтра',
-      calcMethodBased: 'По методу {method}',
       overnightIshaActive: 'Время ночного намаза (Иша) продолжается до наступления рассвета (Фаджр). Литургический день обновляется с наступлением Фаджра.',
       overnightIshaBadge: 'Иша продолжается',
       hijriBadge: 'Хиджра',
@@ -983,7 +979,6 @@ export const translations: Record<Language, TranslationContent> = {
       savingProfile: 'Сохранение...',
       profileUpdated: 'Профиль успешно обновлен',
       languagePref: 'Язык интерфейса',
-      calcMethod: 'Метод расчета времени намазов',
       cityLocation: 'Город / Местоположение',
       cityLocationDesc: 'Выберите город или используйте GPS для точного расчета времени намаза.',
       detectGps: 'Определить через GPS',
@@ -1302,9 +1297,9 @@ export const translations: Record<Language, TranslationContent> = {
     },
     account: {
       title: 'Аккаунт и настройки',
-      subtitle: 'Управление профилем, параметрами расчета и безопасностью',
+      subtitle: 'Управление профилем, местоположением и безопасностью',
       signInTitle: 'Войдите в свой облачный аккаунт',
-      signInSubtitle: 'Войдите или зарегистрируйтесь, чтобы настроить индивидуальные методы расчета, вступить в круги подотчетности и защитить дневник молитв.',
+      signInSubtitle: 'Войдите или зарегистрируйтесь, чтобы синхронизировать местоположение, вступить в круги подотчетности и защитить дневник молитв.',
       languageSubtitle: 'Язык интерфейса приложения',
       argonSecurityNote: 'Пароль надежно защищен алгоритмом Argon2id',
       showPassword: 'Показать пароли',
@@ -1322,8 +1317,7 @@ export const translations: Record<Language, TranslationContent> = {
       sections: {
         personalInfo: 'Личная информация',
         personalInfoDesc: 'Ваше имя и идентификационные данные в Namozlarim',
-        preferences: 'Параметры и расчет',
-        preferencesDesc: 'Язык приложения и богословский метод расчета времени намаза',
+        preferences: 'Параметры',
         privacy: 'Приватность и участие в сообществе',
         privacyDesc: 'Видимость в общем рейтинге и круги совместной ответственности',
         security: 'Безопасность и сессии',
@@ -1529,9 +1523,8 @@ export const translations: Record<Language, TranslationContent> = {
       saveFailed: 'Save failed',
       locationUnavailable: 'Location unavailable',
       apiError: 'Schedule update error',
-      calcMethod: 'Calculation Method',
+      timesSource: 'Times: fatvo.uz',
       tomorrowPrayer: 'Tomorrow',
-      calcMethodBased: 'Based on {method} method',
       overnightIshaActive: 'Isha prayer continues overnight until the dawn of Fajr. The liturgical prayer day rolls over at Fajr adhan.',
       overnightIshaBadge: 'Isha is active',
       hijriBadge: 'Hijri',
@@ -1629,7 +1622,6 @@ export const translations: Record<Language, TranslationContent> = {
       savingProfile: 'Saving...',
       profileUpdated: 'Profile updated successfully',
       languagePref: 'Interface Language',
-      calcMethod: 'Prayer Calculation Method',
       cityLocation: 'City / Location',
       cityLocationDesc: 'Select your city or detect GPS coordinates for accurate prayer times.',
       detectGps: 'Detect via GPS',
@@ -1948,9 +1940,9 @@ export const translations: Record<Language, TranslationContent> = {
     },
     account: {
       title: 'Account & Settings',
-      subtitle: 'Manage your profile, prayer calculation, and security',
+      subtitle: 'Manage your profile, location, and security',
       signInTitle: 'Sign In to Access Your Cloud Account',
-      signInSubtitle: 'Create an account or sign in to configure personalized calculation methods, join accountability circles, and secure your prayer journal.',
+      signInSubtitle: 'Create an account or sign in to sync your location, join accountability circles, and secure your prayer journal.',
       languageSubtitle: 'Application interface language',
       argonSecurityNote: 'Password securely hashed with Argon2id',
       showPassword: 'Show passwords',
@@ -1968,8 +1960,7 @@ export const translations: Record<Language, TranslationContent> = {
       sections: {
         personalInfo: 'Personal Information',
         personalInfoDesc: 'Your display name and identification on Namozlarim',
-        preferences: 'Preferences & Calculation',
-        preferencesDesc: 'App interface language and astronomical prayer time calculation method',
+        preferences: 'Preferences',
         privacy: 'Privacy & Community',
         privacyDesc: 'Public leaderboard visibility and accountability circles',
         security: 'Security & Sessions',
@@ -2175,9 +2166,8 @@ export const translations: Record<Language, TranslationContent> = {
       saveFailed: 'Saqlashda xatolik',
       locationUnavailable: 'Joylashuv aniqlanmadi',
       apiError: 'Vaqtlar yangilanmadi',
-      calcMethod: 'Hisoblash usuli',
+      timesSource: 'Vaqtlar: fatvo.uz',
       tomorrowPrayer: 'Ertangi',
-      calcMethodBased: '{method} usuli bo‘yicha',
       overnightIshaActive: 'Tong (Bomdod) otguncha Xufton namozi vaqti davom etadi. Diniy kun Bomdod kirishi bilan yangilanadi.',
       overnightIshaBadge: 'Xufton davom etmoqda',
       hijriBadge: 'Hijriy',
@@ -2275,7 +2265,6 @@ export const translations: Record<Language, TranslationContent> = {
       savingProfile: 'Saqlanmoqda...',
       profileUpdated: 'Profil muvaffaqiyatli saqlandi',
       languagePref: 'Interfeys tili',
-      calcMethod: 'Namoz vaqtlarini hisoblash usuli',
       cityLocation: 'Shahar / Joylashuv',
       cityLocationDesc: 'Aniq namoz vaqtlarini hisoblash uchun shahringizni tanlang yoki GPS orqali aniqlang.',
       detectGps: 'GPS orqali aniqlash',
@@ -2594,9 +2583,9 @@ export const translations: Record<Language, TranslationContent> = {
     },
     account: {
       title: 'Hisob va sozlamalar',
-      subtitle: 'Profil ma’lumotlari, namoz hisoblash usuli va xavfsizlik',
+      subtitle: 'Profil ma’lumotlari, joylashuv va xavfsizlik',
       signInTitle: 'Bulutli hisobingizga kiring',
-      signInSubtitle: 'Shaxsiy hisob-kitob usullarini sozlash, mas’uliyat doiralariga qo‘shilish va namoz daftaringizni himoyalash uchun hisobingizga kiring.',
+      signInSubtitle: 'Joylashuvingizni sinxronlash, mas’uliyat doiralariga qo‘shilish va namoz daftaringizni himoyalash uchun hisobingizga kiring.',
       languageSubtitle: 'Ilova interfeysi tili',
       argonSecurityNote: 'Argon2id bilan xavfsiz himoyalangan parol',
       showPassword: 'Parollarni ko‘rsatish',
@@ -2614,8 +2603,7 @@ export const translations: Record<Language, TranslationContent> = {
       sections: {
         personalInfo: 'Shaxsiy ma’lumotlar',
         personalInfoDesc: 'Namozlarim-dagi ismingiz va identifikatsiya ma’lumotlaringiz',
-        preferences: 'Sozlamalar va hisoblash',
-        preferencesDesc: 'Ilova tili va astronomik namoz vaqtini hisoblash uslubi',
+        preferences: 'Sozlamalar',
         privacy: 'Maxfiylik va guruhlar',
         privacyDesc: 'Umumiy reytingda ko‘rinish va shaxsiy mas’uliyat guruhlari',
         security: 'Xavfsizlik va seanslar',

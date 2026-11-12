@@ -429,7 +429,10 @@ export interface IUser extends Document {
   role: 'user' | 'admin';
   preferences: {
     language: 'uz' | 'ru' | 'en';
-    calculationMethod?: string;
+    city?: string;
+    latitude?: number;
+    longitude?: number;
+    timezone?: string;
   };
   passwordResetTokenHash?: string;
   passwordResetExpires?: Date;
@@ -462,7 +465,6 @@ const UserSchema = new Schema<IUser>(
     role: { type: String, enum: ['user', 'admin'], default: 'user' },
     preferences: {
       language: { type: String, enum: ['uz', 'ru', 'en'], default: 'uz' },
-      calculationMethod: { type: String, default: 'MWL' },
     },
     passwordResetTokenHash: { type: String, select: false },
     passwordResetExpires: { type: Date, select: false },

@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 
 interface CachedPrayerTimesResponse {
   city?: string;
-  source?: 'live' | 'fallback';
+  source?: 'live';
   timings: Record<string, { time: string; endTime: string; isOvernight?: boolean }>;
   [key: string]: unknown;
 }
@@ -40,9 +40,10 @@ describe('Client-Side Prayer Times Sync & Cache Architecture', () => {
     lat: number | null;
     lng: number | null;
     resolvedCityName: string | null;
-    method: string;
+    timezone: string;
+    lang: string;
     lastSyncedKeyRef: { current: string };
-    lastSyncedStatusRef: { current: 'idle' | 'loading' | 'live' | 'fallback' | 'error' };
+    lastSyncedStatusRef: { current: 'idle' | 'loading' | 'live' | 'error' };
     mockFetchFn: () => Promise<CachedPrayerTimesResponse>;
   }) {
     const {
@@ -50,18 +51,19 @@ describe('Client-Side Prayer Times Sync & Cache Architecture', () => {
       lat,
       lng,
       resolvedCityName,
-      method,
+      timezone,
+      lang,
       lastSyncedKeyRef,
       lastSyncedStatusRef,
       mockFetchFn,
     } = params;
 
-    const currentKey = `${activeLiturgicalDate}|${lat ?? ''}|${lng ?? ''}|${resolvedCityName ?? ''}|${method}`;
+    const currentKey = `${activeLiturgicalDate}|${lat ?? ''}|${lng ?? ''}|${resolvedCityName ?? ''}|${timezone}|${lang}`;
 
     // 1. Parameter equality comparison: skip if already successfully loaded for same key
     if (
       currentKey === lastSyncedKeyRef.current &&
-      (lastSyncedStatusRef.current === 'live' || lastSyncedStatusRef.current === 'fallback')
+      lastSyncedStatusRef.current === 'live'
     ) {
       return { skipped: true, source: 'skipped-equality' };
     }
@@ -70,7 +72,7 @@ describe('Client-Side Prayer Times Sync & Cache Architecture', () => {
     const cachedEntry = cache.get(currentKey);
     if (cachedEntry && Date.now() - cachedEntry.timestamp < CACHE_TTL_MS) {
       lastSyncedKeyRef.current = currentKey;
-      lastSyncedStatusRef.current = cachedEntry.data.source === 'fallback' ? 'fallback' : 'live';
+      lastSyncedStatusRef.current = 'live';
       return { skipped: false, source: 'cache', data: cachedEntry.data };
     }
 
@@ -100,7 +102,7 @@ describe('Client-Side Prayer Times Sync & Cache Architecture', () => {
     const data = await fetchPromise;
     if (data) {
       lastSyncedKeyRef.current = currentKey;
-      lastSyncedStatusRef.current = data.source === 'fallback' ? 'fallback' : 'live';
+      lastSyncedStatusRef.current = 'live';
       return { skipped: false, source: 'network', data };
     } else {
       lastSyncedStatusRef.current = 'error';
@@ -122,7 +124,7 @@ describe('Client-Side Prayer Times Sync & Cache Architecture', () => {
 
   it('1. performs network fetch on first mount and updates cache and lastSyncedKeyRef', async () => {
     const lastSyncedKeyRef = { current: '' };
-    const lastSyncedStatusRef: { current: 'idle' | 'loading' | 'live' | 'fallback' | 'error' } = {
+    const lastSyncedStatusRef: { current: 'idle' | 'loading' | 'live' | 'error' } = {
       current: 'idle',
     };
 
@@ -131,7 +133,8 @@ describe('Client-Side Prayer Times Sync & Cache Architecture', () => {
       lat: 41.2995,
       lng: 69.2401,
       resolvedCityName: 'Tashkent',
-      method: 'MWL',
+      timezone: 'Asia/Tashkent',
+      lang: 'uz',
       lastSyncedKeyRef,
       lastSyncedStatusRef,
       mockFetchFn: async () => sampleTimings,
@@ -139,14 +142,14 @@ describe('Client-Side Prayer Times Sync & Cache Architecture', () => {
 
     assert.equal(result.source, 'network');
     assert.equal(networkFetchCount, 1);
-    assert.equal(lastSyncedKeyRef.current, '2026-11-07|41.2995|69.2401|Tashkent|MWL');
+    assert.equal(lastSyncedKeyRef.current, '2026-11-07|41.2995|69.2401|Tashkent|Asia/Tashkent|uz');
     assert.equal(lastSyncedStatusRef.current, 'live');
-    assert.ok(cache.has('2026-11-07|41.2995|69.2401|Tashkent|MWL'));
+    assert.ok(cache.has('2026-11-07|41.2995|69.2401|Tashkent|Asia/Tashkent|uz'));
   });
 
   it('2. skips fetch when parameters are identical and status is live (parameter equality comparison)', async () => {
-    const lastSyncedKeyRef = { current: '2026-11-07|41.2995|69.2401|Tashkent|MWL' };
-    const lastSyncedStatusRef: { current: 'idle' | 'loading' | 'live' | 'fallback' | 'error' } = {
+    const lastSyncedKeyRef = { current: '2026-11-07|41.2995|69.2401|Tashkent|Asia/Tashkent|uz' };
+    const lastSyncedStatusRef: { current: 'idle' | 'loading' | 'live' | 'error' } = {
       current: 'live',
     };
 
@@ -155,7 +158,8 @@ describe('Client-Side Prayer Times Sync & Cache Architecture', () => {
       lat: 41.2995,
       lng: 69.2401,
       resolvedCityName: 'Tashkent',
-      method: 'MWL',
+      timezone: 'Asia/Tashkent',
+      lang: 'uz',
       lastSyncedKeyRef,
       lastSyncedStatusRef,
       mockFetchFn: async () => sampleTimings,
@@ -168,14 +172,14 @@ describe('Client-Side Prayer Times Sync & Cache Architecture', () => {
 
   it('3. serves from module-level cache when component unmounts and remounts (navigation round-trip)', async () => {
     // Seed cache
-    cache.set('2026-11-07|41.2995|69.2401|Tashkent|MWL', {
+    cache.set('2026-11-07|41.2995|69.2401|Tashkent|Asia/Tashkent|uz', {
       data: sampleTimings,
       timestamp: Date.now(),
     });
 
     // Fresh mount with blank lastSyncedKeyRef (simulating navigating / -> /progress -> /)
     const freshLastSyncedKeyRef = { current: '' };
-    const freshLastSyncedStatusRef: { current: 'idle' | 'loading' | 'live' | 'fallback' | 'error' } = {
+    const freshLastSyncedStatusRef: { current: 'idle' | 'loading' | 'live' | 'error' } = {
       current: 'idle',
     };
 
@@ -184,7 +188,8 @@ describe('Client-Side Prayer Times Sync & Cache Architecture', () => {
       lat: 41.2995,
       lng: 69.2401,
       resolvedCityName: 'Tashkent',
-      method: 'MWL',
+      timezone: 'Asia/Tashkent',
+      lang: 'uz',
       lastSyncedKeyRef: freshLastSyncedKeyRef,
       lastSyncedStatusRef: freshLastSyncedStatusRef,
       mockFetchFn: async () => sampleTimings,
@@ -192,18 +197,18 @@ describe('Client-Side Prayer Times Sync & Cache Architecture', () => {
 
     assert.equal(result.source, 'cache');
     assert.equal(networkFetchCount, 0, 'Navigation remount must read immediately from cache with 0 network calls');
-    assert.equal(freshLastSyncedKeyRef.current, '2026-11-07|41.2995|69.2401|Tashkent|MWL');
+    assert.equal(freshLastSyncedKeyRef.current, '2026-11-07|41.2995|69.2401|Tashkent|Asia/Tashkent|uz');
     assert.equal(freshLastSyncedStatusRef.current, 'live');
   });
 
   it('4. deduplicates concurrent in-flight requests (React StrictMode double-mount protection)', async () => {
     const keyRef1 = { current: '' };
-    const statusRef1: { current: 'idle' | 'loading' | 'live' | 'fallback' | 'error' } = {
+    const statusRef1: { current: 'idle' | 'loading' | 'live' | 'error' } = {
       current: 'idle',
     };
 
     const keyRef2 = { current: '' };
-    const statusRef2: { current: 'idle' | 'loading' | 'live' | 'fallback' | 'error' } = {
+    const statusRef2: { current: 'idle' | 'loading' | 'live' | 'error' } = {
       current: 'idle',
     };
 
@@ -214,7 +219,8 @@ describe('Client-Side Prayer Times Sync & Cache Architecture', () => {
         lat: 41.2995,
         lng: 69.2401,
         resolvedCityName: 'Tashkent',
-        method: 'MWL',
+        timezone: 'Asia/Tashkent',
+        lang: 'uz',
         lastSyncedKeyRef: keyRef1,
         lastSyncedStatusRef: statusRef1,
         mockFetchFn: async () => {
@@ -227,7 +233,8 @@ describe('Client-Side Prayer Times Sync & Cache Architecture', () => {
         lat: 41.2995,
         lng: 69.2401,
         resolvedCityName: 'Tashkent',
-        method: 'MWL',
+        timezone: 'Asia/Tashkent',
+        lang: 'uz',
         lastSyncedKeyRef: keyRef2,
         lastSyncedStatusRef: statusRef2,
         mockFetchFn: async () => {
@@ -240,13 +247,13 @@ describe('Client-Side Prayer Times Sync & Cache Architecture', () => {
     assert.equal(networkFetchCount, 1, 'StrictMode double-mount must execute exactly 1 network fetch');
     assert.deepEqual(res1.data, sampleTimings);
     assert.deepEqual(res2.data, sampleTimings);
-    assert.equal(keyRef1.current, '2026-11-07|41.2995|69.2401|Tashkent|MWL');
-    assert.equal(keyRef2.current, '2026-11-07|41.2995|69.2401|Tashkent|MWL');
+    assert.equal(keyRef1.current, '2026-11-07|41.2995|69.2401|Tashkent|Asia/Tashkent|uz');
+    assert.equal(keyRef2.current, '2026-11-07|41.2995|69.2401|Tashkent|Asia/Tashkent|uz');
   });
 
-  it('5. triggers re-fetch or cache lookup when location or calculation method changes', async () => {
-    const lastSyncedKeyRef = { current: '2026-11-07|41.2995|69.2401|Tashkent|MWL' };
-    const lastSyncedStatusRef: { current: 'idle' | 'loading' | 'live' | 'fallback' | 'error' } = {
+  it('5. triggers re-fetch or cache lookup when location changes', async () => {
+    const lastSyncedKeyRef = { current: '2026-11-07|41.2995|69.2401|Tashkent|Asia/Tashkent|uz' };
+    const lastSyncedStatusRef: { current: 'idle' | 'loading' | 'live' | 'error' } = {
       current: 'live',
     };
 
@@ -268,7 +275,8 @@ describe('Client-Side Prayer Times Sync & Cache Architecture', () => {
       lat: 39.6542,
       lng: 66.9597,
       resolvedCityName: 'Samarkand',
-      method: 'MWL',
+      timezone: 'Asia/Tashkent',
+      lang: 'uz',
       lastSyncedKeyRef,
       lastSyncedStatusRef,
       mockFetchFn: async () => samarkandTimings,
@@ -277,11 +285,11 @@ describe('Client-Side Prayer Times Sync & Cache Architecture', () => {
     assert.equal(result.skipped, false);
     assert.equal(result.source, 'network');
     assert.equal(networkFetchCount, 1);
-    assert.equal(lastSyncedKeyRef.current, '2026-11-07|39.6542|66.9597|Samarkand|MWL');
+    assert.equal(lastSyncedKeyRef.current, '2026-11-07|39.6542|66.9597|Samarkand|Asia/Tashkent|uz');
     assert.equal(result.data?.city, 'Samarkand');
 
     // If user switches back to Tashkent, Tashkent is served from cache!
-    cache.set('2026-11-07|41.2995|69.2401|Tashkent|MWL', {
+    cache.set('2026-11-07|41.2995|69.2401|Tashkent|Asia/Tashkent|uz', {
       data: sampleTimings,
       timestamp: Date.now(),
     });
@@ -291,7 +299,8 @@ describe('Client-Side Prayer Times Sync & Cache Architecture', () => {
       lat: 41.2995,
       lng: 69.2401,
       resolvedCityName: 'Tashkent',
-      method: 'MWL',
+      timezone: 'Asia/Tashkent',
+      lang: 'uz',
       lastSyncedKeyRef,
       lastSyncedStatusRef,
       mockFetchFn: async () => sampleTimings,
@@ -299,24 +308,25 @@ describe('Client-Side Prayer Times Sync & Cache Architecture', () => {
 
     assert.equal(backToTashkentResult.source, 'cache');
     assert.equal(networkFetchCount, 1, 'Switching back to cached city must NOT make a network fetch');
-    assert.equal(lastSyncedKeyRef.current, '2026-11-07|41.2995|69.2401|Tashkent|MWL');
+    assert.equal(lastSyncedKeyRef.current, '2026-11-07|41.2995|69.2401|Tashkent|Asia/Tashkent|uz');
   });
 
   it('6. verifies that prayer status toggles and qaza counter do NOT trigger syncPrayerTimes (reminders eliminated)', () => {
     // In HomeDashboard.tsx:
     // `syncPrayerTimes` effect dependencies are:
-    // [isMounted, setPrayers, user?.preferences?.calculationMethod, user?.preferences?.city, user?.preferences?.latitude, user?.preferences?.longitude, activeLiturgicalDate, locationRevision]
+    // [isMounted, setPrayers, user?.preferences?.city, user?.preferences?.latitude, user?.preferences?.longitude, user?.preferences?.timezone, activeLiturgicalDate, locationRevision, lang]
     // Notice that neither `historyVersion`, `prayers`, `streak`, `qazaCount`, nor `remindersEnabled` are present!
     
     const effectDependencies = [
       'isMounted',
       'setPrayers',
-      'user?.preferences?.calculationMethod',
       'user?.preferences?.city',
       'user?.preferences?.latitude',
       'user?.preferences?.longitude',
+      'user?.preferences?.timezone',
       'activeLiturgicalDate',
       'locationRevision',
+      'lang',
     ];
 
     assert.ok(!effectDependencies.includes('historyVersion'), 'historyVersion must be removed from dependencies');

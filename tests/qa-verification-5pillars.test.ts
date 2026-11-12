@@ -273,12 +273,5 @@ describe('QA & Release Audit: 5-Pillar Enhancement Suite', () => {
       assert.equal(evaluateStrength('password123'), 'medium');
       assert.equal(evaluateStrength('Secure@P@ss2026'), 'strong');
     });
-
-    it('validates supported prayer calculation methods', () => {
-      const allowedMethods = ['MWL', 'ISNA', 'Egypt', 'Makkah', 'Karachi', 'Tehran'];
-      assert.equal(allowedMethods.includes('MWL'), true);
-      assert.equal(allowedMethods.includes('ISNA'), true);
-      assert.equal(allowedMethods.includes('InvalidMethod'), false);
-    });
   });
 });

@@ -516,9 +516,32 @@ describe('End-to-End QA, Performance & Release Audit Test Suite', () => {
     });
 
     it('verifies dynamic Isha endTime in /api/prayer-times matches next Fajr and has isOvernight: true', async () => {
-      // Test GET /api/prayer-times
-      const req = new NextRequest('http://localhost:3000/api/prayer-times?lat=41.2995&lng=69.2401');
-      const res = await getPrayerTimesHandler(req);
+      // Mock fatvo.uz so this unit test never depends on the live network
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = async () =>
+        new Response(
+          JSON.stringify({
+            date: '12-11-2026',
+            imsak: '05:35',
+            fajr: '05:45',
+            sunrise: '07:02',
+            dhuhr: '12:12',
+            asr: '15:25',
+            maghrib: '17:09',
+            isha: '18:24',
+            midnight: '00:06',
+            address: { region: '', city: 'Toshkent', county: '', country: 'Oʻzbekiston' },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+
+      let res: Response;
+      try {
+        const req = new NextRequest('http://localhost:3000/api/prayer-times?lat=41.2995&lng=69.2401');
+        res = await getPrayerTimesHandler(req);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
       assert.equal(res.status, 200);
 
       const json = await res.json();

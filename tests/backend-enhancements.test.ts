@@ -9,7 +9,7 @@ import { Group } from '../src/models/Group.ts';
 import { PrayerRecord } from '../src/models/Prayer.ts';
 
 import { PUT as updateProfileHandler } from '../src/app/api/user/profile/route.ts';
-import { GET as getPrayerTimesHandler, METHOD_MAP, clearPrayerTimesCache } from '../src/app/api/prayer-times/route.ts';
+import { GET as getPrayerTimesHandler, clearPrayerTimesCache } from '../src/app/api/prayer-times/route.ts';
 import { GET as getMemberPrayersHandler } from '../src/app/api/groups/[id]/members/[memberId]/prayers/route.ts';
 import { GET as getMemberHistoryHandler } from '../src/app/api/groups/[id]/member-history/route.ts';
 import { GET as getLeaderboardHandler, clearLeaderboardCache } from '../src/app/api/leaderboard/route.ts';
@@ -23,7 +23,6 @@ interface MockUserDoc {
   role: 'user' | 'admin';
   preferences: {
     language: 'uz' | 'ru' | 'en';
-    calculationMethod?: string;
     showOnLeaderboard?: boolean;
     city?: string;
     latitude?: number;
@@ -96,7 +95,6 @@ function setupMocks() {
       role: 'user',
       preferences: {
         language: 'uz',
-        calculationMethod: 'MWL',
         showOnLeaderboard: true,
         city: 'Samarkand',
         latitude: 39.6542,
@@ -117,7 +115,6 @@ function setupMocks() {
       role: 'user',
       preferences: {
         language: 'en',
-        calculationMethod: 'ISNA',
         showOnLeaderboard: true,
         city: 'Tashkent',
         latitude: 41.2995,
@@ -138,7 +135,6 @@ function setupMocks() {
       role: 'user',
       preferences: {
         language: 'ru',
-        calculationMethod: 'RUSSIA',
         showOnLeaderboard: false,
       },
       createdAt: new Date('2026-01-03T00:00:00Z'),
@@ -271,73 +267,42 @@ function setupMocks() {
 }
 
 let mockFetchFailure = false;
+let lastUpstreamUrl: URL | null = null;
 const originalFetch = global.fetch;
 
 function setupMockFetch() {
   global.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     const urlStr = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
 
-    if (urlStr.includes('api.aladhan.com')) {
+    if (urlStr.includes('api.fatvo.uz')) {
       if (mockFetchFailure) {
         throw new Error('Upstream network connection timed out');
       }
 
       const parsedUrl = new URL(urlStr);
-      const lat = parseFloat(parsedUrl.searchParams.get('latitude') || '41.2995');
-      const lng = parseFloat(parsedUrl.searchParams.get('longitude') || '69.2401');
-      const method = parseInt(parsedUrl.searchParams.get('method') || '3', 10);
+      lastUpstreamUrl = parsedUrl;
+      const lng = parseFloat(parsedUrl.searchParams.get('lon') || '69.2401');
 
       // Longitude progression: as longitude decreases (moving west: Tashkent 69.2° -> Samarkand 67.0° -> Bukhara 64.4°),
       // solar noon occurs later. Calculate base minutes offset based on longitude diff from Tashkent (69.24°).
-      const lngOffsetMinutes = Math.round((69.2401 - lng) * 4);
-
-      // Method differences: MWL (method 3) uses 18° Fajr / 17° Isha, ISNA (method 2) uses 15° Fajr / 15° Isha
-      let fajrHour = 5;
-      let fajrMin = (method === 2 ? 43 : 27) + lngOffsetMinutes;
-      if (fajrMin >= 60) {
-        fajrHour += Math.floor(fajrMin / 60);
-        fajrMin = fajrMin % 60;
-      }
-
-      let ishaHour = 18;
-      let ishaMin = (method === 2 ? 30 : 41) + lngOffsetMinutes;
-      if (ishaMin >= 60) {
-        ishaHour += Math.floor(ishaMin / 60);
-        ishaMin = ishaMin % 60;
-      }
-
-      let dhuhrHour = 12;
-      let dhuhrMin = 5 + lngOffsetMinutes;
-      if (dhuhrMin >= 60) {
-        dhuhrHour += Math.floor(dhuhrMin / 60);
-        dhuhrMin = dhuhrMin % 60;
-      }
-
+      const off = Math.max(0, Math.round((69.2401 - lng) * 4)); // east of Tashkent clamps to 0
       const pad = (n: number) => String(n).padStart(2, '0');
+      const hm = (h: number, m: number) => `${pad(h + Math.floor(m / 60))}:${pad(m % 60)}`;
 
       return {
         ok: true,
         status: 200,
         json: async () => ({
-          code: 200,
-          status: 'OK',
-          data: {
-            timings: {
-              Fajr: `${pad(fajrHour)}:${pad(fajrMin)}`,
-              Sunrise: `06:${pad(55 + lngOffsetMinutes)}`,
-              Dhuhr: `${pad(dhuhrHour)}:${pad(dhuhrMin)}`,
-              Asr: `15:${pad(10 + lngOffsetMinutes)}`,
-              Sunset: `17:${pad(15 + lngOffsetMinutes)}`,
-              Maghrib: `17:${pad(15 + lngOffsetMinutes)}`,
-              Isha: `${pad(ishaHour)}:${pad(ishaMin)}`,
-            },
-            meta: {
-              latitude: lat,
-              longitude: lng,
-              timezone: 'Asia/Tashkent',
-              method: { id: method },
-            },
-          },
+          date: parsedUrl.searchParams.get('date'),
+          imsak: hm(5, 17 + off),
+          fajr: hm(5, 27 + off),
+          sunrise: hm(6, 55 + off),
+          dhuhr: hm(12, 5 + off),
+          asr: hm(15, 10 + off),
+          maghrib: hm(17, 15 + off),
+          isha: hm(18, 41 + off),
+          midnight: '00:06',
+          address: { region: '', city: 'Toshkent', county: '', country: 'Oʻzbekiston' },
         }),
       } as unknown as Response;
     }
@@ -351,6 +316,7 @@ describe('Backend Enhancements: Location, Methods, Circle Prayer History & Leade
     setupMocks();
     setupMockFetch();
     mockFetchFailure = false;
+    lastUpstreamUrl = null;
     clearPrayerTimesCache();
     clearLeaderboardCache();
   });
@@ -360,9 +326,9 @@ describe('Backend Enhancements: Location, Methods, Circle Prayer History & Leade
   });
 
   // =========================================================================
-  // 1. User Profile Location, Timezone & Calculation Method Persistence
+  // 1. User Profile Location & Timezone Persistence
   // =========================================================================
-  describe('1. Location, Timezone & Calculation Method Preferences in User Profile', () => {
+  describe('1. Location & Timezone Preferences in User Profile', () => {
     it('successfully updates city, latitude, longitude, and timezone in user preferences', async () => {
       const req = new NextRequest('http://localhost:3000/api/user/profile', {
         method: 'PUT',
@@ -373,7 +339,6 @@ describe('Backend Enhancements: Location, Methods, Circle Prayer History & Leade
             latitude: 39.7747,
             longitude: 64.4286,
             timezone: 'Asia/Samarkand',
-            calculationMethod: 'TURKEY',
           },
         }),
       });
@@ -386,7 +351,7 @@ describe('Backend Enhancements: Location, Methods, Circle Prayer History & Leade
       assert.equal(json.data.user.preferences.latitude, 39.7747);
       assert.equal(json.data.user.preferences.longitude, 64.4286);
       assert.equal(json.data.user.preferences.timezone, 'Asia/Samarkand');
-      assert.equal(json.data.user.preferences.calculationMethod, 'TURKEY');
+      assert.equal(json.data.user.preferences.calculationMethod, undefined);
     });
 
     it('rejects invalid latitude and longitude values with 400', async () => {
@@ -455,25 +420,9 @@ describe('Backend Enhancements: Location, Methods, Circle Prayer History & Leade
   });
 
   // =========================================================================
-  // 2. Prayer Times Route & Calculation Methods
+  // 2. Prayer Times Route (fatvo.uz)
   // =========================================================================
-  describe('2. Prayer Times Route: Preferences, Method Mappings & City Fallbacks', () => {
-    it('verifies all 13 calculation methods map to authoritative Aladhan numbers', () => {
-      assert.equal(METHOD_MAP.MWL, 3, 'MWL must map to 3 (Muslim World League)');
-      assert.equal(METHOD_MAP.ISNA, 2, 'ISNA must map to 2 (Islamic Society of North America)');
-      assert.equal(METHOD_MAP.EGYPT, 5, 'EGYPT must map to 5 (Egyptian Survey Authority)');
-      assert.equal(METHOD_MAP.MAKKAH, 4, 'MAKKAH must map to 4 (Umm Al-Qura University)');
-      assert.equal(METHOD_MAP.KARACHI, 1, 'KARACHI must map to 1 (University of Islamic Sciences)');
-      assert.equal(METHOD_MAP.TEHRAN, 7, 'TEHRAN must map to 7 (University of Tehran)');
-      assert.equal(METHOD_MAP.GULF, 8, 'GULF must map to 8 (Gulf Region)');
-      assert.equal(METHOD_MAP.KUWAIT, 9, 'KUWAIT must map to 9 (Kuwait)');
-      assert.equal(METHOD_MAP.QATAR, 10, 'QATAR must map to 10 (Qatar)');
-      assert.equal(METHOD_MAP.SINGAPORE, 11, 'SINGAPORE must map to 11 (Majlis Ugama Islam Singapura)');
-      assert.equal(METHOD_MAP.FRANCE, 12, 'FRANCE must map to 12 (UOIF)');
-      assert.equal(METHOD_MAP.TURKEY, 13, 'TURKEY must map to 13 (Diyanet)');
-      assert.equal(METHOD_MAP.RUSSIA, 14, 'RUSSIA must map to 14 (Muslims of Russia)');
-    });
-
+  describe('2. Prayer Times Route (fatvo.uz): Preferences, Timezones & City Resolution', () => {
     it('findCityByNameOrId and findCityByCoordinates resolve known cities accurately', () => {
       const samarkand = findCityByNameOrId('samarkand');
       assert.ok(samarkand);
@@ -484,7 +433,7 @@ describe('Backend Enhancements: Location, Methods, Circle Prayer History & Leade
       assert.equal(byCoords.id, 'tashkent');
     });
 
-    it('reads city and method from user preferences when not supplied in searchParams', async () => {
+    it('reads the saved location from user preferences when not supplied in searchParams', async () => {
       const req = new NextRequest('http://localhost:3000/api/prayer-times', {
         headers: { cookie: `salahtrack_session=${sessionTokenUserA}` },
       });
@@ -493,38 +442,57 @@ describe('Backend Enhancements: Location, Methods, Circle Prayer History & Leade
       assert.equal(res.status, 200);
       const json = await res.json();
       assert.equal(json.success, true);
-      // User A preference has city 'Samarkand' and method 'MWL' (3)
-      assert.equal(json.method, 3);
+      // User A preference has city 'Samarkand' with Samarkand coordinates
+      assert.equal(json.method, undefined, 'calculation methods are retired');
       assert.equal(json.city, 'Samarkand');
       assert.equal(json.location.latitude, 39.6542);
       assert.equal(json.location.longitude, 66.9597);
     });
 
-    it('forwards custom method in query params overriding preferences', async () => {
-      const req = new NextRequest('http://localhost:3000/api/prayer-times?method=TURKEY', {
-        headers: { cookie: `salahtrack_session=${sessionTokenUserA}` },
-      });
-
+    it('calls fatvo.uz with lat/lon, DD-MM-YYYY date, tz_offset from the city timezone, and lang', async () => {
+      const req = new NextRequest('http://localhost:3000/api/prayer-times?city=Tashkent&date=2026-11-12&lang=ru');
       const res = await getPrayerTimesHandler(req);
       assert.equal(res.status, 200);
       const json = await res.json();
-      assert.equal(json.success, true);
-      assert.equal(json.method, 13);
+
+      assert.ok(lastUpstreamUrl, 'Upstream fatvo.uz must be called');
+      assert.equal(lastUpstreamUrl.searchParams.get('lat'), '41.2995');
+      assert.equal(lastUpstreamUrl.searchParams.get('lon'), '69.2401');
+      assert.equal(lastUpstreamUrl.searchParams.get('date'), '12-11-2026');
+      assert.equal(lastUpstreamUrl.searchParams.get('tz_offset'), '5');
+      assert.equal(lastUpstreamUrl.searchParams.get('lang'), 'ru');
+      assert.equal(json.provider, 'fatvo.uz');
+      assert.equal(json.tzOffset, 5);
+      assert.equal(json.timings.fajr.endTime, json.extras.sunrise, 'Fajr window must end at sunrise');
     });
 
-    it('changing calculation method (MWL vs ISNA) recalculates Fajr and Isha timings', async () => {
-      const reqMwl = new NextRequest('http://localhost:3000/api/prayer-times?city=Tashkent&method=MWL');
-      const resMwl = await getPrayerTimesHandler(reqMwl);
-      assert.equal(resMwl.status, 200);
-      const jsonMwl = await resMwl.json();
+    it('derives tz_offset from the client timezone for custom coordinates (incl. fractional offsets)', async () => {
+      const req = new NextRequest(
+        'http://localhost:3000/api/prayer-times?latitude=19.07&longitude=72.87&timezone=Asia/Kolkata&date=2026-11-12'
+      );
+      const res = await getPrayerTimesHandler(req);
+      assert.equal(res.status, 200);
+      assert.equal(lastUpstreamUrl?.searchParams.get('tz_offset'), '5.5');
+      const json = await res.json();
+      assert.equal(json.timezone, 'Asia/Kolkata');
+    });
 
-      const reqIsna = new NextRequest('http://localhost:3000/api/prayer-times?city=Tashkent&method=ISNA');
-      const resIsna = await getPrayerTimesHandler(reqIsna);
-      assert.equal(resIsna.status, 200);
-      const jsonIsna = await resIsna.json();
+    it('ignores invalid timezone strings and falls back to a longitude estimate', async () => {
+      const req = new NextRequest(
+        'http://localhost:3000/api/prayer-times?latitude=19.07&longitude=72.87&timezone=Not/AZone&date=2026-11-12'
+      );
+      const res = await getPrayerTimesHandler(req);
+      assert.equal(res.status, 200);
+      assert.equal(lastUpstreamUrl?.searchParams.get('tz_offset'), '5'); // round(72.87 / 15)
+      const json = await res.json();
+      assert.notEqual(json.timezone, 'Not/AZone');
+    });
 
-      assert.notEqual(jsonMwl.timings.fajr.time, jsonIsna.timings.fajr.time, 'Fajr must differ between MWL and ISNA');
-      assert.notEqual(jsonMwl.timings.isha.time, jsonIsna.timings.isha.time, 'Isha must differ between MWL and ISNA');
+    it('uses the reverse-geocoded fatvo.uz city name for custom coordinates', async () => {
+      const req = new NextRequest('http://localhost:3000/api/prayer-times?latitude=41.6&longitude=70.1&timezone=Asia/Tashkent');
+      const res = await getPrayerTimesHandler(req);
+      const json = await res.json();
+      assert.equal(json.city, 'Toshkent');
     });
 
     it('changing location (Tashkent vs Samarkand vs Bukhara) changes timings according to longitude progression', async () => {
@@ -566,24 +534,23 @@ describe('Backend Enhancements: Location, Methods, Circle Prayer History & Leade
         assert.equal(json.code, 'PRAYER_TIMES_UNAVAILABLE');
         assert.equal(
           json.error,
-          'Unable to calculate prayer times for the requested location. External service unavailable.'
+          'Prayer times service (fatvo.uz) is unavailable. Please try again later.'
         );
       } finally {
         mockFetchFailure = false;
       }
     });
 
-    it('Tashkent location returns verified fallback timings with source: fallback on API failure', async () => {
+    it('Tashkent also returns 502 on API failure — no hardcoded fallback timings exist anymore', async () => {
       mockFetchFailure = true;
       try {
         const req = new NextRequest('http://localhost:3000/api/prayer-times?city=tashkent');
         const res = await getPrayerTimesHandler(req);
-        assert.equal(res.status, 200);
+        assert.equal(res.status, 502);
         const json = await res.json();
-        assert.equal(json.success, true);
-        assert.equal(json.source, 'fallback');
-        assert.ok(json.timings);
-        assert.equal(json.city, 'Tashkent');
+        assert.equal(json.success, false);
+        assert.equal(json.code, 'PRAYER_TIMES_UNAVAILABLE');
+        assert.equal(json.timings, undefined);
       } finally {
         mockFetchFailure = false;
       }

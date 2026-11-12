@@ -95,7 +95,6 @@ export async function POST(request: NextRequest) {
       role: 'user',
       preferences: {
         language: 'uz',
-        calculationMethod: 'MWL',
       },
     });
 

@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useMemo, useEffect, Suspense } from 'react';
+import { saveLocation } from '@/lib/location';
 import Link from 'next/link';
 import {
   User as UserIcon,
@@ -16,7 +17,6 @@ import {
   EyeOff,
   MapPin,
   Crosshair,
-  ChevronDown,
 } from 'lucide-react';
 import { useLanguage } from '@/context/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
@@ -25,15 +25,6 @@ import { findCityByCoordinates, findCityByNameOrId } from '@/lib/cities';
 import { CityPickerModal } from '@/components/qibla/CityPickerModal';
 import type { CityPreset } from '@/types/qibla';
 import type { SafeUser } from '@/lib/auth/guard';
-
-const CALCULATION_METHODS = [
-  { id: 'MWL', name: 'Muslim World League (MWL)' },
-  { id: 'ISNA', name: 'Islamic Society of North America (ISNA)' },
-  { id: 'Egypt', name: 'Egyptian General Authority of Survey' },
-  { id: 'Makkah', name: 'Umm al-Qura University, Makkah' },
-  { id: 'Karachi', name: 'University of Islamic Sciences, Karachi' },
-  { id: 'Tehran', name: 'Institute of Geophysics, University of Tehran' },
-];
 
 function AuthenticatedAccountView({
   user,
@@ -52,10 +43,6 @@ function AuthenticatedAccountView({
   const [profileSuccess, setProfileSuccess] = useState<string | null>(null);
   const [profileError, setProfileError] = useState<string | null>(null);
 
-  // Calculation Method State
-  const [calculationMethod, setCalculationMethod] = useState(user.preferences?.calculationMethod || 'MWL');
-  const [calcSaving, setCalcSaving] = useState(false);
-  const [calcSuccess, setCalcSuccess] = useState<string | null>(null);
 
   // Password Change State
   const [currentPassword, setCurrentPassword] = useState('');
@@ -144,7 +131,7 @@ function AuthenticatedAccountView({
   const [gpsDetecting, setGpsDetecting] = useState(false);
 
   // Instant location persistence
-  const persistLocation = async (nextLoc: typeof locationData) => {
+  const persistLocation = async (nextLoc: typeof locationData, source: 'gps' | 'manual' = 'manual') => {
     setLocationSaving(true);
     setLocationSuccess(null);
     setLocationError(null);
@@ -177,6 +164,8 @@ function AuthenticatedAccountView({
           lat: nextLoc.latitude,
           lng: nextLoc.longitude,
           timezone: nextLoc.timezone,
+          source,
+          updatedAt: Date.now(),
         })
       );
 
@@ -244,7 +233,7 @@ function AuthenticatedAccountView({
         };
         setLocationData(nextLoc);
         setGpsDetecting(false);
-        persistLocation(nextLoc);
+        persistLocation(nextLoc, 'gps');
       },
       (err) => {
         let errorMsg = t.profile.gpsGenericError || 'Could not determine GPS coordinates';
@@ -260,41 +249,6 @@ function AuthenticatedAccountView({
       },
       { timeout: 10000, enableHighAccuracy: true }
     );
-  };
-
-  // Instant calculation method selection & auto-save
-  const handleSelectCalcMethod = async (methodId: string) => {
-    setCalculationMethod(methodId);
-    setCalcSaving(true);
-    setCalcSuccess(null);
-
-    try {
-      const res = await fetch('/api/user/profile', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
-        body: JSON.stringify({
-          preferences: {
-            calculationMethod: methodId,
-          },
-        }),
-      });
-
-      const json = await res.json();
-      if (res.ok && json.success) {
-        localStorage.setItem('salahtrack_calc_method', methodId);
-        window.dispatchEvent(new CustomEvent('salahtrack_location_update'));
-        window.dispatchEvent(new Event('local-storage-update'));
-        window.dispatchEvent(new Event('storage'));
-        setCalcSuccess(t.profile.profileUpdated);
-        await refreshUser();
-        setTimeout(() => setCalcSuccess(null), 3000);
-      }
-    } catch {
-      // ignore
-    } finally {
-      setCalcSaving(false);
-    }
   };
 
   // Save Personal Info
@@ -313,7 +267,6 @@ function AuthenticatedAccountView({
           name: name.trim(),
           preferences: {
             language: lang,
-            calculationMethod,
             showOnLeaderboard: user?.preferences?.showOnLeaderboard ?? false,
           },
         }),
@@ -497,7 +450,7 @@ function AuthenticatedAccountView({
       </div>
 
       {/* ========================================================================= */}
-      {/* CARD 2: Prayer Times & Location (City & Instant Auto-Save Calculation)   */}
+      {/* CARD 2: Prayer Times & Location (City & Instant Auto-Save)   */}
       {/* ========================================================================= */}
       <div className="rounded-2xl border border-slate-200 bg-white p-5 sm:p-6 dark:border-slate-800 dark:bg-slate-900 shadow-2xs space-y-5">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
@@ -551,15 +504,6 @@ function AuthenticatedAccountView({
           >
             <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
             <span>{locationError}</span>
-          </div>
-        )}
-        {calcSuccess && (
-          <div
-            role="status"
-            className="p-3.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 text-xs font-medium flex items-center gap-2"
-          >
-            <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
-            <span>{calcSuccess}</span>
           </div>
         )}
 
@@ -616,41 +560,6 @@ function AuthenticatedAccountView({
                 {t.profile.timezone || 'Timezone'}:
               </span>
               <span>{locationData.timezone}</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Calculation Method Sleek Selector (Instant Auto-Save) */}
-        <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-slate-800">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
-            <label
-              htmlFor="calcMethodSelect"
-              className="text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300 flex items-center gap-1.5"
-            >
-              <Compass className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-              <span>{t.profile.calcMethod}</span>
-              {calcSaving && <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-600 ml-1" />}
-            </label>
-            <span className="text-[11px] text-slate-500 dark:text-slate-400">
-              {t.account.sections.preferencesDesc}
-            </span>
-          </div>
-
-          <div className="relative">
-            <select
-              id="calcMethodSelect"
-              value={calculationMethod}
-              onChange={(e) => handleSelectCalcMethod(e.target.value)}
-              className="w-full min-h-[44px] appearance-none px-3.5 py-2.5 pr-10 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-xl text-xs sm:text-sm font-medium text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500 cursor-pointer transition-colors"
-            >
-              {CALCULATION_METHODS.map((method) => (
-                <option key={method.id} value={method.id} className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">
-                  {method.name}
-                </option>
-              ))}
-            </select>
-            <div className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400">
-              <ChevronDown className="w-4 h-4" />
             </div>
           </div>
         </div>
@@ -844,7 +753,6 @@ function AuthenticatedAccountView({
 
 function GuestSettingsView() {
   const { t, lang } = useLanguage();
-  const [calcMethod, setCalcMethod] = useState('MWL');
   const [locationData, setLocationData] = useState({
     city: 'Tashkent',
     lat: 41.2995,
@@ -855,10 +763,6 @@ function GuestSettingsView() {
   useEffect(() => {
     queueMicrotask(() => {
       try {
-        const storedMethod = localStorage.getItem('salahtrack_calc_method');
-        if (storedMethod) {
-          setCalcMethod(storedMethod);
-        }
         const stored = localStorage.getItem('salahtrack_location');
         if (stored) {
           const parsed = JSON.parse(stored);
@@ -887,8 +791,7 @@ function GuestSettingsView() {
       timezone: cityPreset.timezone || 'Asia/Tashkent',
     };
     setLocationData(nextLoc);
-    localStorage.setItem('salahtrack_location', JSON.stringify(nextLoc));
-    window.dispatchEvent(new CustomEvent('salahtrack_location_update'));
+    void saveLocation({ ...nextLoc, source: 'manual' }, { syncToServer: false });
     window.dispatchEvent(new Event('local-storage-update'));
     window.dispatchEvent(new Event('storage'));
     setIsCityModalOpen(false);
@@ -906,22 +809,11 @@ function GuestSettingsView() {
       timezone: preset?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Tashkent',
     };
     setLocationData(nextLoc);
-    localStorage.setItem('salahtrack_location', JSON.stringify(nextLoc));
-    window.dispatchEvent(new CustomEvent('salahtrack_location_update'));
+    void saveLocation({ ...nextLoc, source: 'manual' }, { syncToServer: false });
     window.dispatchEvent(new Event('local-storage-update'));
     window.dispatchEvent(new Event('storage'));
     setIsCityModalOpen(false);
     setSavedNotice(t.profile.locationSaved || 'Location saved');
-    setTimeout(() => setSavedNotice(null), 3000);
-  };
-
-  const handleSaveMethod = (m: string) => {
-    setCalcMethod(m);
-    localStorage.setItem('salahtrack_calc_method', m);
-    window.dispatchEvent(new CustomEvent('salahtrack_location_update'));
-    window.dispatchEvent(new Event('local-storage-update'));
-    window.dispatchEvent(new Event('storage'));
-    setSavedNotice(t.profile.profileUpdated);
     setTimeout(() => setSavedNotice(null), 3000);
   };
 
@@ -937,7 +829,7 @@ function GuestSettingsView() {
         </div>
       )}
 
-      {/* Guest Location & Calculation Card */}
+      {/* Guest Location Card */}
       <div className="rounded-2xl border border-slate-200 bg-white p-5 sm:p-6 dark:border-slate-800 dark:bg-slate-900 shadow-2xs space-y-5">
         <div>
           <h2 className="text-base font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
@@ -976,40 +868,6 @@ function GuestSettingsView() {
             <Compass className="w-4 h-4" />
             <span>{t.profile.changeLocation || t.qibla.selectCity}</span>
           </button>
-        </div>
-
-        {/* Calculation Method Sleek Selector */}
-        <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-slate-800">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
-            <label
-              htmlFor="guestCalcMethodSelect"
-              className="text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300 flex items-center gap-1.5"
-            >
-              <Compass className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-              <span>{t.profile.calcMethod}</span>
-            </label>
-            <span className="text-[11px] text-slate-500 dark:text-slate-400">
-              {t.account.sections.preferencesDesc}
-            </span>
-          </div>
-
-          <div className="relative">
-            <select
-              id="guestCalcMethodSelect"
-              value={calcMethod}
-              onChange={(e) => handleSaveMethod(e.target.value)}
-              className="w-full min-h-[44px] appearance-none px-3.5 py-2.5 pr-10 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-xl text-xs sm:text-sm font-medium text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500 cursor-pointer transition-colors"
-            >
-              {CALCULATION_METHODS.map((method) => (
-                <option key={method.id} value={method.id} className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">
-                  {method.name}
-                </option>
-              ))}
-            </select>
-            <div className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400">
-              <ChevronDown className="w-4 h-4" />
-            </div>
-          </div>
         </div>
 
         {isCityModalOpen && (

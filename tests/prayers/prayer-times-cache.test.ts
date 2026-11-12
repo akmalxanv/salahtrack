@@ -38,36 +38,22 @@ describe('Prayer Times In-Memory TTL Cache & Request Deduplication', () => {
       }
 
       const urlStr = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
-      const parsedUrl = new URL(urlStr);
-      const lat = parseFloat(parsedUrl.searchParams.get('latitude') || '41.2995');
-      const lng = parseFloat(parsedUrl.searchParams.get('longitude') || '69.2401');
-      const method = parseInt(parsedUrl.searchParams.get('method') || '3', 10);
-      const school = parseInt(parsedUrl.searchParams.get('school') || '1', 10);
+      void urlStr;
 
       return {
         ok: true,
         status: 200,
         json: async () => ({
-          code: 200,
-          status: 'OK',
-          data: {
-            timings: {
-              Fajr: '05:00',
-              Sunrise: '06:30',
-              Dhuhr: '12:30',
-              Asr: '16:00',
-              Sunset: '18:15',
-              Maghrib: '18:15',
-              Isha: '19:45',
-            },
-            meta: {
-              latitude: lat,
-              longitude: lng,
-              timezone: 'Asia/Tashkent',
-              method: { id: method },
-              school: school === 1 ? 'HANAFI' : 'STANDARD',
-            },
-          },
+          date: '12-11-2026',
+          imsak: '04:50',
+          fajr: '05:00',
+          sunrise: '06:30',
+          dhuhr: '12:30',
+          asr: '16:00',
+          maghrib: '18:15',
+          isha: '19:45',
+          midnight: '00:06',
+          address: { region: '', city: 'Toshkent', county: '', country: 'Oʻzbekiston' },
         }),
       } as unknown as Response;
     };
@@ -186,9 +172,9 @@ describe('Prayer Times In-Memory TTL Cache & Request Deduplication', () => {
   });
 
   // =========================================================================
-  // 3. Failure & Fallback Cache Immunity
+  // 3. Failure Cache Immunity
   // =========================================================================
-  describe('3. Failure & Fallback Cache Immunity', () => {
+  describe('3. Failure Cache Immunity', () => {
     it('does NOT cache external API failures so retries can succeed', async () => {
       shouldFailFetch = true;
 
@@ -209,16 +195,16 @@ describe('Prayer Times In-Memory TTL Cache & Request Deduplication', () => {
       assert.equal(getPrayerTimesCacheSize(), 1, 'Successful retry is now cached');
     });
 
-    it('does NOT cache Tashkent fallback timings under external API failure', async () => {
+    it('returns 502 (no hardcoded fallback) under external API failure and does not cache it', async () => {
       shouldFailFetch = true;
 
-      const reqFallback = new NextRequest('http://localhost:3000/api/prayer-times?city=tashkent');
-      const resFallback = await getPrayerTimesHandler(reqFallback);
+      const reqFail = new NextRequest('http://localhost:3000/api/prayer-times?city=tashkent');
+      const resFail = await getPrayerTimesHandler(reqFail);
 
-      assert.equal(resFallback.status, 200);
-      const jsonFallback = await resFallback.json();
-      assert.equal(jsonFallback.source, 'fallback');
-      assert.equal(getPrayerTimesCacheSize(), 0, 'Fallback timings must NOT be stored in live cache');
+      assert.equal(resFail.status, 502);
+      const jsonFail = await resFail.json();
+      assert.equal(jsonFail.code, 'PRAYER_TIMES_UNAVAILABLE');
+      assert.equal(getPrayerTimesCacheSize(), 0, 'Failures must NOT be stored in cache');
 
       // Upstream recovers
       shouldFailFetch = false;
@@ -227,7 +213,7 @@ describe('Prayer Times In-Memory TTL Cache & Request Deduplication', () => {
 
       assert.equal(resLive.status, 200);
       const jsonLive = await resLive.json();
-      assert.equal(jsonLive.source, 'live', 'Live API timings must be fetched upon recovery, not stale fallback');
+      assert.equal(jsonLive.source, 'live', 'Live fatvo.uz timings must be fetched upon recovery');
       assert.equal(getPrayerTimesCacheSize(), 1);
     });
   });
@@ -236,23 +222,23 @@ describe('Prayer Times In-Memory TTL Cache & Request Deduplication', () => {
   // 4. Cache Key Determinism & Parameter Isolation
   // =========================================================================
   describe('4. Cache Key Determinism & Parameter Isolation', () => {
-    it('builds canonical key conforming to ${date || "today"}_${lat.toFixed(4)}_${lng.toFixed(4)}_${method}_${school}', () => {
-      const keyToday = buildPrayerTimesCacheKey(null, 41.2995, 69.2401, 3, 1);
-      assert.equal(keyToday, 'today_41.2995_69.2401_3_1');
+    it('builds canonical key conforming to ${date || "today"}_${lat.toFixed(4)}_${lng.toFixed(4)}_${tzOffset}_${lang}', () => {
+      const keyToday = buildPrayerTimesCacheKey(null, 41.2995, 69.2401, 5, 'uz');
+      assert.equal(keyToday, 'today_41.2995_69.2401_5_uz');
 
-      const keySpecificDate = buildPrayerTimesCacheKey('2026-11-07', 41.2995, 69.2401, 3, 1);
-      assert.equal(keySpecificDate, '2026-11-07_41.2995_69.2401_3_1');
+      const keySpecificDate = buildPrayerTimesCacheKey('2026-11-07', 41.2995, 69.2401, 5, 'uz');
+      assert.equal(keySpecificDate, '2026-11-07_41.2995_69.2401_5_uz');
 
-      const keyShafi = buildPrayerTimesCacheKey('2026-11-07', 41.2995, 69.2401, 3, 0);
-      assert.equal(keyShafi, '2026-11-07_41.2995_69.2401_3_0');
+      const keyRu = buildPrayerTimesCacheKey('2026-11-07', 41.2995, 69.2401, 5, 'ru');
+      assert.equal(keyRu, '2026-11-07_41.2995_69.2401_5_ru');
 
-      const keyMethodIsna = buildPrayerTimesCacheKey('2026-11-07', 41.2995, 69.2401, 2, 1);
-      assert.equal(keyMethodIsna, '2026-11-07_41.2995_69.2401_2_1');
+      const keyOffset = buildPrayerTimesCacheKey('2026-11-07', 41.2995, 69.2401, 5.5, 'uz');
+      assert.equal(keyOffset, '2026-11-07_41.2995_69.2401_5.5_uz');
     });
 
     it('rounds micro-differences in coordinates to 4 decimal places (~11m)', () => {
-      const key1 = buildPrayerTimesCacheKey(null, 41.29950001, 69.24010002, 3, 1);
-      const key2 = buildPrayerTimesCacheKey(null, 41.29950004, 69.24010003, 3, 1);
+      const key1 = buildPrayerTimesCacheKey(null, 41.29950001, 69.24010002, 5, 'uz');
+      const key2 = buildPrayerTimesCacheKey(null, 41.29950004, 69.24010003, 5, 'uz');
       assert.equal(key1, key2);
     });
   });
@@ -267,8 +253,6 @@ describe('Prayer Times In-Memory TTL Cache & Request Deduplication', () => {
       country: 'Uzbekistan',
       timezone: 'Asia/Tashkent',
       location: { latitude: 41.2995, longitude: 69.2401 },
-      method: 3,
-      school: 'Hanafi',
       timings: {
         fajr: { time: '05:00', endTime: '06:30' },
         dhuhr: { time: '12:30', endTime: '16:00' },
@@ -276,6 +260,9 @@ describe('Prayer Times In-Memory TTL Cache & Request Deduplication', () => {
         maghrib: { time: '18:15', endTime: '19:45' },
         isha: { time: '19:45', endTime: '05:00', isOvernight: true },
       },
+      provider: 'fatvo.uz',
+      tzOffset: 5,
+      date: '2026-11-12',
       source: 'live',
     };
 

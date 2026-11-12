@@ -21,7 +21,6 @@ interface MockUserDoc {
   role: 'user' | 'admin';
   preferences: {
     language: 'uz' | 'ru' | 'en';
-    calculationMethod?: string;
   };
   passwordResetTokenHash?: string;
   passwordResetExpires?: Date;
@@ -91,7 +90,7 @@ function setupMocks() {
       username: doc.username || 'testuser',
       passwordHash: doc.passwordHash || '',
       role: 'user',
-      preferences: { language: 'uz', calculationMethod: 'MWL' },
+      preferences: { language: 'uz' },
       createdAt: new Date(),
       updatedAt: new Date(),
       save: async function () { return this; },
@@ -125,7 +124,7 @@ describe('Password Recovery & Reset Endpoints', () => {
         username: 'ahmad',
         passwordHash,
         role: 'user',
-        preferences: { language: 'uz', calculationMethod: 'MWL' },
+        preferences: { language: 'uz' },
         createdAt: new Date(),
         updatedAt: new Date(),
         save: async function () { return this; },
@@ -199,7 +198,7 @@ describe('Password Recovery & Reset Endpoints', () => {
         passwordResetTokenHash: tokenHash,
         passwordResetExpires: new Date(Date.now() + 10 * 60 * 1000), // 10m left
         role: 'user',
-        preferences: { language: 'uz', calculationMethod: 'MWL' },
+        preferences: { language: 'uz' },
         createdAt: new Date(),
         updatedAt: new Date(),
         save: async function () { return this; },
@@ -260,7 +259,7 @@ describe('Password Recovery & Reset Endpoints', () => {
         passwordResetTokenHash: tokenHash,
         passwordResetExpires: new Date(Date.now() - 5000), // Expired 5 seconds ago
         role: 'user',
-        preferences: { language: 'uz', calculationMethod: 'MWL' },
+        preferences: { language: 'uz' },
         createdAt: new Date(),
         updatedAt: new Date(),
         save: async function () { return this; },

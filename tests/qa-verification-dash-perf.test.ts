@@ -559,32 +559,21 @@ describe('QA Verification: Dashboard Layout & Performance Optimizations', () => 
 
       clearPrayerTimesCache();
 
-      // Mock global fetch to return deterministic Aladhan timings
+      // Mock global fetch to return deterministic fatvo.uz timings
       const originalFetch = globalThis.fetch;
       globalThis.fetch = async () => {
         return new Response(
           JSON.stringify({
-            code: 200,
-            status: 'OK',
-            data: {
-              timings: {
-                Fajr: '04:47',
-                Sunrise: '06:19',
-                Dhuhr: '12:13',
-                Asr: '16:20',
-                Sunset: '18:05',
-                Maghrib: '18:05',
-                Isha: '19:32',
-                Imsak: '04:37',
-                Midnight: '23:59',
-              },
-              meta: {
-                latitude: 41.2995,
-                longitude: 69.2401,
-                timezone: 'Asia/Tashkent',
-                method: { id: 3, name: 'Muslim World League' },
-              },
-            },
+            date: '12-11-2026',
+            imsak: '04:37',
+            fajr: '04:47',
+            sunrise: '06:19',
+            dhuhr: '12:13',
+            asr: '16:20',
+            maghrib: '18:05',
+            isha: '19:32',
+            midnight: '23:59',
+            address: { region: '', city: 'Toshkent', county: '', country: 'Oʻzbekiston' },
           }),
           { status: 200, headers: { 'Content-Type': 'application/json' } }
         );
@@ -593,7 +582,7 @@ describe('QA Verification: Dashboard Layout & Performance Optimizations', () => 
       try {
         // Request 1: Cache MISS (fetches and caches)
         const reqMiss = new NextRequest(
-          'http://localhost:3000/api/prayer-times?latitude=41.2995&longitude=69.2401&method=MWL'
+          'http://localhost:3000/api/prayer-times?latitude=41.2995&longitude=69.2401'
         );
         const resMiss = await getPrayerTimes(reqMiss);
         assert.equal(resMiss.status, 200, 'Prayer times endpoint should return 200');
@@ -608,7 +597,7 @@ describe('QA Verification: Dashboard Layout & Performance Optimizations', () => 
 
         // Request 2: Cache HIT (serves instantly from in-memory cache)
         const reqHit = new NextRequest(
-          'http://localhost:3000/api/prayer-times?latitude=41.2995&longitude=69.2401&method=MWL'
+          'http://localhost:3000/api/prayer-times?latitude=41.2995&longitude=69.2401'
         );
         const resHit = await getPrayerTimes(reqHit);
         assert.equal(resHit.status, 200);
@@ -696,7 +685,6 @@ describe('QA Verification: Dashboard Layout & Performance Optimizations', () => 
           role: 'user',
           preferences: {
             language: 'uz',
-            calculationMethod: 'MWL',
             showOnLeaderboard: true,
             city: 'Tashkent',
           },

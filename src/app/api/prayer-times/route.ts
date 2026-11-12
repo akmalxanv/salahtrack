@@ -4,8 +4,18 @@ import { findCityByNameOrId, findCityByCoordinates } from '../../../lib/cities.t
 
 export const dynamic = 'force-dynamic';
 
-// Default fallback Tashkent timings (Hanafi, MWL / Muslim Board of Uzbekistan coordinates: 41.2995, 69.2401)
-const TASHKENT_COORDS = {
+/**
+ * /api/prayer-times — backend proxy for api.fatvo.uz (the single source of prayer times).
+ *
+ * fatvo.uz computes times with the Muslim Board of Uzbekistan methodology, so there is
+ * no calculation-method or madhab parameter: only coordinates, date, UTC offset and the
+ * language used for the reverse-geocoded address.
+ */
+
+export const FATVO_API_BASE = 'https://api.fatvo.uz/v1/prayer-times';
+
+/** Default location when the request and the user profile provide none. */
+const DEFAULT_LOCATION = {
   lat: 41.2995,
   lng: 69.2401,
   city: 'Tashkent',
@@ -13,29 +23,27 @@ const TASHKENT_COORDS = {
   timezone: 'Asia/Tashkent',
 };
 
-const TASHKENT_FALLBACK = {
-  fajr: { time: '04:47', endTime: '06:19' },
-  dhuhr: { time: '12:13', endTime: '16:20' },
-  asr: { time: '16:20', endTime: '18:05' },
-  maghrib: { time: '18:05', endTime: '19:32' },
-  isha: { time: '19:32', endTime: '04:47', isOvernight: true },
-};
+const CUSTOM_LOCATION = 'Custom Location';
+const UPSTREAM_TIMEOUT_MS = 5000;
 
-export const METHOD_MAP: Record<string, number> = {
-  MWL: 3, // Muslim World League
-  ISNA: 2, // Islamic Society of North America
-  EGYPT: 5, // Egyptian General Authority of Survey
-  MAKKAH: 4, // Umm Al-Qura University, Makkah
-  KARACHI: 1, // University of Islamic Sciences, Karachi
-  TEHRAN: 7, // Institute of Geophysics, University of Tehran
-  GULF: 8, // Gulf Region
-  KUWAIT: 9, // Kuwait
-  QATAR: 10, // Qatar
-  SINGAPORE: 11, // Majlis Ugama Islam Singapura
-  FRANCE: 12, // UOIF
-  TURKEY: 13, // Diyanet İşleri Başkanlığı
-  RUSSIA: 14, // Spiritual Administration of Muslims of Russia
-};
+export type PrayerTimesLang = 'uz' | 'ru' | 'en';
+const SUPPORTED_LANGS: readonly PrayerTimesLang[] = ['uz', 'ru', 'en'];
+
+/** Raw response shape returned by api.fatvo.uz/v1/prayer-times */
+interface FatvoPrayerTimesResponse {
+  date?: string;
+  imsak?: string;
+  fajr?: string;
+  sunrise?: string;
+  dhuhr?: string;
+  asr?: string;
+  maghrib?: string;
+  isha?: string;
+  midnight?: string;
+  address?: { region?: string; city?: string; county?: string; country?: string };
+}
+
+const HH_MM = /^\d{2}:\d{2}$/;
 
 export interface PrayerTimesTimings {
   fajr: { time: string; endTime: string };
@@ -54,9 +62,12 @@ export interface PrayerTimesPayload {
     latitude: number;
     longitude: number;
   };
-  method: number;
-  school: 'Hanafi' | 'Shafi';
   timings: PrayerTimesTimings;
+  /** Supplementary times from fatvo.uz (not tracked as prayers). */
+  extras?: { imsak?: string; sunrise?: string; midnight?: string };
+  provider: 'fatvo.uz';
+  tzOffset: number;
+  date: string;
   source: 'live';
 }
 
@@ -74,21 +85,71 @@ const prayerTimesCache = new Map<string, PrayerTimesCacheEntry>();
 const inFlightRequests = new Map<string, Promise<PrayerTimesPayload | null>>();
 
 /**
- * Builds a deterministic cache key from prayer calculation parameters:
- * Key format: `${date || 'today'}_${lat.toFixed(4)}_${lng.toFixed(4)}_${method}_${school}`
+ * Resolves the UTC offset (in hours, may be fractional e.g. 5.5) of an IANA
+ * timezone on a given date. Returns null for unknown/invalid zone names.
+ * Using the specific date makes DST-observing zones (e.g. Europe/London) resolve correctly.
+ */
+export function getTimezoneOffsetHours(timeZone: string, at: Date): number | null {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      timeZoneName: 'longOffset',
+    }).formatToParts(at);
+    const label = parts.find((p) => p.type === 'timeZoneName')?.value ?? '';
+    if (label === 'GMT' || label === 'UTC') return 0;
+    const match = /^GMT([+-])(\d{1,2})(?::(\d{2}))?$/.exec(label);
+    if (!match) return null;
+    const sign = match[1] === '-' ? -1 : 1;
+    return sign * (Number(match[2]) + Number(match[3] ?? 0) / 60);
+  } catch {
+    return null;
+  }
+}
+
+/** Validates a client-supplied numeric UTC offset (hours). Real-world range is -12..+14. */
+function parseTzOffset(raw: string | null): number | null {
+  if (raw === null || raw.trim() === '') return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < -12 || n > 14) return null;
+  // Snap to the nearest quarter hour (covers +5:45 Nepal, +9:30 Adelaide, etc.)
+  return Math.round(n * 4) / 4;
+}
+
+function isValidLatLng(lat: unknown, lng: unknown): lat is number {
+  return (
+    typeof lat === 'number' &&
+    typeof lng === 'number' &&
+    Number.isFinite(lat) &&
+    Number.isFinite(lng) &&
+    lat >= -90 &&
+    lat <= 90 &&
+    lng >= -180 &&
+    lng <= 180
+  );
+}
+
+/** Returns YYYY-MM-DD for "today" at the given UTC offset. */
+function todayAtOffset(offsetHours: number): string {
+  return new Date(Date.now() + offsetHours * 3600 * 1000).toISOString().slice(0, 10);
+}
+
+/**
+ * Builds a deterministic cache key from the parameters that change the upstream
+ * response: date, coordinates, UTC offset and address language.
+ * Key format: `${date || 'today'}_${lat.toFixed(4)}_${lng.toFixed(4)}_${tzOffset}_${lang}`
  */
 export function buildPrayerTimesCacheKey(
   date: string | null | undefined,
   lat: number,
   lng: number,
-  method: number,
-  school: number
+  tzOffset: number,
+  lang: PrayerTimesLang
 ): string {
   const dateKey =
     date && /^\d{4}-\d{2}-\d{2}$/.test(date.trim())
       ? date.trim()
       : 'today';
-  return `${dateKey}_${lat.toFixed(4)}_${lng.toFixed(4)}_${method}_${school}`;
+  return `${dateKey}_${lat.toFixed(4)}_${lng.toFixed(4)}_${tzOffset}_${lang}`;
 }
 
 /**
@@ -100,16 +161,12 @@ export function clearPrayerTimesCache(): void {
   inFlightRequests.clear();
 }
 
-/**
- * Returns current count of entries in the in-memory cache.
- */
+/** Returns current count of entries in the in-memory cache. */
 export function getPrayerTimesCacheSize(): number {
   return prayerTimesCache.size;
 }
 
-/**
- * Returns current count of in-flight deduplicated requests.
- */
+/** Returns current count of in-flight deduplicated requests. */
 export function getInFlightRequestsSize(): number {
   return inFlightRequests.size;
 }
@@ -167,96 +224,114 @@ export function setPrayerTimesInCache(
   });
 }
 
-/**
- * Checks whether the given coordinates or city name match Tashkent (within 0.05°).
- * Verified fallback timings are strictly reserved for Tashkent.
- */
-function isTashkentLocation(lat: number, lng: number, city?: string): boolean {
-  if (city) {
-    const normalized = city.trim().toLowerCase();
-    const isTashkentName =
-      normalized === 'tashkent' ||
-      normalized === 'toshkent' ||
-      normalized === 'ташкент' ||
-      normalized === 'طشقند';
-    if (!isTashkentName && normalized !== 'custom location' && normalized !== '') {
-      return false; // Explicitly NOT Tashkent!
-    }
-    if (isTashkentName) {
-      return true;
-    }
-  }
-  const latDiff = Math.abs(lat - TASHKENT_COORDS.lat);
-  const lngDiff = Math.abs(lng - TASHKENT_COORDS.lng);
-  return latDiff <= 0.05 && lngDiff <= 0.05;
-}
-
-/**
- * Safely handles external API failures.
- * Returns verified fallback timings ONLY for Tashkent.
- * For non-Tashkent locations, returns an explicit 502 error to avoid silently displaying wrong prayer times.
- * Note: Failures and fallback responses are NEVER cached in-memory.
- */
-function handleApiFailure(
-  lat: number,
-  lng: number,
-  cityName: string,
-  countryName: string,
-  tzName: string | undefined,
-  method: number,
-  warning?: string
-) {
-  if (isTashkentLocation(lat, lng, cityName)) {
-    return NextResponse.json({
-      success: true,
-      city: cityName || TASHKENT_COORDS.city,
-      country: countryName || TASHKENT_COORDS.country,
-      timezone: tzName || TASHKENT_COORDS.timezone,
-      location: { latitude: lat, longitude: lng },
-      method,
-      timings: TASHKENT_FALLBACK,
-      source: 'fallback',
-      ...(warning ? { warning } : {}),
-    });
-  }
-
+/** Upstream failure → explicit 502. Never invent times; the client keeps its last good copy. */
+function upstreamUnavailable() {
   return NextResponse.json(
     {
       success: false,
-      error: 'Unable to calculate prayer times for the requested location. External service unavailable.',
+      error: 'Prayer times service (fatvo.uz) is unavailable. Please try again later.',
       code: 'PRAYER_TIMES_UNAVAILABLE',
     },
     { status: 502 }
   );
 }
 
-export async function GET(request: NextRequest) {
-  let lat = TASHKENT_COORDS.lat;
-  let lng = TASHKENT_COORDS.lng;
-  let cityName = TASHKENT_COORDS.city;
-  let countryName = TASHKENT_COORDS.country;
-  let tzName: string | undefined = TASHKENT_COORDS.timezone;
-  let method = 3; // Default: Muslim World League (MWL)
+/** Fetches and normalises one day of times from fatvo.uz. Returns null on any failure. */
+async function fetchFromFatvo(
+  apiUrl: string,
+  meta: { lat: number; lng: number; cityName: string; countryName: string; timezone: string; tzOffset: number; isoDate: string }
+): Promise<PrayerTimesPayload | null> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
 
+  try {
+    const res = await fetch(apiUrl, {
+      signal: controller.signal,
+      next: { revalidate: 3600 },
+      headers: { Accept: 'application/json' },
+    });
+    if (!res.ok) return null;
+
+    const data = (await res.json()) as FatvoPrayerTimesResponse;
+    const { fajr, sunrise, dhuhr, asr, maghrib, isha } = data ?? {};
+
+    // Reject partial/malformed upstream payloads rather than rendering garbage times
+    if (![fajr, sunrise, dhuhr, asr, maghrib, isha].every((v) => typeof v === 'string' && HH_MM.test(v))) {
+      return null;
+    }
+
+    const upstreamCity = data.address?.city?.trim();
+    const upstreamCountry = data.address?.country?.trim();
+    const isGenericName = meta.cityName === CUSTOM_LOCATION || /^-?\d/.test(meta.cityName);
+
+    return {
+      success: true,
+      city: isGenericName && upstreamCity ? upstreamCity : meta.cityName,
+      country: meta.countryName || upstreamCountry || '',
+      timezone: meta.timezone,
+      location: { latitude: meta.lat, longitude: meta.lng },
+      timings: {
+        fajr: { time: fajr!, endTime: sunrise! },
+        dhuhr: { time: dhuhr!, endTime: asr! },
+        asr: { time: asr!, endTime: maghrib! },
+        maghrib: { time: maghrib!, endTime: isha! },
+        isha: { time: isha!, endTime: fajr!, isOvernight: true },
+      },
+      extras: { imsak: data.imsak, sunrise, midnight: data.midnight },
+      provider: 'fatvo.uz',
+      tzOffset: meta.tzOffset,
+      date: meta.isoDate,
+      source: 'live',
+    };
+  } catch (fetchErr) {
+    console.error('Failed to fetch prayer times from fatvo.uz:', fetchErr);
+    return null;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
 
-    // 0. Authenticate optionally to inspect user preferences
+    // 0. Authenticate optionally to read saved location / language preferences
     const auth = await authenticateRequest(request).catch(() => null);
+    const prefs = auth?.user?.preferences;
 
     const cityQuery = searchParams.get('city');
     const latQuery = searchParams.get('latitude') || searchParams.get('lat');
     const lngQuery = searchParams.get('longitude') || searchParams.get('lng');
-    const methodQuery = searchParams.get('method');
     const tzQuery = searchParams.get('timezone') || searchParams.get('tz');
 
-    if (tzQuery) {
-      tzName = tzQuery.trim();
-    }
+    // Only accept real IANA zones (Intl validates them) — never echo arbitrary strings back
+    const validTzQuery =
+      tzQuery && getTimezoneOffsetHours(tzQuery.trim(), new Date()) !== null ? tzQuery.trim() : undefined;
 
+    let lat = DEFAULT_LOCATION.lat;
+    let lng = DEFAULT_LOCATION.lng;
+    let cityName = DEFAULT_LOCATION.city;
+    let countryName = DEFAULT_LOCATION.country;
+    let tzName: string | undefined = validTzQuery ?? DEFAULT_LOCATION.timezone;
     let coordsResolved = false;
 
-    // 1. If city parameter is passed directly in searchParams
+    const applyCoords = (newLat: number, newLng: number, fallbackTz?: string) => {
+      lat = newLat;
+      lng = newLng;
+      coordsResolved = true;
+      const knownCity = findCityByCoordinates(lat, lng);
+      if (knownCity) {
+        cityName = knownCity.name;
+        countryName = knownCity.country;
+        tzName = knownCity.timezone;
+      } else {
+        cityName = CUSTOM_LOCATION;
+        countryName = '';
+        tzName = validTzQuery || fallbackTz;
+      }
+    };
+
+    // 1. Explicit city preset
     if (cityQuery) {
       const cityPreset = findCityByNameOrId(cityQuery);
       if (cityPreset) {
@@ -266,54 +341,36 @@ export async function GET(request: NextRequest) {
         countryName = cityPreset.country;
         tzName = cityPreset.timezone;
         coordsResolved = true;
-      } else {
-        cityName = cityQuery.trim();
       }
     }
 
-    // 2. If lat & lng parameters are passed directly in searchParams
+    // 2. Explicit coordinates
     if (!coordsResolved && latQuery && lngQuery) {
-      const parsedLat = parseFloat(latQuery);
-      const parsedLng = parseFloat(lngQuery);
-      if (
-        !isNaN(parsedLat) &&
-        parsedLat >= -90 &&
-        parsedLat <= 90 &&
-        !isNaN(parsedLng) &&
-        parsedLng >= -180 &&
-        parsedLng <= 180
-      ) {
-        lat = parsedLat;
-        lng = parsedLng;
-        coordsResolved = true;
-
-        // Check if coords match a known city in src/lib/cities.ts
-        const knownCity = findCityByCoordinates(lat, lng);
-        if (knownCity) {
-          cityName = knownCity.name;
-          countryName = knownCity.country;
-          tzName = knownCity.timezone;
-        } else {
-          cityName = 'Custom Location';
-          countryName = '';
-          tzName = undefined;
-        }
+      const parsedLat = Number(latQuery);
+      const parsedLng = Number(lngQuery);
+      if (isValidLatLng(parsedLat, parsedLng)) {
+        applyCoords(parsedLat, parsedLng);
       }
     }
 
-    // 3. Fallback to user preferences if not provided in searchParams
-    if (!coordsResolved && auth?.user?.preferences) {
-      const prefCity = auth.user.preferences.city;
-      const prefLat = auth.user.preferences.latitude;
-      const prefLng = auth.user.preferences.longitude;
-      const prefTz = auth.user.preferences.timezone;
+    // 3. Unknown city name without coordinates — never silently default to Tashkent
+    if (cityQuery && !coordsResolved) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `Unable to resolve geographic coordinates for city "${cityQuery.slice(0, 60)}". Please specify latitude and longitude.`,
+          code: 'COORDINATES_REQUIRED',
+        },
+        { status: 400 }
+      );
+    }
 
-      if (prefTz && !tzQuery) {
-        tzName = prefTz;
-      }
-
-      if (prefCity) {
-        const cityPreset = findCityByNameOrId(prefCity);
+    // 4. Saved profile location (coordinates first — they are the user's real position)
+    if (!coordsResolved && prefs) {
+      if (isValidLatLng(prefs.latitude, prefs.longitude)) {
+        applyCoords(prefs.latitude, prefs.longitude as number, prefs.timezone);
+      } else if (prefs.city) {
+        const cityPreset = findCityByNameOrId(prefs.city);
         if (cityPreset) {
           lat = cityPreset.coordinates.lat;
           lng = cityPreset.coordinates.lng;
@@ -321,98 +378,32 @@ export async function GET(request: NextRequest) {
           countryName = cityPreset.country;
           tzName = cityPreset.timezone;
           coordsResolved = true;
-        } else {
-          cityName = prefCity;
         }
       }
-
-      if (
-        !coordsResolved &&
-        typeof prefLat === 'number' &&
-        typeof prefLng === 'number' &&
-        Number.isFinite(prefLat) &&
-        prefLat >= -90 &&
-        prefLat <= 90 &&
-        Number.isFinite(prefLng) &&
-        prefLng >= -180 &&
-        prefLng <= 180
-      ) {
-        lat = prefLat;
-        lng = prefLng;
-        coordsResolved = true;
-
-        const knownCity = findCityByCoordinates(lat, lng);
-        if (knownCity) {
-          cityName = knownCity.name;
-          countryName = knownCity.country;
-          tzName = knownCity.timezone;
-        } else if (!cityName || cityName === TASHKENT_COORDS.city) {
-          cityName = 'Custom Location';
-          countryName = '';
-          tzName = undefined;
-        }
+      if (!validTzQuery && prefs.timezone && !coordsResolved) {
+        tzName = prefs.timezone;
       }
     }
 
-    // 3.1. Guard against unresolvable non-Tashkent city without coordinates:
-    // Never silently default coordinates to Tashkent when another city was requested.
-    if (cityQuery && !coordsResolved) {
-      const normalized = cityQuery.trim().toLowerCase();
-      if (
-        normalized === 'tashkent' ||
-        normalized === 'toshkent' ||
-        normalized === 'ташкент' ||
-        normalized === 'طشقند'
-      ) {
-        coordsResolved = true;
-      } else {
-        return NextResponse.json(
-          {
-            success: false,
-            error: `Unable to resolve geographic coordinates for city "${cityQuery}". Please specify latitude and longitude.`,
-            code: 'COORDINATES_REQUIRED',
-          },
-          { status: 400 }
-        );
-      }
-    }
-
-    // 4. Resolve calculation method
-    if (methodQuery) {
-      const upper = methodQuery.toUpperCase();
-      if (METHOD_MAP[upper] !== undefined) {
-        method = METHOD_MAP[upper];
-      } else {
-        const parsedMethod = parseInt(methodQuery, 10);
-        if (!isNaN(parsedMethod) && parsedMethod >= 0 && parsedMethod <= 25) {
-          method = parsedMethod;
-        }
-      }
-    } else if (auth?.user?.preferences?.calculationMethod) {
-      const prefUpper = auth.user.preferences.calculationMethod.toUpperCase();
-      if (METHOD_MAP[prefUpper] !== undefined) {
-        method = METHOD_MAP[prefUpper];
-      } else {
-        const parsedMethod = parseInt(auth.user.preferences.calculationMethod, 10);
-        if (!isNaN(parsedMethod) && parsedMethod >= 0 && parsedMethod <= 25) {
-          method = parsedMethod;
-        }
-      }
-    }
-
-    // 5. Resolve school (Hanafi = 1, Shafi/Default = 0)
-    const schoolQuery = searchParams.get('school');
-    const school = schoolQuery === '0' ? 0 : 1;
-
-    // 6. Resolve date if specified
+    // 5. UTC offset sent to fatvo.uz (tz_offset):
+    //    explicit ?tz_offset → IANA timezone for that date → longitude estimate.
     const dateQuery = searchParams.get('date');
-    const endpointDate =
-      dateQuery && /^\d{4}-\d{2}-\d{2}$/.test(dateQuery)
-        ? dateQuery.split('-').reverse().join('-') // convert YYYY-MM-DD to DD-MM-YYYY for Aladhan
-        : '';
+    const validDate = dateQuery && /^\d{4}-\d{2}-\d{2}$/.test(dateQuery) ? dateQuery : null;
+    const offsetProbe = validDate ? new Date(`${validDate}T12:00:00Z`) : new Date();
+    const tzOffset =
+      parseTzOffset(searchParams.get('tz_offset')) ??
+      (tzName ? getTimezoneOffsetHours(tzName, offsetProbe) : null) ??
+      Math.round(lng / 15);
 
-    // Cache key construction: ${date || 'today'}_${lat.toFixed(4)}_${lng.toFixed(4)}_${method}_${school}
-    const cacheKey = buildPrayerTimesCacheKey(dateQuery, lat, lng, method, school);
+    // 6. Address language (uz default, matches the app default locale)
+    const langQuery = searchParams.get('lang') as PrayerTimesLang | null;
+    const lang: PrayerTimesLang =
+      langQuery && SUPPORTED_LANGS.includes(langQuery)
+        ? langQuery
+        : (prefs?.language as PrayerTimesLang | undefined) ?? 'uz';
+
+    const isoDate = validDate ?? todayAtOffset(tzOffset);
+    const cacheKey = buildPrayerTimesCacheKey(isoDate, lat, lng, tzOffset, lang);
 
     const skipCache =
       request.headers.get('cache-control') === 'no-cache' ||
@@ -421,7 +412,7 @@ export async function GET(request: NextRequest) {
       searchParams.get('skipCache') === 'true' ||
       searchParams.get('fresh') === 'true';
 
-    // 7. Check In-Memory TTL Cache (Fast path <1ms)
+    // 7. In-memory TTL cache (fast path <1ms)
     if (!skipCache) {
       const cached = getPrayerTimesFromCache(cacheKey);
       if (cached) {
@@ -434,102 +425,45 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // 8. Deduplicate In-Flight Requests
+    // 8. Deduplicate concurrent upstream requests for the same key
     let isDeduped = false;
     let inFlightPromise = inFlightRequests.get(cacheKey);
 
     if (inFlightPromise && !skipCache) {
       isDeduped = true;
     } else {
-      const apiUrl = endpointDate
-        ? `https://api.aladhan.com/v1/timings/${endpointDate}?latitude=${lat}&longitude=${lng}&method=${method}&school=${school}`
-        : `https://api.aladhan.com/v1/timings?latitude=${lat}&longitude=${lng}&method=${method}&school=${school}`;
-
-      inFlightPromise = (async (): Promise<PrayerTimesPayload | null> => {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 5000);
-
-        try {
-          const res = await fetch(apiUrl, {
-            signal: controller.signal,
-            next: { revalidate: 3600 },
-            headers: { Accept: 'application/json' },
-          });
-
-          clearTimeout(timeoutId);
-
-          if (!res.ok) {
-            return null;
-          }
-
-          const data = await res.json();
-          const timings = data?.data?.timings;
-          const meta = data?.data?.meta;
-
-          if (!timings) {
-            return null;
-          }
-
-          const formatTime = (t: string) => t.slice(0, 5);
-
-          const payload: PrayerTimesPayload = {
-            success: true,
-            city:
-              cityName !== 'Custom Location' && cityName !== TASHKENT_COORDS.city
-                ? cityName
-                : meta?.timezone?.split('/')[1]?.replace(/_/g, ' ') || cityName,
-            country: countryName || meta?.timezone?.split('/')[0] || TASHKENT_COORDS.country,
-            timezone: tzName || meta?.timezone || TASHKENT_COORDS.timezone,
-            location: {
-              latitude: lat,
-              longitude: lng,
-            },
-            method,
-            school: school === 1 ? 'Hanafi' : 'Shafi',
-            timings: {
-              fajr: { time: formatTime(timings.Fajr), endTime: formatTime(timings.Sunrise) },
-              dhuhr: { time: formatTime(timings.Dhuhr), endTime: formatTime(timings.Asr) },
-              asr: { time: formatTime(timings.Asr), endTime: formatTime(timings.Maghrib) },
-              maghrib: { time: formatTime(timings.Maghrib), endTime: formatTime(timings.Isha) },
-              isha: {
-                time: formatTime(timings.Isha),
-                endTime: formatTime(timings.Fajr),
-                isOvernight: true,
-              },
-            },
-            source: 'live',
-          };
-
-          // Cache only verified live API responses
-          setPrayerTimesInCache(cacheKey, payload);
-
-          return payload;
-        } catch (fetchErr) {
-          clearTimeout(timeoutId);
-          console.error('Failed to fetch prayer times:', fetchErr);
-          return null;
-        }
-      })().finally(() => {
-        inFlightRequests.delete(cacheKey);
+      // Values are validated numbers / whitelisted strings; URLSearchParams still encodes them.
+      const upstreamParams = new URLSearchParams({
+        lat: String(lat),
+        lon: String(lng),
+        date: isoDate.split('-').reverse().join('-'), // fatvo.uz expects DD-MM-YYYY
+        tz_offset: String(tzOffset),
+        lang,
       });
+
+      inFlightPromise = fetchFromFatvo(`${FATVO_API_BASE}?${upstreamParams.toString()}`, {
+        lat,
+        lng,
+        cityName,
+        countryName,
+        timezone: tzName || `UTC${tzOffset >= 0 ? '+' : ''}${tzOffset}`,
+        tzOffset,
+        isoDate,
+      })
+        .then((payload) => {
+          // Cache only verified live responses — failures are never cached
+          if (payload) setPrayerTimesInCache(cacheKey, payload);
+          return payload;
+        })
+        .finally(() => {
+          inFlightRequests.delete(cacheKey);
+        });
 
       inFlightRequests.set(cacheKey, inFlightPromise);
     }
 
     const payload = await inFlightPromise;
-
-    if (!payload) {
-      // API failed: DO NOT cache failure or fallback
-      return handleApiFailure(
-        lat,
-        lng,
-        cityName,
-        countryName,
-        tzName,
-        method,
-        'External prayer times API returned error, fallback timings provided.'
-      );
-    }
+    if (!payload) return upstreamUnavailable();
 
     return NextResponse.json(payload, {
       headers: {
@@ -538,7 +472,7 @@ export async function GET(request: NextRequest) {
       },
     });
   } catch (error) {
-    console.error('Failed to fetch prayer times:', error);
-    return handleApiFailure(lat, lng, cityName, countryName, tzName, method);
+    console.error('Failed to resolve prayer times:', error);
+    return upstreamUnavailable();
   }
 }

@@ -29,7 +29,6 @@ interface MockUserDoc {
   role: 'user' | 'admin';
   preferences: {
     language: 'uz' | 'ru' | 'en';
-    calculationMethod?: string;
   };
   passwordResetTokenHash?: string;
   passwordResetExpires?: Date;
@@ -121,7 +120,7 @@ function setupMocks() {
       username: doc.username || '',
       passwordHash: doc.passwordHash || '',
       role: doc.role || 'user',
-      preferences: doc.preferences || { language: 'uz', calculationMethod: 'MWL' },
+      preferences: doc.preferences || { language: 'uz' },
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -213,7 +212,7 @@ describe('Backend Authentication Layer Tests', () => {
         username: 'ahmad_01',
         passwordHash: '$argon2id$v=19$hiddenhash',
         role: 'user' as const,
-        preferences: { language: 'uz' as const, calculationMethod: 'MWL' },
+        preferences: { language: 'uz' as const },
         createdAt: new Date(),
         updatedAt: new Date(),
       } as unknown as IUser;
@@ -540,7 +539,7 @@ describe('Backend Authentication Layer Tests', () => {
         username: 'owner_user',
         passwordHash: '$argon2id$v=19$somehash',
         role: 'user',
-        preferences: { language: 'uz', calculationMethod: 'MWL' },
+        preferences: { language: 'uz' },
         createdAt: new Date(),
         updatedAt: new Date(),
       });
@@ -584,7 +583,7 @@ describe('Backend Authentication Layer Tests', () => {
         username: 'primary_user',
         passwordHash: '$argon2id$v=19$somehash',
         role: 'user',
-        preferences: { language: 'uz', calculationMethod: 'MWL' },
+        preferences: { language: 'uz' },
         createdAt: new Date(),
         updatedAt: new Date(),
       });

@@ -9,7 +9,6 @@ export interface IUser extends Document {
   role: 'user' | 'admin';
   preferences: {
     language: 'uz' | 'ru' | 'en';
-    calculationMethod?: string;
     showOnLeaderboard?: boolean;
     city?: string;
     latitude?: number;
@@ -64,10 +63,6 @@ const UserSchema = new Schema<IUser>(
         type: String,
         enum: ['uz', 'ru', 'en'],
         default: 'uz',
-      },
-      calculationMethod: {
-        type: String,
-        default: 'MWL',
       },
       showOnLeaderboard: {
         type: Boolean,

@@ -17,7 +17,6 @@ export interface SafeUser {
   role: 'user' | 'admin';
   preferences: {
     language: 'uz' | 'ru' | 'en';
-    calculationMethod?: string;
     showOnLeaderboard: boolean;
     city?: string;
     latitude?: number;
@@ -75,7 +74,6 @@ export function sanitizeUser(user: IUser | (Partial<IUser> & { _id: { toString()
     role: (user.role as 'user' | 'admin') || 'user',
     preferences: {
       language: user.preferences?.language || 'uz',
-      calculationMethod: user.preferences?.calculationMethod || 'MWL',
       showOnLeaderboard: Boolean(user.preferences?.showOnLeaderboard),
       city: user.preferences?.city,
       latitude: user.preferences?.latitude,

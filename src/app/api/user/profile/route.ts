@@ -15,22 +15,6 @@ import {
   FALLBACK_STORAGE_KEY,
 } from '../../../../locales/translations.ts';
 
-const VALID_CALCULATION_METHODS = new Set([
-  'MWL',
-  'ISNA',
-  'EGYPT',
-  'MAKKAH',
-  'KARACHI',
-  'TEHRAN',
-  'GULF',
-  'KUWAIT',
-  'QATAR',
-  'SINGAPORE',
-  'FRANCE',
-  'TURKEY',
-  'RUSSIA',
-]);
-
 const TIMEZONE_REGEX = /^[a-zA-Z0-9_\-\+/]{1,50}$/;
 
 /**
@@ -152,7 +136,6 @@ export async function PUT(request: NextRequest) {
 
       const {
         language,
-        calculationMethod,
         showOnLeaderboard,
         city,
         latitude,
@@ -167,29 +150,6 @@ export async function PUT(request: NextRequest) {
         } else {
           return NextResponse.json(
             { success: false, error: 'Invalid language preference. Allowed: uz, ru, en', code: 'INVALID_LANGUAGE' },
-            { status: 400 }
-          );
-        }
-      }
-
-      if (calculationMethod !== undefined) {
-        if (calculationMethod === null || calculationMethod === '') {
-          user.preferences.calculationMethod = 'MWL';
-        } else if (typeof calculationMethod === 'string') {
-          const upper = calculationMethod.trim().toUpperCase();
-          const isKnownMethod = VALID_CALCULATION_METHODS.has(upper);
-          const isNumeric = /^\d{1,2}$/.test(upper) && parseInt(upper, 10) >= 0 && parseInt(upper, 10) <= 25;
-          if (isKnownMethod || isNumeric) {
-            user.preferences.calculationMethod = calculationMethod.trim().slice(0, 30);
-          } else {
-            return NextResponse.json(
-              { success: false, error: 'Invalid calculation method', code: 'INVALID_CALCULATION_METHOD' },
-              { status: 400 }
-            );
-          }
-        } else {
-          return NextResponse.json(
-            { success: false, error: 'Calculation method must be a string', code: 'INVALID_CALCULATION_METHOD' },
             { status: 400 }
           );
         }

@@ -6,7 +6,7 @@ const cspHeader = [
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' blob: data: https:",
   "font-src 'self' data:",
-  "connect-src 'self' https://api.aladhan.com",
+  "connect-src 'self'",
   "media-src 'self'",
   "object-src 'none'",
   "base-uri 'self'",

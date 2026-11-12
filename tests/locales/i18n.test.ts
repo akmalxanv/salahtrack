@@ -335,18 +335,6 @@ describe('SalahTrack Localization Engine (i18n) QA Suite', () => {
   });
 
   describe('3. Placeholder Interpolation & Formatting Robustness', () => {
-    it('interpolates method placeholder in dashboard.calcMethodBased correctly across all languages', () => {
-      const sampleMethod = 'Muslim World League';
-      for (const lang of languages) {
-        const raw = translations[lang].dashboard.calcMethodBased;
-        assert.ok(raw.includes('{method}'), `calcMethodBased must include {method} in ${lang}`);
-
-        const result = interpolate(raw, { method: sampleMethod });
-        assert.ok(!result.includes('{method}'), `Interpolation left unparsed {method} in ${lang}`);
-        assert.ok(result.includes(sampleMethod), `Result did not contain inserted method in ${lang}`);
-      }
-    });
-
     it('interpolates completed and total placeholders in calendar.dayCompletion cleanly', () => {
       for (const lang of languages) {
         const raw = translations[lang].calendar.dayCompletion;
@@ -407,8 +395,7 @@ describe('SalahTrack Localization Engine (i18n) QA Suite', () => {
         assert.ok(zeroRes.includes('0') && !zeroRes.includes('{count}'));
 
         // Unicode special characters in method test
-        const calcRaw = translations[lang].dashboard.calcMethodBased;
-        const unicodeRes = interpolate(calcRaw, { method: "O‘zbekiston Musulmonlari Idorasi" });
+        const unicodeRes = interpolate('{method}', { method: "O‘zbekiston Musulmonlari Idorasi" });
         assert.ok(unicodeRes.includes("O‘zbekiston Musulmonlari Idorasi"));
       }
     });
@@ -713,9 +700,9 @@ describe('SalahTrack Localization Engine (i18n) QA Suite', () => {
     });
 
     it('prodInterpolate safely replaces named and printf parameters', () => {
-      const template = 'User {name} completed {count} prayers with %s method';
-      const output = prodInterpolate(template, { name: 'Ahmad', count: 5 }, 'MWL');
-      assert.equal(output, 'User Ahmad completed 5 prayers with MWL method');
+      const template = 'User {name} completed {count} prayers in %s';
+      const output = prodInterpolate(template, { name: 'Ahmad', count: 5 }, 'Toshkent');
+      assert.equal(output, 'User Ahmad completed 5 prayers in Toshkent');
     });
 
     it('prodInterpolate blocks prototype pollution and property injection', () => {

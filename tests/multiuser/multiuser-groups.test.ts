@@ -20,7 +20,6 @@ interface MockUserDoc {
   role: 'user' | 'admin';
   preferences: {
     language: 'uz' | 'ru' | 'en';
-    calculationMethod?: string;
     showOnLeaderboard?: boolean;
   };
   createdAt: Date;
