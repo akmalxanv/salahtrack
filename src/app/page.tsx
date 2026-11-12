@@ -90,6 +90,7 @@ export default async function HomePage() {
 
   return (
     <HomeDashboard
+      initialTimeIso={new Date().toISOString()}
       initialQazaCount={initialQazaCount}
       initialPrayers={initialPrayers}
       initialStreak={initialStreak}

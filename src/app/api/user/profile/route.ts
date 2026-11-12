@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server.js';
 import { connectDB } from '../../../../lib/mongodb.ts';
 import { User } from '../../../../models/User.ts';
-import { authenticateRequest, sanitizeUser } from '../../../../lib/auth/index.ts';
+import { authenticateRequest, sanitizeUser, invalidateSessionCache } from '../../../../lib/auth/index.ts';
+import { clearLeaderboardCache } from '../../leaderboard/route.ts';
 import {
   consumeRateLimit,
   createRateLimitKey,
@@ -268,6 +269,17 @@ export async function PUT(request: NextRequest) {
     }
 
     await user.save();
+
+    // Invalidate in-memory session cache so subsequent requests return fresh profile data
+    if (auth.session?.sessionToken) {
+      invalidateSessionCache(auth.session.sessionToken);
+    }
+    invalidateSessionCache(auth.user.id);
+
+    // Invalidate leaderboard cache if showOnLeaderboard preference changed
+    if (body.preferences && 'showOnLeaderboard' in body.preferences) {
+      clearLeaderboardCache();
+    }
 
     const updatedSafeUser = sanitizeUser(user);
     const response = NextResponse.json(

@@ -10,8 +10,6 @@ import {
   Timer,
   Check,
   MapPin,
-  Bell,
-  BellOff,
   AlertTriangle,
   Loader2,
   Moon,
@@ -223,6 +221,7 @@ function getInitialLocationName(userCity?: string): string {
 }
 
 interface HomeDashboardProps {
+  initialTimeIso?: string;
   initialQazaCount: number | null;
   initialPrayers: PrayerItem[] | null;
   initialStreak?: StreakData | null;
@@ -233,6 +232,7 @@ interface HomeDashboardProps {
 }
 
 export default function HomeDashboard({
+  initialTimeIso,
   initialQazaCount,
   initialPrayers,
   initialStreak,
@@ -269,25 +269,30 @@ export default function HomeDashboard({
     pendingQazaCount: number;
   }>(() => {
     if (initialAccountability) return initialAccountability;
-    if (typeof window !== 'undefined') {
-      try {
-        const stored = localStorage.getItem('salahtrack_accountability_cache');
-        if (stored) {
-          const parsed = JSON.parse(stored);
-          if (typeof parsed?.totalAmount === 'number' && typeof parsed?.pendingQazaCount === 'number') {
-            return parsed;
-          }
-        }
-      } catch {
-        // Storage access blocked or unavailable
-      }
-    }
     const qazaFallback = initialQazaCount ?? 0;
     return {
       totalAmount: qazaFallback * 15000,
       pendingQazaCount: qazaFallback,
     };
   });
+
+  useEffect(() => {
+    if (initialAccountability) return;
+    queueMicrotask(() => {
+      try {
+        const stored = localStorage.getItem('salahtrack_accountability_cache');
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (typeof parsed?.totalAmount === 'number' && typeof parsed?.pendingQazaCount === 'number') {
+            setServerAccountability(parsed);
+          }
+        }
+      } catch {
+        // Storage access blocked or unavailable
+      }
+    });
+  }, [initialAccountability]);
+
   const [historyVersion, setHistoryVersion] = useState(0);
 
   useEffect(() => {
@@ -301,22 +306,35 @@ export default function HomeDashboard({
   const lastSyncedKeyRef = useRef<string>('');
   const lastSyncedStatusRef = useRef<'idle' | 'loading' | 'live' | 'fallback' | 'error'>('idle');
   const statsDebounceRef = useRef<NodeJS.Timeout | null>(null);
+  const prayerAbortControllersRef = useRef<Map<PrayerId, AbortController>>(new Map());
+  const prayersRef = useRef<PrayerItem[]>(prayers);
+  const lastFocusRefreshRef = useRef<number>(0);
 
   useEffect(() => {
+    prayersRef.current = prayers;
+  }, [prayers]);
+
+  useEffect(() => {
+    const controllers = prayerAbortControllersRef.current;
     return () => {
       if (statsDebounceRef.current) {
         clearTimeout(statsDebounceRef.current);
       }
+      controllers.forEach((c) => c.abort());
+      controllers.clear();
     };
   }, []);
   const [locationRevision, setLocationRevision] = useState(0);
 
-  // Location and Prayer API states
+  // Location and Prayer API states - initialize deterministically for SSR match
   const [locationName, setLocationName] = useState<string>(() =>
-    getInitialLocationName(user?.preferences?.city)
+    user?.preferences?.city ? sanitizeLocationName(user.preferences.city) || 'Tashkent' : 'Tashkent'
   );
-  const [apiStatus, setApiStatus] = useState<'loading' | 'live' | 'fallback' | 'error'>(() => {
-    if (typeof window !== 'undefined') {
+  const [apiStatus, setApiStatus] = useState<'loading' | 'live' | 'fallback' | 'error'>('loading');
+
+  // Synchronize cached prayer timings status on mount
+  useEffect(() => {
+    queueMicrotask(() => {
       try {
         const today = getLiturgicalDate(new Date());
         const loc = getInitialLocationName(user?.preferences?.city);
@@ -324,15 +342,14 @@ export default function HomeDashboard({
         if (cached) {
           const parsed = JSON.parse(cached);
           if (parsed?.timings) {
-            return parsed.source === 'fallback' ? 'fallback' : 'live';
+            setApiStatus(parsed.source === 'fallback' ? 'fallback' : 'live');
           }
         }
       } catch {
         // Storage access blocked or unavailable
       }
-    }
-    return 'loading';
-  });
+    });
+  }, [user?.preferences?.city]);
 
   // Synchronize location when component mounts or user preferences load
   useEffect(() => {
@@ -362,7 +379,8 @@ export default function HomeDashboard({
   }, [user?.preferences?.city]);
   
   // Real-time ticking clock for live countdown and auto-advance
-  const [now, setNow] = useState<Date>(() => new Date());
+  // Initialized from initialTimeIso from SSR for byte-exact hydration
+  const [now, setNow] = useState<Date>(() => (initialTimeIso ? new Date(initialTimeIso) : new Date()));
 
   // Saving states per prayer item
   const [savingStatus, setSavingStatus] = useState<Record<PrayerId, 'idle' | 'saving' | 'saved' | 'error'>>({
@@ -373,68 +391,16 @@ export default function HomeDashboard({
     isha: 'idle',
   });
 
-  // Browser Notification state & user toggle
-  const [remindersEnabled, setRemindersEnabled] = useLocalStorage<boolean>(
-    'salahtrack_reminders_enabled',
-    false
-  );
-  const [notificationPermission, setNotificationPermission] = useState<'default' | 'granted' | 'denied' | 'unsupported'>('default');
-
-  // 1-second live ticker
+  // 1-second live ticker: immediately sync with local clock on client mount, then tick
   useEffect(() => {
+    queueMicrotask(() => {
+      setNow(new Date());
+    });
     const timer = setInterval(() => {
       setNow(new Date());
     }, 1000);
     return () => clearInterval(timer);
   }, []);
-
-  // Check Notification API support
-  useEffect(() => {
-    queueMicrotask(() => {
-      if (typeof window !== 'undefined' && 'Notification' in window) {
-        setNotificationPermission(Notification.permission as 'default' | 'granted' | 'denied');
-      } else {
-        setNotificationPermission('unsupported');
-      }
-    });
-  }, []);
-
-  const handleToggleReminders = async () => {
-    if (typeof window === 'undefined' || !('Notification' in window)) {
-      setNotificationPermission('unsupported');
-      return;
-    }
-
-    if (Notification.permission === 'default') {
-      try {
-        const permission = await Notification.requestPermission();
-        setNotificationPermission(permission as 'default' | 'granted' | 'denied');
-        if (permission === 'granted') {
-          setRemindersEnabled(true);
-          new Notification(t.appTitle, {
-            body: t.dashboard.testNotificationBody,
-            icon: '/apple-touch-icon.png',
-          });
-        }
-      } catch (err) {
-        console.warn('Notification permission error:', err);
-      }
-      return;
-    }
-
-    if (Notification.permission === 'granted') {
-      setRemindersEnabled((prev) => !prev);
-    }
-  };
-
-  const handleTestNotification = () => {
-    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
-      new Notification(t.appTitle, {
-        body: t.dashboard.testNotificationBody,
-        icon: '/apple-touch-icon.png',
-      });
-    }
-  };
 
   // Derive liturgical prayer cycle state dynamically
   const fajrTime = prayers.find((p) => p.id === 'fajr')?.time || DEFAULT_FAJR_TIME;
@@ -459,44 +425,13 @@ export default function HomeDashboard({
 
   const activeLiturgicalDate = cycle.liturgicalDate;
 
-  // Automated Prayer Adhan Reminders: checks upcoming prayer entry against current time
-  useEffect(() => {
-    if (!remindersEnabled || notificationPermission !== 'granted' || typeof window === 'undefined') {
-      return;
-    }
-
-    const currentHour = now.getHours();
-    const currentMin = now.getMinutes();
-    const currentTimeStr = `${String(currentHour).padStart(2, '0')}:${String(currentMin).padStart(2, '0')}`;
-
-    for (const p of prayers) {
-      if (!p.time) continue;
-      // If current clock matches prayer adhan time
-      if (p.time === currentTimeStr) {
-        const alertKey = `salahtrack_alert_${activeLiturgicalDate}_${p.id}`;
-        try {
-          const alreadySent = localStorage.getItem(alertKey);
-          if (!alreadySent) {
-            localStorage.setItem(alertKey, 'sent');
-            const prayerName = t.prayers[p.id] || p.name;
-            const notificationTitle = `${prayerName} (${p.time}) • ${t.appTitle}`;
-            new Notification(notificationTitle, {
-              body: t.dashboard.prayerNotificationBody,
-              icon: '/apple-touch-icon.png',
-            });
-          }
-        } catch {
-          // ignore localStorage access error
-        }
-      }
-    }
-  }, [now, prayers, remindersEnabled, notificationPermission, activeLiturgicalDate, t]);
 
   // Seed history on initial mount so /progress and /calendar reflect the current liturgical state
   useEffect(() => {
     if (!isMounted) return;
     mirrorDailyPrayersToHistory(activeLiturgicalDate, prayers);
-  }, [isMounted, activeLiturgicalDate, prayers]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isMounted, activeLiturgicalDate]);
 
   // Day rollover logic: triggers strictly when active liturgical date advances at Fajr adhan
   useEffect(() => {
@@ -635,8 +570,29 @@ export default function HomeDashboard({
 
     syncCloudData();
 
+    const handleRevalidate = () => {
+      if (typeof document === 'undefined' || document.visibilityState !== 'visible') return;
+
+      const nowTime = Date.now();
+      if (nowTime - lastFocusRefreshRef.current < 15000) {
+        return; // Cooldown throttle (15s)
+      }
+      lastFocusRefreshRef.current = nowTime;
+
+      // 1. Advance the live ticking clock (which re-evaluates prayer cycle & triggers rollover if date changed)
+      setNow(new Date());
+
+      // 2. Silently sync cloud data if authenticated
+      syncCloudData();
+    };
+
+    window.addEventListener('focus', handleRevalidate);
+    document.addEventListener('visibilitychange', handleRevalidate);
+
     return () => {
       isCancelled = true;
+      window.removeEventListener('focus', handleRevalidate);
+      document.removeEventListener('visibilitychange', handleRevalidate);
     };
   }, [user, isMounted, lastSavedDate, activeLiturgicalDate, setPrayers, setStreak]);
 
@@ -935,9 +891,6 @@ export default function HomeDashboard({
       // MADE_UP -> PRAYED_ON_TIME / PENDING: 0 Qaza change
       // MISSED -> PRAYED_ON_TIME / PENDING: -1 Qaza
       const getQazaValue = (st: PrayerStatus) => (st === 'MISSED' ? 1 : 0);
-      const oldItem = prayers.find((p) => p.id === id);
-      const oldStatus = oldItem ? (oldItem.status === 'PRAYED' ? 'PRAYED_ON_TIME' : oldItem.status) : 'PENDING';
-      const qazaDiff = getQazaValue(normalizedStatus) - getQazaValue(oldStatus);
 
       // Financial debt:
       // PENDING -> MISSED: +15,000 UZS debt
@@ -945,24 +898,36 @@ export default function HomeDashboard({
       // MADE_UP -> PRAYED_ON_TIME / PENDING: -15,000 UZS debt
       // MISSED -> PRAYED_ON_TIME / PENDING: -15,000 UZS debt
       const getFineValue = (st: PrayerStatus) => (st === 'MISSED' || st === 'MADE_UP' ? 15000 : 0);
-      const fineDiff = getFineValue(normalizedStatus) - getFineValue(oldStatus);
 
-      // 1. Instant 0ms optimistic UI update
-      const updatedPrayers = prayers.map((item) =>
-        item.id === id ? { ...item, status: normalizedStatus, updatedAt: new Date().toISOString() } : item
-      );
-      setPrayers(updatedPrayers);
+      let qazaDiff = 0;
+      let fineDiff = 0;
+
+      // 1. Functional state update for 0ms optimistic UI update (prevents stale closure)
+      setPrayers((prev) => {
+        const oldItem = prev.find((p) => p.id === id);
+        const oldStatus = oldItem ? (oldItem.status === 'PRAYED' ? 'PRAYED_ON_TIME' : oldItem.status) : 'PENDING';
+
+        qazaDiff = getQazaValue(normalizedStatus) - getQazaValue(oldStatus);
+        fineDiff = getFineValue(normalizedStatus) - getFineValue(oldStatus);
+
+        const updatedPrayers = prev.map((item) =>
+          item.id === id ? { ...item, status: normalizedStatus, updatedAt: new Date().toISOString() } : item
+        );
+        prayersRef.current = updatedPrayers;
+
+        // 2. Synchronize to localStorage, cookie, and mirror to salahtrack_history_records[targetDate]
+        saveDailyPrayersSync(targetDate, updatedPrayers);
+
+        // 3. Optimistic streak transition calculation (strictly 5/5 completed prayers)
+        const isDayCompleted = updatedPrayers.filter(
+          (p) => p.status === 'PRAYED' || p.status === 'PRAYED_ON_TIME' || p.status === 'PRAYED_LATE'
+        ).length === 5;
+        setStreak((prevStreak) => calculateStreakTransition(prevStreak, targetDate, isDayCompleted));
+
+        return updatedPrayers;
+      });
+
       setActiveMenuPrayerId(null);
-
-      // 2. Synchronize to localStorage, cookie, and mirror to salahtrack_history_records[targetDate]
-      // mirrorDailyPrayersToHistory inside saveDailyPrayersSync immediately updates record.finesAccrued
-      saveDailyPrayersSync(targetDate, updatedPrayers);
-
-      // 3. Optimistic streak transition calculation (strictly 5/5 completed prayers)
-      const isDayCompleted = updatedPrayers.filter(
-        (p) => p.status === 'PRAYED' || p.status === 'PRAYED_ON_TIME' || p.status === 'PRAYED_LATE'
-      ).length === 5;
-      setStreak((prevStreak) => calculateStreakTransition(prevStreak, targetDate, isDayCompleted));
 
       // 4. Optimistically adjust server accountability (if active)
       if (fineDiff !== 0 || qazaDiff !== 0) {
@@ -975,10 +940,18 @@ export default function HomeDashboard({
         setQazaCount((prev) => Math.max(0, prev + qazaDiff));
       }
 
-      // 5. Set saving status feedback
+      // 5. Abort any previous in-flight request for this prayer id to prevent race conditions
+      const priorController = prayerAbortControllersRef.current.get(id);
+      if (priorController) {
+        priorController.abort();
+      }
+      const abortController = new AbortController();
+      prayerAbortControllersRef.current.set(id, abortController);
+
+      // 6. Set saving status feedback
       setSavingStatus((prev) => ({ ...prev, [id]: 'saving' }));
 
-      // 6. Background sync to MongoDB Atlas if authenticated
+      // 7. Background sync to MongoDB Atlas if authenticated
       if (user) {
         try {
           const res = await fetch('/api/prayers', {
@@ -989,63 +962,74 @@ export default function HomeDashboard({
               prayerId: id,
               status: normalizedStatus,
             }),
+            signal: abortController.signal,
           });
 
-          if (res.ok) {
-            setSavingStatus((prev) => ({ ...prev, [id]: 'saved' }));
-            setTimeout(() => {
-              setSavingStatus((prev) => ({ ...prev, [id]: 'idle' }));
-            }, 2000);
+          if (prayerAbortControllersRef.current.get(id) === abortController) {
+            prayerAbortControllersRef.current.delete(id);
 
-            // Debounced background sync stats to coalesce rapid multiple prayer updates into a single network call
-            if (statsDebounceRef.current) {
-              clearTimeout(statsDebounceRef.current);
-            }
-            statsDebounceRef.current = setTimeout(async () => {
-              try {
-                const statsRes = await fetch(`/api/stats?today=${targetDate}`);
-                if (statsRes.ok) {
-                  const statsJson = await statsRes.json();
-                  if (statsJson?.success) {
-                    if (statsJson.data?.streaks) {
-                      setStreak(statsJson.data.streaks);
-                    }
-                    if (statsJson.data?.accountability) {
-                      const acct = {
-                        totalAmount:
-                          statsJson.data.accountability.totalFinancialDebt ??
-                          statsJson.data.accountability.totalAmount ??
-                          0,
-                        pendingQazaCount:
-                          statsJson.data.accountability.pendingQazaCount ??
-                          statsJson.data.accountability.totalMissed ??
-                          0,
-                      };
-                      setServerAccountability(acct);
-                      try {
-                        localStorage.setItem('salahtrack_accountability_cache', JSON.stringify(acct));
-                      } catch {
-                        // Storage access blocked or quota exceeded
+            if (res.ok) {
+              setSavingStatus((prev) => ({ ...prev, [id]: 'saved' }));
+              setTimeout(() => {
+                setSavingStatus((prev) => ({ ...prev, [id]: 'idle' }));
+              }, 2000);
+
+              // Debounced background sync stats to coalesce rapid multiple prayer updates into a single network call
+              if (statsDebounceRef.current) {
+                clearTimeout(statsDebounceRef.current);
+              }
+              statsDebounceRef.current = setTimeout(async () => {
+                try {
+                  const statsRes = await fetch(`/api/stats?today=${targetDate}`);
+                  if (statsRes.ok) {
+                    const statsJson = await statsRes.json();
+                    if (statsJson?.success) {
+                      if (statsJson.data?.streaks) {
+                        setStreak(statsJson.data.streaks);
+                      }
+                      if (statsJson.data?.accountability) {
+                        const acct = {
+                          totalAmount:
+                            statsJson.data.accountability.totalFinancialDebt ??
+                            statsJson.data.accountability.totalAmount ??
+                            0,
+                          pendingQazaCount:
+                            statsJson.data.accountability.pendingQazaCount ??
+                            statsJson.data.accountability.totalMissed ??
+                            0,
+                        };
+                        setServerAccountability(acct);
+                        try {
+                          localStorage.setItem('salahtrack_accountability_cache', JSON.stringify(acct));
+                        } catch {
+                          // Storage access blocked or quota exceeded
+                        }
                       }
                     }
                   }
+                } catch (statsErr) {
+                  console.warn('Background stats sync error:', statsErr);
                 }
-              } catch (statsErr) {
-                console.warn('Background stats sync error:', statsErr);
-              }
-            }, 600);
-          } else {
+              }, 600);
+            } else {
+              setSavingStatus((prev) => ({ ...prev, [id]: 'error' }));
+              setTimeout(() => {
+                setSavingStatus((prev) => ({ ...prev, [id]: 'idle' }));
+              }, 3000);
+            }
+          }
+        } catch (err: unknown) {
+          if (err instanceof Error && err.name === 'AbortError') {
+            return;
+          }
+          if (prayerAbortControllersRef.current.get(id) === abortController) {
+            prayerAbortControllersRef.current.delete(id);
+            console.warn('Background prayer sync error:', err);
             setSavingStatus((prev) => ({ ...prev, [id]: 'error' }));
             setTimeout(() => {
               setSavingStatus((prev) => ({ ...prev, [id]: 'idle' }));
             }, 3000);
           }
-        } catch (err) {
-          console.warn('Background prayer sync error:', err);
-          setSavingStatus((prev) => ({ ...prev, [id]: 'error' }));
-          setTimeout(() => {
-            setSavingStatus((prev) => ({ ...prev, [id]: 'idle' }));
-          }, 3000);
         }
       } else {
         // Guest mode local save
@@ -1055,17 +1039,26 @@ export default function HomeDashboard({
         }, 1500);
       }
     },
-    [user, activeLiturgicalDate, prayers, setPrayers, setStreak, setQazaCount]
+    [user, activeLiturgicalDate, setPrayers, setStreak, setQazaCount]
   );
 
-  // Quick toggle: Tapping a PENDING prayer marks it as Prayed.
-  // Tapping again is a safe idempotent no-op (never reverts to Pending).
-  const handleQuickToggle = (id: PrayerId) => {
-    const current = prayers.find((p) => p.id === id);
-    if (current?.status === 'PENDING') {
-      handleSetStatus(id, 'PRAYED_ON_TIME');
-    }
-  };
+  // Quick toggle: Tapping a prayer toggles between completed and pending
+  const handleQuickToggle = useCallback(
+    (id: PrayerId) => {
+      const current = prayersRef.current.find((p) => p.id === id);
+      if (!current) return;
+      const isCompleted =
+        current.status === 'PRAYED_ON_TIME' ||
+        current.status === 'PRAYED' ||
+        current.status === 'PRAYED_LATE';
+      if (isCompleted) {
+        handleSetStatus(id, 'PENDING');
+      } else {
+        handleSetStatus(id, 'PRAYED_ON_TIME');
+      }
+    },
+    [handleSetStatus]
+  );
 
   // Local accountability ledger calculated from historical prayer records using single source of truth
   const localAccountability = useMemo(() => {
@@ -1206,14 +1199,14 @@ export default function HomeDashboard({
               <span className="p-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 shrink-0">
                 <CalendarIcon className="w-4 h-4" />
               </span>
-              <span suppressHydrationWarning className="text-slate-900 dark:text-slate-100 font-extrabold text-base sm:text-lg tracking-tight">
+              <span className="text-slate-900 dark:text-slate-100 font-extrabold text-base sm:text-lg tracking-tight">
                 {gregorianDate}
               </span>
             </div>
 
             {/* Small, elegant Hijri Date secondary line directly below Gregorian date */}
             {hijriDate && (
-              <p suppressHydrationWarning className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 font-normal flex items-center gap-1.5 pl-7 mt-0.5">
+              <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 font-normal flex items-center gap-1.5 pl-7 mt-0.5">
                 <Moon className="w-3 h-3 text-emerald-600/70 dark:text-emerald-400/70 shrink-0" />
                 <span>{hijriDate}</span>
               </p>
@@ -1238,7 +1231,7 @@ export default function HomeDashboard({
                     : 'text-slate-400 dark:text-slate-500'
                 }`}
               />
-              <span suppressHydrationWarning>
+              <span>
                 {streak.current} {t.dashboard.streakDays}
               </span>
             </div>
@@ -1256,126 +1249,71 @@ export default function HomeDashboard({
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* Card A: Next Prayer Card */}
         <div className="rounded-2xl bg-gradient-to-br from-slate-900 via-slate-850 to-slate-800 text-white p-5 shadow-sm border border-slate-700/80 flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-2">
-                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-500/20 text-emerald-400">
-                  <Timer className="w-4 h-4" />
-                </div>
-                <span className="text-xs font-semibold uppercase tracking-wider text-slate-300">
-                  {t.dashboard.nextPrayer}
-                </span>
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-500/20 text-emerald-400">
+                <Timer className="w-4 h-4" />
               </div>
-
-              {/* Authoritative Single City Badge with Live Calculation Indicator */}
-              <div className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full bg-slate-800/90 text-slate-200 border border-slate-700/80 shadow-2xs">
-                <MapPin className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                <span suppressHydrationWarning>{locationName}</span>
-                {apiStatus === 'live' && (
-                  <span
-                    className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"
-                    title="Live calculation"
-                  />
-                )}
-                {apiStatus === 'loading' && (
-                  <Loader2 className="w-3 h-3 text-slate-400 animate-spin" />
-                )}
-                {apiStatus === 'fallback' && (
-                  <span
-                    className="w-1.5 h-1.5 rounded-full bg-amber-400"
-                    title={t.dashboard.apiError}
-                  />
-                )}
-                {apiStatus === 'error' && (
-                  <span
-                    className="w-1.5 h-1.5 rounded-full bg-rose-400"
-                    title={t.dashboard.apiError}
-                  />
-                )}
-              </div>
+              <span className="text-xs font-semibold uppercase tracking-wider text-slate-300">
+                {t.dashboard.nextPrayer}
+              </span>
             </div>
 
-            <div className="flex items-baseline justify-between mt-2">
-              <div>
-                <p className="text-2xl font-black tracking-tight text-white">
-                  {t.prayers[nextPrayer.prayerId]}
-                </p>
-                <div className="flex items-center gap-1.5 text-xs text-slate-400 mt-0.5">
-                  <Clock className="w-3.5 h-3.5" />
-                  <span className="tabular-nums">
-                    {nextPrayerItem?.endTime
-                      ? `${nextPrayer.prayerTime} – ${nextPrayerItem.endTime}`
-                      : nextPrayer.prayerTime}
-                  </span>
-                </div>
-              </div>
-
-              {/* Live Ticking Countdown */}
-              <div className="text-right">
-                <span className="text-[11px] font-medium text-slate-400 block mb-0.5">
-                  {t.dashboard.in}
-                </span>
-                <p
-                  suppressHydrationWarning
-                  className="text-xl sm:text-2xl font-black text-emerald-400 font-mono tracking-tight"
-                >
-                  {String(nextPrayer.hours).padStart(2, '0')}:
-                  {String(nextPrayer.mins).padStart(2, '0')}:
-                  {String(nextPrayer.secs).padStart(2, '0')}
-                </p>
-              </div>
+            {/* Authoritative Single City Badge with Live Calculation Indicator */}
+            <div className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full bg-slate-800/90 text-slate-200 border border-slate-700/80 shadow-2xs">
+              <MapPin className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+              <span>{locationName}</span>
+              {apiStatus === 'live' && (
+                <span
+                  className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"
+                  title="Live calculation"
+                />
+              )}
+              {apiStatus === 'loading' && (
+                <Loader2 className="w-3 h-3 text-slate-400 animate-spin" />
+              )}
+              {apiStatus === 'fallback' && (
+                <span
+                  className="w-1.5 h-1.5 rounded-full bg-amber-400"
+                  title={t.dashboard.apiError}
+                />
+              )}
+              {apiStatus === 'error' && (
+                <span
+                  className="w-1.5 h-1.5 rounded-full bg-rose-400"
+                  title={t.dashboard.apiError}
+                />
+              )}
             </div>
           </div>
 
-          <div className="mt-4 pt-3 border-t border-slate-700/60 flex items-center justify-between text-xs text-slate-400 flex-wrap gap-2">
-            <div className="flex items-center gap-2">
-              {notificationPermission === 'granted' ? (
-                <button
-                  type="button"
-                  onClick={handleToggleReminders}
-                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
-                    remindersEnabled
-                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30'
-                      : 'bg-slate-800 text-slate-400 border border-slate-700 hover:bg-slate-700'
-                  }`}
-                  title={remindersEnabled ? t.dashboard.remindersOn : t.dashboard.remindersOff}
-                >
-                  {remindersEnabled ? (
-                    <Bell className="w-3.5 h-3.5 text-emerald-400" />
-                  ) : (
-                    <BellOff className="w-3.5 h-3.5 text-slate-400" />
-                  )}
-                  <span>{remindersEnabled ? t.dashboard.remindersOn : t.dashboard.remindersOff}</span>
-                </button>
-              ) : notificationPermission === 'denied' ? (
-                <span
-                  title={t.dashboard.notificationsBlocked}
-                  className="inline-flex items-center gap-1 text-[11px] text-slate-400 font-medium"
-                >
-                  <BellOff className="w-3.5 h-3.5 text-slate-500" />
-                  <span>{t.dashboard.notificationsBlocked}</span>
+          <div className="flex items-baseline justify-between mt-2">
+            <div>
+              <p className="text-2xl font-black tracking-tight text-white">
+                {t.prayers[nextPrayer.prayerId]}
+              </p>
+              <div className="flex items-center gap-1.5 text-xs text-slate-400 mt-0.5">
+                <Clock className="w-3.5 h-3.5" />
+                <span className="tabular-nums">
+                  {nextPrayerItem?.endTime
+                    ? `${nextPrayer.prayerTime} – ${nextPrayerItem.endTime}`
+                    : nextPrayer.prayerTime}
                 </span>
-              ) : notificationPermission === 'default' ? (
-                <button
-                  type="button"
-                  onClick={handleToggleReminders}
-                  className="inline-flex items-center gap-1.5 text-xs text-emerald-400 hover:text-emerald-300 font-semibold cursor-pointer underline"
-                >
-                  <Bell className="w-3.5 h-3.5" />
-                  <span>{t.dashboard.enableNotifications}</span>
-                </button>
-              ) : null}
+              </div>
+            </div>
 
-              {notificationPermission === 'granted' && (
-                <button
-                  type="button"
-                  onClick={handleTestNotification}
-                  className="px-2 py-1 rounded-md bg-white/10 hover:bg-white/20 text-slate-300 text-[10px] font-semibold transition-colors cursor-pointer"
-                  title={t.dashboard.testNotification}
-                >
-                  {t.dashboard.testNotification}
-                </button>
-              )}
+            {/* Live Ticking Countdown */}
+            <div className="text-right">
+              <span className="text-[11px] font-medium text-slate-400 block mb-0.5">
+                {t.dashboard.in}
+              </span>
+              <p
+                className="text-xl sm:text-2xl font-black text-emerald-400 font-mono tracking-tight"
+              >
+                {String(nextPrayer.hours).padStart(2, '0')}:
+                {String(nextPrayer.mins).padStart(2, '0')}:
+                {String(nextPrayer.secs).padStart(2, '0')}
+              </p>
             </div>
           </div>
         </div>
@@ -1573,19 +1511,14 @@ export default function HomeDashboard({
             const prayerLabel = t.prayers[prayer.id] || prayer.name;
             const statusLabel = prayer.status === 'PRAYED_LATE' ? t.statuses.PRAYED : t.statuses[prayer.status];
             const itemSaveStatus = savingStatus[prayer.id];
-            const isPending = prayer.status === 'PENDING';
 
             return (
               <div
                 key={prayer.id}
                 onClick={() => {
-                  if (isPending) {
-                    handleSetStatus(prayer.id, 'PRAYED_ON_TIME');
-                  }
+                  handleQuickToggle(prayer.id);
                 }}
-                className={`relative rounded-2xl border p-4 transition-all shadow-xs select-none ${config.bgClass} ${config.borderClass} ${
-                  isPending ? 'cursor-pointer hover:border-slate-300 dark:hover:border-slate-700' : 'cursor-default'
-                }`}
+                className={`relative rounded-2xl border p-4 transition-all shadow-xs select-none cursor-pointer hover:border-slate-300 dark:hover:border-slate-700 ${config.bgClass} ${config.borderClass}`}
               >
                 <div className="flex items-center justify-between">
                   {/* Left: Quick toggle button & prayer name */}

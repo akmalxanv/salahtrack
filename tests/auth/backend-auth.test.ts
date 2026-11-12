@@ -8,6 +8,7 @@ import { Session, type ISession } from '../../src/models/Session.ts';
 import {
   validateSessionToken,
   sanitizeUser,
+  invalidateSessionCache,
 } from '../../src/lib/auth/guard.ts';
 import { clearRateLimitStore } from '../../src/lib/auth/rate-limit.ts';
 import { hashPassword } from '../../src/lib/auth/password.ts';
@@ -175,6 +176,7 @@ describe('Backend Authentication Layer Tests', () => {
   beforeEach(() => {
     setupMocks();
     clearRateLimitStore();
+    invalidateSessionCache();
   });
 
   describe('1. Mongoose Schema Declarations & Protections', () => {
@@ -656,6 +658,66 @@ describe('Backend Authentication Layer Tests', () => {
     it('returns null for non-existent token', async () => {
       const result = await validateSessionToken('non_existent_token');
       assert.strictEqual(result, null);
+    });
+
+    it('caches validated session in memory to eliminate repeated MongoDB queries', async () => {
+      const token = 'cached_session_test_token';
+      const userId = new mongoose.Types.ObjectId();
+      let findOneCallCount = 0;
+
+      mockUsers.push({
+        _id: userId,
+        name: 'Cache User',
+        email: 'cache@salahtrack.uz',
+        username: 'cache_user',
+        passwordHash: '$argon2id$v=19$somehash',
+        role: 'user',
+        preferences: { language: 'uz' },
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+      mockSessions.push({
+        _id: new mongoose.Types.ObjectId(),
+        sessionToken: token,
+        userId,
+        expiresAt: new Date(Date.now() + 1000000),
+        lastActiveAt: new Date(),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        save: async function () { return this; },
+      });
+
+      const originalFindOne = Session.findOne;
+      const sessionModel = Session as unknown as Record<string, unknown>;
+      sessionModel.findOne = async (query: { sessionToken?: string }) => {
+        findOneCallCount++;
+        return originalFindOne(query as never);
+      };
+
+      try {
+        // First call: misses cache, executes MongoDB query
+        const first = await validateSessionToken(token);
+        assert.ok(first);
+        assert.strictEqual(first?.user.username, 'cache_user');
+        assert.strictEqual(findOneCallCount, 1, 'First validation must query DB');
+
+        // Second call: hits in-memory cache, 0 round-trips
+        const second = await validateSessionToken(token);
+        assert.ok(second);
+        assert.strictEqual(second?.user.username, 'cache_user');
+        assert.strictEqual(findOneCallCount, 1, 'Second validation must be served from cache without querying DB');
+
+        // Invalidate cache for token
+        invalidateSessionCache(token);
+
+        // Third call: cache was invalidated, must query DB again
+        const third = await validateSessionToken(token);
+        assert.ok(third);
+        assert.strictEqual(findOneCallCount, 2, 'Validation after invalidateSessionCache must re-query DB');
+      } finally {
+        sessionModel.findOne = originalFindOne;
+      }
     });
   });
 });

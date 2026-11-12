@@ -1,15 +1,15 @@
 'use client';
 
-import { useSyncExternalStore, useCallback, useMemo, useEffect } from 'react';
-
-const emptySubscribe = () => () => {};
+import { useState, useSyncExternalStore, useCallback, useMemo, useEffect } from 'react';
 
 export function useIsMounted(): boolean {
-  return useSyncExternalStore(
-    emptySubscribe,
-    () => true,
-    () => false
-  );
+  const [isMounted, setIsMounted] = useState(false);
+  useEffect(() => {
+    queueMicrotask(() => {
+      setIsMounted(true);
+    });
+  }, []);
+  return isMounted;
 }
 
 function subscribe(callback: () => void) {
@@ -93,7 +93,7 @@ export function useLocalStorage<T>(key: string, initialValue: T) {
   const rawValue = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 
   const storedValue = useMemo<T>(() => {
-    if (rawValue === null) return initialValue;
+    if (!isMounted || rawValue === null) return initialValue;
     try {
       const parsed = JSON.parse(rawValue);
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && '__proto__' in parsed) {
@@ -103,7 +103,7 @@ export function useLocalStorage<T>(key: string, initialValue: T) {
     } catch {
       return initialValue;
     }
-  }, [rawValue, initialValue]);
+  }, [isMounted, rawValue, initialValue]);
 
   // Sync cookie so server-side rendering on reload can pre-render matching state
   useEffect(() => {

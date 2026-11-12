@@ -254,10 +254,6 @@ export interface TranslationContent {
     saving: string;
     saved: string;
     saveFailed: string;
-    notifications: string;
-    notificationsEnabled: string;
-    notificationsBlocked: string;
-    enableNotifications: string;
     locationUnavailable: string;
     apiError: string;
     calcMethod: string;
@@ -266,21 +262,10 @@ export interface TranslationContent {
     overnightIshaActive: string;
     overnightIshaBadge: string;
     hijriBadge: string;
-    remindersOn: string;
-    remindersOff: string;
-    testNotification: string;
-    testNotificationBody: string;
-    prayerNotificationBody: string;
     statusLive: string;
     allCaughtUp: string;
     receiptDetails: string;
     hideReceiptDetails: string;
-    notificationsUnsupported: string;
-    notificationsHelpTitle: string;
-    notificationsHelpDesc: string;
-    notificationsHelpStepChrome: string;
-    notificationsHelpStepSafari: string;
-    notificationsHelpClose: string;
   };
   accountability: {
     title: string;
@@ -896,10 +881,6 @@ export const translations: Record<Language, TranslationContent> = {
       saving: 'Сохранение...',
       saved: 'Сохранено',
       saveFailed: 'Ошибка сохранения',
-      notifications: 'Напоминания',
-      notificationsEnabled: 'Напоминания включены',
-      notificationsBlocked: 'Напоминания заблокированы в браузере',
-      enableNotifications: 'Включить напоминания',
       locationUnavailable: 'Геолокация недоступна',
       apiError: 'Ошибка загрузки расписания',
       calcMethod: 'Метод расчёта',
@@ -908,21 +889,10 @@ export const translations: Record<Language, TranslationContent> = {
       overnightIshaActive: 'Время ночного намаза (Иша) продолжается до наступления рассвета (Фаджр). Литургический день обновляется с наступлением Фаджра.',
       overnightIshaBadge: 'Иша продолжается',
       hijriBadge: 'Хиджра',
-      remindersOn: 'Напоминания вкл',
-      remindersOff: 'Напоминания выкл',
-      testNotification: 'Тест',
-      testNotificationBody: 'Напоминания о намазе успешно активированы!',
-      prayerNotificationBody: 'Наступило время намаза. Спешите к молитве, спешите к спасению!',
       statusLive: 'В реальном времени',
       allCaughtUp: 'Все прочитаны',
       receiptDetails: 'Детализация',
       hideReceiptDetails: 'Скрыть',
-      notificationsUnsupported: 'Уведомления не поддерживаются вашим браузером',
-      notificationsHelpTitle: 'Как включить уведомления',
-      notificationsHelpDesc: 'Уведомления заблокированы в настройках браузера. Включите их, чтобы не пропускать намазы:',
-      notificationsHelpStepChrome: 'Chrome / Edge: нажмите на значок настроек сайта в адресной строке и разрешите уведомления.',
-      notificationsHelpStepSafari: 'Safari (iOS): добавьте сайт на «Экран «Домой» (PWA) и включите уведомления в Настройках.',
-      notificationsHelpClose: 'Понятно',
     },
     accountability: {
       title: 'Общая задолженность по садака (Штрафы за каза)',
@@ -1557,10 +1527,6 @@ export const translations: Record<Language, TranslationContent> = {
       saving: 'Saving...',
       saved: 'Saved',
       saveFailed: 'Save failed',
-      notifications: 'Reminders',
-      notificationsEnabled: 'Reminders enabled',
-      notificationsBlocked: 'Reminders blocked by browser',
-      enableNotifications: 'Enable reminders',
       locationUnavailable: 'Location unavailable',
       apiError: 'Schedule update error',
       calcMethod: 'Calculation Method',
@@ -1569,21 +1535,10 @@ export const translations: Record<Language, TranslationContent> = {
       overnightIshaActive: 'Isha prayer continues overnight until the dawn of Fajr. The liturgical prayer day rolls over at Fajr adhan.',
       overnightIshaBadge: 'Isha is active',
       hijriBadge: 'Hijri',
-      remindersOn: 'Reminders ON',
-      remindersOff: 'Reminders OFF',
-      testNotification: 'Test',
-      testNotificationBody: 'Prayer reminders are active and functioning correctly!',
-      prayerNotificationBody: 'It is time for prayer. Come to prayer, come to success.',
       statusLive: 'Live',
       allCaughtUp: 'All caught up',
       receiptDetails: 'Details',
       hideReceiptDetails: 'Hide',
-      notificationsUnsupported: 'Notifications are not supported by your browser',
-      notificationsHelpTitle: 'How to Enable Notifications',
-      notificationsHelpDesc: 'Notifications are blocked in your browser settings. Enable them to never miss prayer times:',
-      notificationsHelpStepChrome: 'Chrome / Edge: Click the lock icon in the address bar and set Notifications to Allow.',
-      notificationsHelpStepSafari: 'Safari (iOS): Add the app to your Home Screen (PWA) and enable Notifications in Settings.',
-      notificationsHelpClose: 'Got it',
     },
     accountability: {
       title: 'Total Sadaqah Owed (Qaza Fines)',
@@ -2218,10 +2173,6 @@ export const translations: Record<Language, TranslationContent> = {
       saving: 'Saqlanmoqda...',
       saved: 'Saqlandi',
       saveFailed: 'Saqlashda xatolik',
-      notifications: 'Eslatmalar',
-      notificationsEnabled: 'Eslatmalar yoqilgan',
-      notificationsBlocked: 'Brauzerda eslatmalar bloklangan',
-      enableNotifications: 'Eslatmalarni yoqish',
       locationUnavailable: 'Joylashuv aniqlanmadi',
       apiError: 'Vaqtlar yangilanmadi',
       calcMethod: 'Hisoblash usuli',
@@ -2230,21 +2181,10 @@ export const translations: Record<Language, TranslationContent> = {
       overnightIshaActive: 'Tong (Bomdod) otguncha Xufton namozi vaqti davom etadi. Diniy kun Bomdod kirishi bilan yangilanadi.',
       overnightIshaBadge: 'Xufton davom etmoqda',
       hijriBadge: 'Hijriy',
-      remindersOn: 'Eslatmalar yoqilgan',
-      remindersOff: 'Eslatmalar o‘chirilgan',
-      testNotification: 'Sinash',
-      testNotificationBody: 'Namoz eslatmalari faollashtirildi va to‘g‘ri ishlamoqda!',
-      prayerNotificationBody: 'Namoz vaqti kirdi. Namozga shoshiling, najotga shoshiling!',
       statusLive: 'Jonli',
       allCaughtUp: 'Barchasi o‘qilgan',
       receiptDetails: 'Tafsilotlar',
       hideReceiptDetails: 'Yopish',
-      notificationsUnsupported: 'Brauzeringizda bildirishnomalar qo‘llab-quvvatlanmaydi',
-      notificationsHelpTitle: 'Bildirishnomalarni yoqish bo‘yicha qo‘llanma',
-      notificationsHelpDesc: 'Bildirishnomalar brauzer sozlamalarida bloklangan. Namoz vaqtlarini o‘tkazib yubormaslik uchun ularga ruxsat bering:',
-      notificationsHelpStepChrome: 'Chrome / Edge: manzil qatori yonidagi qulf belgisini bosing va Bildirishnomalarga ruxsat bering.',
-      notificationsHelpStepSafari: 'Safari (iOS): ilovani «Bosh ekranga qo‘shish» (PWA) qiling va Sozlamalarda bildirishnomalarga ruxsat bering.',
-      notificationsHelpClose: 'Tushundim',
     },
     accountability: {
       title: 'Umumiy sadaqa qarzi (Qazo jarimalari)',

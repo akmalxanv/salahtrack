@@ -16,17 +16,22 @@ export default function Sidebar() {
 
   return (
     <aside className="hidden md:flex flex-col w-64 h-screen sticky top-0 border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shrink-0">
-      <div className="flex items-start gap-3 mb-8">
+      <Link
+        href="/"
+        prefetch={true}
+        aria-label={t.appTitle}
+        className="flex items-start gap-3 mb-8 group hover:opacity-95 transition-opacity cursor-pointer"
+      >
         <BrandLogo size={36} priority className="shrink-0 mt-0.5" />
         <div className="flex flex-col min-w-0">
-          <span className="font-bold text-slate-900 dark:text-slate-100 text-lg tracking-tight leading-tight">
+          <span className="font-bold text-slate-900 dark:text-slate-100 text-lg tracking-tight leading-tight group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors">
             {t.appTitle}
           </span>
           <span className="text-[11px] font-normal text-slate-500 dark:text-slate-400 leading-snug break-words mt-0.5">
             {t.appSubtitle}
           </span>
         </div>
-      </div>
+      </Link>
 
       <nav className="space-y-1.5 flex-1" aria-label={t.appTitle}>
         {NAV_ITEMS.map((item) => {
@@ -38,6 +43,7 @@ export default function Sidebar() {
             <Link
               key={item.href}
               href={item.href}
+              prefetch={true}
               className={`flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium transition-colors ${
                 isActive
                   ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/50 dark:text-emerald-400 font-semibold'
@@ -55,7 +61,7 @@ export default function Sidebar() {
       <div className="pt-4 border-t border-slate-100 dark:border-slate-800 space-y-3">
         {user ? (
           <div className="flex items-center justify-between p-2 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800">
-            <Link href="/account" className="flex items-center gap-2.5 min-w-0 flex-1 group">
+            <Link href="/account" prefetch={true} className="flex items-center gap-2.5 min-w-0 flex-1 group">
               <div className="w-8 h-8 rounded-full bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 font-bold text-xs flex items-center justify-center shrink-0">
                 {user.name.charAt(0).toUpperCase()}
               </div>
@@ -79,6 +85,7 @@ export default function Sidebar() {
           <div className="flex items-center gap-2">
             <Link
               href="/login"
+              prefetch={true}
               className="flex-1 py-2 px-3 text-center rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-medium transition-colors flex items-center justify-center gap-1.5 shadow-xs"
             >
               <LogIn className="w-3.5 h-3.5" />
@@ -86,6 +93,7 @@ export default function Sidebar() {
             </Link>
             <Link
               href="/signup"
+              prefetch={true}
               className="py-2 px-3 text-center rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 text-xs font-medium transition-colors"
             >
               {t.nav.signup}

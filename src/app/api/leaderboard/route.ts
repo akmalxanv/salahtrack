@@ -20,6 +20,39 @@ export interface LeaderboardEntry {
   isCurrentUser: boolean;
 }
 
+export interface CachedLeaderboardEntry {
+  rank: number;
+  userId: string;
+  name: string;
+  username: string;
+  completedCount: number;
+  onTimeCount: number;
+  currentStreak: number;
+  totalPossible: number;
+  consistencyPercentage: number;
+}
+
+export interface CachedLeaderboardData {
+  period: string;
+  startDate: string;
+  endDate: string;
+  entries: CachedLeaderboardEntry[];
+  totalParticipants: number;
+  cachedAt: number;
+}
+
+export const LEADERBOARD_CACHE_TTL_MS = 30 * 1000; // 30 seconds TTL
+const leaderboardCache = new Map<string, CachedLeaderboardData>();
+
+/**
+ * Flushes the in-memory leaderboard cache.
+ */
+export function clearLeaderboardCache(): void {
+  leaderboardCache.clear();
+}
+
+export const _clearLeaderboardCache = clearLeaderboardCache;
+
 /**
  * GET /api/leaderboard?period=daily|weekly|monthly&date=YYYY-MM-DD
  *
@@ -48,6 +81,41 @@ export async function GET(request: NextRequest) {
     const now = new Date();
     const todayStr = now.toISOString().split('T')[0];
     const targetDate = dateParam && /^\d{4}-\d{2}-\d{2}$/.test(dateParam) ? dateParam : todayStr;
+    const cacheKey = `${period}:${targetDate}`;
+
+    // 0. High-performance TTL memory cache check (0ms response, zero database round-trips)
+    const cached = leaderboardCache.get(cacheKey);
+    if (cached && Date.now() - cached.cachedAt < LEADERBOARD_CACHE_TTL_MS) {
+      return NextResponse.json(
+        {
+          success: true,
+          data: {
+            period: cached.period,
+            startDate: cached.startDate,
+            endDate: cached.endDate,
+            leaderboard: cached.entries.map((entry) => ({
+              rank: entry.rank,
+              name: entry.name,
+              username: entry.username,
+              completedCount: entry.completedCount,
+              onTimeCount: entry.onTimeCount,
+              currentStreak: entry.currentStreak,
+              totalPossible: entry.totalPossible,
+              consistencyPercentage: entry.consistencyPercentage,
+              isCurrentUser: currentUserId ? entry.userId === currentUserId : false,
+            })),
+            totalParticipants: cached.totalParticipants,
+            userOptedIn: auth?.user?.preferences?.showOnLeaderboard || false,
+          },
+        },
+        {
+          status: 200,
+          headers: {
+            'Cache-Control': 'private, max-age=15, stale-while-revalidate=30',
+          },
+        }
+      );
+    }
 
     await connectDB();
 
@@ -57,6 +125,15 @@ export async function GET(request: NextRequest) {
     }).select('_id name username createdAt').lean();
 
     if (optedInUsers.length === 0) {
+      leaderboardCache.set(cacheKey, {
+        period,
+        startDate: targetDate,
+        endDate: targetDate,
+        entries: [],
+        totalParticipants: 0,
+        cachedAt: Date.now(),
+      });
+
       return NextResponse.json(
         {
           success: true,
@@ -68,7 +145,12 @@ export async function GET(request: NextRequest) {
             userOptedIn: auth?.user?.preferences?.showOnLeaderboard || false,
           },
         },
-        { status: 200 }
+        {
+          status: 200,
+          headers: {
+            'Cache-Control': 'private, max-age=15, stale-while-revalidate=30',
+          },
+        }
       );
     }
 
@@ -92,7 +174,10 @@ export async function GET(request: NextRequest) {
       totalPossible = 150; // 30 days * 5
     }
 
-    // 3. Query all records for opted-in users within the period window
+    // 3. Query records for opted-in users:
+    // Period window for consistency scores, and bounded recent window (last 60 days) for streaks.
+    // Optimizing streakRecords query prevents full collection scans across unbounded history.
+    const streakStartDate = new Date(validTargetTime - 60 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
     const userIds = optedInUsers.map((u) => u._id);
     const [records, streakRecords] = await Promise.all([
       PrayerRecord.find({
@@ -101,6 +186,7 @@ export async function GET(request: NextRequest) {
       }).select('userId date prayers').lean(),
       PrayerRecord.find({
         userId: { $in: userIds },
+        date: { $gte: streakStartDate, $lte: targetDate },
       }).sort({ date: -1 }).select('userId date prayers').lean(),
     ]);
 
@@ -195,6 +281,7 @@ export async function GET(request: NextRequest) {
     //    Identical performance metrics share the rank; next rank reflects true position.
     let currentRank = 1;
     const leaderboard: LeaderboardEntry[] = [];
+    const cachedEntries: CachedLeaderboardEntry[] = [];
 
     for (let i = 0; i < participantList.length; i++) {
       const entry = participantList[i];
@@ -212,6 +299,18 @@ export async function GET(request: NextRequest) {
         currentRank = 1;
       }
 
+      cachedEntries.push({
+        rank: currentRank,
+        userId: entry.userId,
+        name: entry.name,
+        username: entry.username,
+        completedCount: entry.completedCount,
+        onTimeCount: entry.onTimeCount,
+        currentStreak: entry.currentStreak,
+        totalPossible: entry.totalPossible,
+        consistencyPercentage: entry.consistencyPercentage,
+      });
+
       leaderboard.push({
         rank: currentRank,
         name: entry.name,
@@ -223,6 +322,26 @@ export async function GET(request: NextRequest) {
         consistencyPercentage: entry.consistencyPercentage,
         isCurrentUser: entry.isCurrentUser,
       });
+    }
+
+    // Cache pre-computed leaderboard results for this period & date
+    leaderboardCache.set(cacheKey, {
+      period,
+      startDate,
+      endDate,
+      entries: cachedEntries,
+      totalParticipants: leaderboard.length,
+      cachedAt: Date.now(),
+    });
+
+    // Prune stale cache entries if map exceeds 200 items
+    if (leaderboardCache.size > 200) {
+      const cutoff = Date.now() - LEADERBOARD_CACHE_TTL_MS;
+      for (const [key, item] of leaderboardCache.entries()) {
+        if (item.cachedAt < cutoff) {
+          leaderboardCache.delete(key);
+        }
+      }
     }
 
     return NextResponse.json(
@@ -237,7 +356,12 @@ export async function GET(request: NextRequest) {
           userOptedIn: auth?.user?.preferences?.showOnLeaderboard || false,
         },
       },
-      { status: 200 }
+      {
+        status: 200,
+        headers: {
+          'Cache-Control': 'private, max-age=15, stale-while-revalidate=30',
+        },
+      }
     );
   } catch (error) {
     console.error('Error in GET /api/leaderboard:', error);

@@ -7,7 +7,7 @@ import { Group } from '../../src/models/Group.ts';
 import { User } from '../../src/models/User.ts';
 import { Session } from '../../src/models/Session.ts';
 import { PrayerRecord } from '../../src/models/Prayer.ts';
-import { GET as getLeaderboardHandler } from '../../src/app/api/leaderboard/route.ts';
+import { GET as getLeaderboardHandler, clearLeaderboardCache } from '../../src/app/api/leaderboard/route.ts';
 import { GET as getGroupHandler } from '../../src/app/api/groups/[id]/route.ts';
 
 // In-memory mock documents
@@ -67,6 +67,7 @@ let mockPrayerRecords: MockPrayerRecordDoc[] = [];
 let mockGroups: MockGroupDoc[] = [];
 
 function setupMocks() {
+  clearLeaderboardCache();
   mockUsers = [];
   mockSessions = [];
   mockPrayerRecords = [];
@@ -191,6 +192,10 @@ describe('Accurate Rankings & Privacy Rules (Global Leaderboard & Private Circle
   });
 
   describe('1. Global Leaderboard Rankings & Tie Handling', () => {
+    beforeEach(() => {
+      setupMocks();
+    });
+
     it('ranks users deterministically by completed percentage, on-time count, and account age', async () => {
       const todayStr = new Date().toISOString().split('T')[0];
 
@@ -398,9 +403,100 @@ describe('Accurate Rankings & Privacy Rules (Global Leaderboard & Private Circle
       assert.ok(!responseString.includes('45000'), 'Private fine amount must not leak into response string');
       assert.ok(!responseString.includes('sadaqahOwed'), 'sadaqahOwed key must not exist in global response');
     });
+
+    it('caches leaderboard responses in memory with Cache-Control headers', async () => {
+      const todayStr = '2026-11-11';
+      const u = createTestUser('Speedy Runner', 'speedy', 10);
+      mockPrayerRecords.push({
+        _id: new mongoose.Types.ObjectId(),
+        userId: u._id,
+        date: todayStr,
+        prayers: {
+          fajr: { status: 'PRAYED_ON_TIME' },
+          dhuhr: { status: 'PRAYED_ON_TIME' },
+          asr: { status: 'PRAYED_ON_TIME' },
+          maghrib: { status: 'PRAYED_ON_TIME' },
+          isha: { status: 'PRAYED_ON_TIME' },
+        },
+      });
+
+      let prayerFindCount = 0;
+      const originalFind = PrayerRecord.find;
+      const prayerModel = PrayerRecord as unknown as Record<string, unknown>;
+      prayerModel.find = (filter: Record<string, unknown>) => {
+        prayerFindCount++;
+        return originalFind(filter as never);
+      };
+
+      try {
+        const req1 = new NextRequest(`http://localhost:3000/api/leaderboard?period=daily&date=${todayStr}`);
+        const res1 = await getLeaderboardHandler(req1);
+        assert.equal(res1.status, 200);
+        assert.equal(res1.headers.get('Cache-Control'), 'private, max-age=15, stale-while-revalidate=30');
+        const countAfterFirst = prayerFindCount;
+        assert.ok(countAfterFirst > 0, 'First request must query database');
+
+        // Second request for same period and date: must hit in-memory cache
+        const req2 = new NextRequest(`http://localhost:3000/api/leaderboard?period=daily&date=${todayStr}`);
+        const res2 = await getLeaderboardHandler(req2);
+        assert.equal(res2.status, 200);
+        assert.equal(prayerFindCount, countAfterFirst, 'Second request must be served from cache without DB queries');
+
+        // Clear cache and verify DB is queried again
+        clearLeaderboardCache();
+        const req3 = new NextRequest(`http://localhost:3000/api/leaderboard?period=daily&date=${todayStr}`);
+        const res3 = await getLeaderboardHandler(req3);
+        assert.equal(res3.status, 200);
+        assert.ok(prayerFindCount > countAfterFirst, 'Request after clearLeaderboardCache must re-query DB');
+      } finally {
+        prayerModel.find = originalFind;
+      }
+    });
+
+    it('bounds streak calculation query to the last 60 days', async () => {
+      const todayStr = '2026-11-11';
+      createTestUser('Streak Bounded User', 'streak_user', 5);
+
+      let streakQueryFilter: Record<string, unknown> | null = null;
+      const originalFind = PrayerRecord.find;
+      const prayerModel = PrayerRecord as unknown as Record<string, unknown>;
+      prayerModel.find = (filter: Record<string, unknown>) => {
+        if (filter.date && typeof filter.date === 'object' && '$gte' in filter.date && '$lte' in filter.date) {
+          const dateObj = filter.date as { $gte: string; $lte: string };
+          // Check if this is the streak query (bounded to 60 days)
+          if (dateObj.$lte === todayStr && dateObj.$gte !== todayStr) {
+            streakQueryFilter = filter;
+          }
+        }
+        return originalFind(filter as never);
+      };
+
+      try {
+        clearLeaderboardCache();
+        const req = new NextRequest(`http://localhost:3000/api/leaderboard?period=daily&date=${todayStr}`);
+        const res = await getLeaderboardHandler(req);
+        assert.equal(res.status, 200);
+
+        assert.ok(streakQueryFilter, 'Streak query must have executed with date filter');
+        const dateFilter = (streakQueryFilter as Record<string, unknown>).date as { $gte: string; $lte: string };
+        assert.equal(dateFilter.$lte, todayStr, 'Streak query must end on targetDate');
+
+        // Verify start date is approximately 60 days before targetDate (2026-09-12)
+        const startDiffDays = Math.round(
+          (new Date(dateFilter.$lte).getTime() - new Date(dateFilter.$gte).getTime()) / (24 * 60 * 60 * 1000)
+        );
+        assert.equal(startDiffDays, 60, 'Streak query date boundary must be exactly 60 days');
+      } finally {
+        prayerModel.find = originalFind;
+      }
+    });
   });
 
   describe('2. Private Accountability Circles Authorization & Sadaqah Calculation', () => {
+    beforeEach(() => {
+      setupMocks();
+    });
+
     it('enforces authorization: non-members are rejected with 403 Forbidden', async () => {
       const owner = createTestUser('Circle Owner', 'owner');
       const outsider = createTestUser('Outsider', 'outsider');

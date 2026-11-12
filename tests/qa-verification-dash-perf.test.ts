@@ -256,41 +256,38 @@ describe('QA Verification: Dashboard Layout & Performance Optimizations', () => 
       assert.equal(isDhuhrMenuOpen, false, 'Clicking chevron again closes menu');
     });
 
-    it('1.4 should verify idempotency: tapping a Pending prayer card marks it PRAYED_ON_TIME, tapping an already prayed/made-up/missed card does NOT change its status', () => {
-      // 1. AST / Code Verification: card container onClick must guard with if (isPending)
+    it('1.4 should verify bidirectional toggle: tapping a Pending prayer card marks it PRAYED_ON_TIME, tapping an already prayed card resets it to PENDING', () => {
+      // 1. AST / Code Verification: card container onClick must invoke handleQuickToggle
       const prayerLoopStart = dashboardSource.indexOf('{prayers.map((prayer) => {');
       const prayerLoopEnd = dashboardSource.indexOf('{/* Pay Qaza Modal');
       const prayerCardBlock = dashboardSource.slice(prayerLoopStart, prayerLoopEnd);
 
       assert.match(
         prayerCardBlock,
-        /const\s+isPending\s*=\s*prayer\.status\s*===\s*['"]PENDING['"]/,
-        'Must define isPending based strictly on prayer.status === "PENDING"'
+        /onClick=\{\(\)\s*=>\s*\{\s*handleQuickToggle\(\s*prayer\.id\s*\);?\s*\}\}/,
+        'Card onClick handler must invoke handleQuickToggle'
       );
 
+      // Verify cursor styling
       assert.match(
         prayerCardBlock,
-        /onClick=\{\(\)\s*=>\s*\{\s*if\s*\(\s*isPending\s*\)\s*\{\s*handleSetStatus\(\s*prayer\.id,\s*['"]PRAYED_ON_TIME['"]\s*\);?\s*\}\s*\}\}/,
-        'Card onClick handler must only invoke handleSetStatus when isPending is true'
+        /cursor-pointer/,
+        'Card cursor must be pointer'
       );
 
-      // Verify conditional cursor styling
-      assert.match(
-        prayerCardBlock,
-        /isPending\s*\?\s*['"]cursor-pointer[^'"]*['"]\s*:\s*['"]cursor-default['"]/,
-        'Card cursor must be pointer when pending, default when resolved'
-      );
-
-      // 2. Functional Verification of idempotent card-tap transition logic
+      // 2. Functional Verification of bidirectional card-tap transition logic
       function simulateCardTap(currentStatus: PrayerStatus): {
         statusChanged: boolean;
         newStatus: PrayerStatus;
       } {
-        const isPending = currentStatus === 'PENDING';
-        if (isPending) {
-          return { statusChanged: true, newStatus: 'PRAYED_ON_TIME' };
+        const isCompleted =
+          currentStatus === 'PRAYED_ON_TIME' ||
+          currentStatus === 'PRAYED' ||
+          currentStatus === 'PRAYED_LATE';
+        if (isCompleted) {
+          return { statusChanged: true, newStatus: 'PENDING' };
         }
-        return { statusChanged: false, newStatus: currentStatus };
+        return { statusChanged: true, newStatus: 'PRAYED_ON_TIME' };
       }
 
       // Case A: PENDING -> Tapping marks it PRAYED_ON_TIME
@@ -298,25 +295,25 @@ describe('QA Verification: Dashboard Layout & Performance Optimizations', () => 
       assert.equal(pendingResult.statusChanged, true);
       assert.equal(pendingResult.newStatus, 'PRAYED_ON_TIME');
 
-      // Case B: Already PRAYED_ON_TIME -> Tapping does NOT change status (Idempotent)
+      // Case B: Already PRAYED_ON_TIME -> Tapping toggles it back to PENDING (Bidirectional toggle)
       const prayedResult = simulateCardTap('PRAYED_ON_TIME');
-      assert.equal(prayedResult.statusChanged, false);
-      assert.equal(prayedResult.newStatus, 'PRAYED_ON_TIME');
+      assert.equal(prayedResult.statusChanged, true);
+      assert.equal(prayedResult.newStatus, 'PENDING');
 
-      // Case C: PRAYED_LATE -> Tapping does NOT change status (Idempotent)
+      // Case C: PRAYED_LATE -> Tapping toggles it back to PENDING (Bidirectional toggle)
       const prayedLateResult = simulateCardTap('PRAYED_LATE');
-      assert.equal(prayedLateResult.statusChanged, false);
-      assert.equal(prayedLateResult.newStatus, 'PRAYED_LATE');
+      assert.equal(prayedLateResult.statusChanged, true);
+      assert.equal(prayedLateResult.newStatus, 'PENDING');
 
-      // Case D: MADE_UP -> Tapping does NOT change status (Idempotent)
+      // Case D: MADE_UP -> Tapping sets PRAYED_ON_TIME
       const madeUpResult = simulateCardTap('MADE_UP');
-      assert.equal(madeUpResult.statusChanged, false);
-      assert.equal(madeUpResult.newStatus, 'MADE_UP');
+      assert.equal(madeUpResult.statusChanged, true);
+      assert.equal(madeUpResult.newStatus, 'PRAYED_ON_TIME');
 
-      // Case E: MISSED -> Tapping does NOT change status (Idempotent)
+      // Case E: MISSED -> Tapping sets PRAYED_ON_TIME
       const missedResult = simulateCardTap('MISSED');
-      assert.equal(missedResult.statusChanged, false);
-      assert.equal(missedResult.newStatus, 'MISSED');
+      assert.equal(missedResult.statusChanged, true);
+      assert.equal(missedResult.newStatus, 'PRAYED_ON_TIME');
     });
 
     it('1.5 should verify dropdown menu: renders 3 status buttons in grid grid-cols-3 gap-2 plus resetToPending when not pending, with e.stopPropagation()', () => {
@@ -422,7 +419,7 @@ describe('QA Verification: Dashboard Layout & Performance Optimizations', () => 
       // Verify Right: Countdown timer typography
       assert.match(
         cardASource,
-        /<p[\s\S]*?suppressHydrationWarning[\s\S]*?className="text-xl sm:text-2xl font-black text-emerald-400 font-mono tracking-tight"/,
+        /<p[\s\S]*?className="text-xl sm:text-2xl font-black text-emerald-400 font-mono tracking-tight"/,
         'Right side must display countdown timer with text-xl sm:text-2xl font-black text-emerald-400 font-mono tracking-tight'
       );
 

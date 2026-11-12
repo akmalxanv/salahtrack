@@ -39,24 +39,10 @@ export default function CompactHijriCalendar({
   const calendarDate = useMemo(() => getCalendarDate(), []);
   const liturgicalDate = useMemo(() => getLiturgicalDate(), []);
 
-  // Sighting offset state (-1, 0, +1 day) initialized lazily from localStorage
-  const [adjustment, setAdjustment] = useState<number>(() => {
-    if (typeof window === 'undefined') return 0;
-    try {
-      const stored = localStorage.getItem('salahtrack_hijri_adjustment');
-      if (stored !== null) {
-        const parsed = parseInt(stored, 10);
-        if (!isNaN(parsed) && parsed >= -1 && parsed <= 1) {
-          return parsed;
-        }
-      }
-    } catch {
-      // Storage access blocked or unavailable
-    }
-    return 0;
-  });
+  // Sighting offset state (-1, 0, +1 day) initialized deterministically for SSR
+  const [adjustment, setAdjustment] = useState<number>(0);
 
-  // Listen for external updates to sighting adjustment
+  // Sync sighting adjustment on mount and listen for external updates
   useEffect(() => {
     const handleStorageUpdate = () => {
       try {
@@ -72,6 +58,7 @@ export default function CompactHijriCalendar({
       }
     };
 
+    handleStorageUpdate();
     window.addEventListener('salahtrack_hijri_update', handleStorageUpdate);
     return () => {
       window.removeEventListener('salahtrack_hijri_update', handleStorageUpdate);

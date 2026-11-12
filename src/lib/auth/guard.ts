@@ -33,6 +33,36 @@ export interface AuthContext {
   session: ISession;
 }
 
+export interface CachedSessionEntry {
+  auth: AuthContext;
+  cachedAt: number;
+}
+
+/**
+ * In-memory session cache to eliminate redundant MongoDB queries on every page transition and RSC render.
+ * Module-level Map keyed by sessionToken with a 60-second TTL.
+ */
+export const SESSION_CACHE_TTL_MS = 60 * 1000;
+const sessionCache = new Map<string, CachedSessionEntry>();
+
+/**
+ * Invalidates the in-memory session cache.
+ * - If a token or user ID is provided, removes matching cache entries.
+ * - If called without arguments, completely flushes the session cache.
+ */
+export function invalidateSessionCache(tokenOrUserId?: string): void {
+  if (!tokenOrUserId) {
+    sessionCache.clear();
+    return;
+  }
+  sessionCache.delete(tokenOrUserId);
+  for (const [key, entry] of sessionCache.entries()) {
+    if (entry.auth.user.id === tokenOrUserId || entry.auth.session.sessionToken === tokenOrUserId) {
+      sessionCache.delete(key);
+    }
+  }
+}
+
 /**
  * Sanitizes a Mongoose User document or lean user record into a SafeUser object.
  */
@@ -58,7 +88,7 @@ export function sanitizeUser(user: IUser | (Partial<IUser> & { _id: { toString()
 }
 
 /**
- * Validates a session token directly against MongoDB Atlas.
+ * Validates a session token directly against MongoDB Atlas with an in-memory cache layer.
  * Used internally by both NextRequest and Server Component cookie extractors.
  *
  * @param token Raw session token string
@@ -67,6 +97,24 @@ export function sanitizeUser(user: IUser | (Partial<IUser> & { _id: { toString()
 export async function validateSessionToken(token: string): Promise<AuthContext | null> {
   if (!token || typeof token !== 'string') {
     return null;
+  }
+
+  const now = Date.now();
+
+  // Fast path: check in-memory cache
+  const cached = sessionCache.get(token);
+  if (cached) {
+    const isFresh = now - cached.cachedAt < SESSION_CACHE_TTL_MS;
+    const expiresAtMs = cached.auth.session.expiresAt
+      ? new Date(cached.auth.session.expiresAt).getTime()
+      : 0;
+    const isNotExpired = expiresAtMs > now;
+
+    if (isFresh && isNotExpired) {
+      return cached.auth;
+    }
+    // Stale or expired entry
+    sessionCache.delete(token);
   }
 
   await connectDB();
@@ -78,9 +126,10 @@ export async function validateSessionToken(token: string): Promise<AuthContext |
 
   // Check TTL expiration
   const expiresAtMs = session.expiresAt ? new Date(session.expiresAt).getTime() : 0;
-  if (expiresAtMs <= Date.now()) {
+  if (expiresAtMs <= now) {
     // Session is expired; delete immediately from database
     await Session.deleteOne({ _id: session._id }).catch(() => {});
+    sessionCache.delete(token);
     return null;
   }
 
@@ -89,21 +138,39 @@ export async function validateSessionToken(token: string): Promise<AuthContext |
   if (!user) {
     // Dangling session for deleted user; clean up
     await Session.deleteOne({ _id: session._id }).catch(() => {});
+    sessionCache.delete(token);
     return null;
   }
 
   // Touch lastActiveAt if more than 15 minutes since last update (reduces write load)
   // Non-blocking / fire-and-forget: do NOT await this update on every single authenticated request!
-  const now = Date.now();
   const lastActiveMs = session.lastActiveAt ? new Date(session.lastActiveAt).getTime() : 0;
   if (now - lastActiveMs > 15 * 60 * 1000) {
     Session.updateOne({ _id: session._id }, { $set: { lastActiveAt: new Date(now) } }).catch(() => {});
   }
 
-  return {
+  const authContext: AuthContext = {
     user: sanitizeUser(user),
     session: session as unknown as ISession,
   };
+
+  // Cache authenticated context
+  sessionCache.set(token, {
+    auth: authContext,
+    cachedAt: now,
+  });
+
+  // Defensive cleanup if map grows too large
+  if (sessionCache.size > 5000) {
+    const cutoff = now - SESSION_CACHE_TTL_MS;
+    for (const [key, entry] of sessionCache.entries()) {
+      if (entry.cachedAt < cutoff) {
+        sessionCache.delete(key);
+      }
+    }
+  }
+
+  return authContext;
 }
 
 /**

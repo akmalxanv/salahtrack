@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import {
   Trophy,
@@ -20,6 +20,15 @@ import type { LeaderboardEntry } from '@/app/api/leaderboard/route';
 
 type LeaderboardPeriod = 'daily' | 'weekly' | 'monthly';
 
+interface CachedPeriodData {
+  data: LeaderboardEntry[];
+  totalParticipants: number;
+  userOptedIn?: boolean;
+  timestamp: number;
+}
+
+const CACHE_TTL_MS = 60 * 1000; // 60 seconds
+
 export default function LeaderboardPage() {
   const { t } = useLanguage();
   const { user, refreshUser } = useAuth();
@@ -32,6 +41,15 @@ export default function LeaderboardPage() {
   const [isOptedIn, setIsOptedIn] = useState(false);
   const [togglingOptIn, setTogglingOptIn] = useState(false);
 
+  // Client-side memory cache for period results to allow 0ms instantaneous tab switching
+  const periodCacheRef = useRef<Map<LeaderboardPeriod, CachedPeriodData>>(new Map());
+  const inFlightAbortRef = useRef<AbortController | null>(null);
+  const currentPeriodRef = useRef<LeaderboardPeriod>(period);
+
+  useEffect(() => {
+    currentPeriodRef.current = period;
+  }, [period]);
+
   useEffect(() => {
     if (user?.preferences?.showOnLeaderboard !== undefined) {
       const show = Boolean(user.preferences.showOnLeaderboard);
@@ -41,34 +59,121 @@ export default function LeaderboardPage() {
     }
   }, [user]);
 
-  const fetchLeaderboard = useCallback(async () => {
-    try {
-      const res = await fetch(`/api/leaderboard?period=${period}`);
-      const json = await res.json();
-      if (res.ok && json.success) {
-        setEntries(json.data.leaderboard || []);
-        setTotalParticipants(json.data.totalParticipants || 0);
-        if (json.data.userOptedIn !== undefined) {
-          setIsOptedIn(json.data.userOptedIn);
+  const fetchLeaderboard = useCallback(
+    async (targetPeriod: LeaderboardPeriod, isBackground = false) => {
+      // Abort any prior in-flight request to prevent out-of-order responses overwriting active tab
+      if (inFlightAbortRef.current) {
+        inFlightAbortRef.current.abort();
+      }
+      const controller = new AbortController();
+      inFlightAbortRef.current = controller;
+
+      if (!isBackground) {
+        setLoading(true);
+      }
+
+      try {
+        const res = await fetch(`/api/leaderboard?period=${targetPeriod}`, {
+          signal: controller.signal,
+        });
+        if (!res.ok) return;
+        const json = await res.json();
+        if (json?.success) {
+          const freshData: CachedPeriodData = {
+            data: json.data.leaderboard || [],
+            totalParticipants: json.data.totalParticipants || 0,
+            userOptedIn: json.data.userOptedIn,
+            timestamp: Date.now(),
+          };
+          periodCacheRef.current.set(targetPeriod, freshData);
+
+          if (currentPeriodRef.current === targetPeriod) {
+            setEntries(freshData.data);
+            setTotalParticipants(freshData.totalParticipants);
+            if (freshData.userOptedIn !== undefined) {
+              setIsOptedIn(freshData.userOptedIn);
+            }
+          }
+        }
+      } catch (err: unknown) {
+        if (err instanceof Error && err.name === 'AbortError') {
+          return; // Aborted by subsequent tab change, safe to ignore
+        }
+        console.error('Failed to fetch leaderboard:', err);
+      } finally {
+        if (inFlightAbortRef.current === controller && currentPeriodRef.current === targetPeriod) {
+          setLoading(false);
         }
       }
-    } catch (err) {
-      console.error('Failed to fetch leaderboard:', err);
-    } finally {
-      setLoading(false);
-    }
-  }, [period]);
+    },
+    []
+  );
 
-  useEffect(() => {
-    let ignore = false;
-    async function load() {
-      if (!ignore) {
-        await fetchLeaderboard();
+  const handlePeriodChange = useCallback(
+    (newPeriod: LeaderboardPeriod) => {
+      if (newPeriod === period) return;
+      setPeriod(newPeriod);
+      currentPeriodRef.current = newPeriod;
+
+      const cached = periodCacheRef.current.get(newPeriod);
+      const isFresh = cached && Date.now() - cached.timestamp < CACHE_TTL_MS;
+
+      if (cached) {
+        // Instant 0ms latency display from client cache
+        setEntries(cached.data);
+        setTotalParticipants(cached.totalParticipants);
+        if (cached.userOptedIn !== undefined) {
+          setIsOptedIn(cached.userOptedIn);
+        }
+        setLoading(false);
+
+        // If stale (> 60 seconds), revalidate silently in the background
+        if (!isFresh) {
+          fetchLeaderboard(newPeriod, true);
+        } else {
+          // If fresh and an in-flight request exists, cancel it
+          if (inFlightAbortRef.current) {
+            inFlightAbortRef.current.abort();
+            inFlightAbortRef.current = null;
+          }
+        }
+      } else {
+        setLoading(true);
+        fetchLeaderboard(newPeriod, false);
       }
-    }
-    load();
+    },
+    [period, fetchLeaderboard]
+  );
+
+  // Initial mount: load active period and register abort cleanup
+  useEffect(() => {
+    fetchLeaderboard(currentPeriodRef.current, false);
+
     return () => {
-      ignore = true;
+      if (inFlightAbortRef.current) {
+        inFlightAbortRef.current.abort();
+      }
+    };
+  }, [fetchLeaderboard]);
+
+  // Auto-reload when returning to the tab/window/page ("comes back so info isn't stuck")
+  useEffect(() => {
+    const handleRevalidate = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        const cached = periodCacheRef.current.get(currentPeriodRef.current);
+        const isStale = !cached || Date.now() - cached.timestamp >= CACHE_TTL_MS;
+        if (isStale) {
+          fetchLeaderboard(currentPeriodRef.current, true);
+        }
+      }
+    };
+
+    window.addEventListener('focus', handleRevalidate);
+    document.addEventListener('visibilitychange', handleRevalidate);
+
+    return () => {
+      window.removeEventListener('focus', handleRevalidate);
+      document.removeEventListener('visibilitychange', handleRevalidate);
     };
   }, [fetchLeaderboard]);
 
@@ -90,8 +195,10 @@ export default function LeaderboardPage() {
       });
 
       if (res.ok) {
+        // Invalidate period cache so all periods reflect the new opt-in state
+        periodCacheRef.current.clear();
         await refreshUser();
-        await fetchLeaderboard();
+        await fetchLeaderboard(currentPeriodRef.current, false);
       } else {
         setIsOptedIn(!nextVal); // revert
       }
@@ -252,7 +359,7 @@ export default function LeaderboardPage() {
             <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800/70 p-1 rounded-xl w-fit">
               <button
                 type="button"
-                onClick={() => setPeriod('daily')}
+                onClick={() => handlePeriodChange('daily')}
                 className={`min-h-[38px] py-1.5 px-3.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                   period === 'daily'
                     ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
@@ -263,7 +370,7 @@ export default function LeaderboardPage() {
               </button>
               <button
                 type="button"
-                onClick={() => setPeriod('weekly')}
+                onClick={() => handlePeriodChange('weekly')}
                 className={`min-h-[38px] py-1.5 px-3.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                   period === 'weekly'
                     ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
@@ -274,7 +381,7 @@ export default function LeaderboardPage() {
               </button>
               <button
                 type="button"
-                onClick={() => setPeriod('monthly')}
+                onClick={() => handlePeriodChange('monthly')}
                 className={`min-h-[38px] py-1.5 px-3.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                   period === 'monthly'
                     ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-xs'

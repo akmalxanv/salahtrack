@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useEffect, useState, useCallback, useMemo } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import type { SafeUser } from '@/lib/auth/guard';
 import SessionExpiredModal from '@/components/auth/SessionExpiredModal';
@@ -26,21 +26,39 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({
   children,
-  initialUser = null,
+  initialUser = undefined,
 }: {
   children: React.ReactNode;
   initialUser?: SafeUser | null;
 }) {
-  const [user, setUser] = useState<SafeUser | null>(initialUser);
-  const [loading, setLoading] = useState<boolean>(!initialUser);
-  const [isGuest, setIsGuest] = useState<boolean>(() => {
-    if (typeof window !== 'undefined') {
-      return window.localStorage.getItem(STORAGE_KEY_MODE) === 'guest';
-    }
-    return false;
-  });
+  const [user, setUser] = useState<SafeUser | null>(initialUser ?? null);
+  const [loading, setLoading] = useState<boolean>(initialUser === undefined);
+  const [isGuest, setIsGuest] = useState<boolean>(false);
   const [sessionExpired, setSessionExpired] = useState<boolean>(false);
   const router = useRouter();
+  const lastMeCheckRef = useRef<number>(0);
+  const [prevInitialUser, setPrevInitialUser] = useState<SafeUser | null | undefined>(initialUser);
+
+  useEffect(() => {
+    queueMicrotask(() => {
+      try {
+        if (typeof window !== 'undefined') {
+          const mode = window.localStorage.getItem(STORAGE_KEY_MODE);
+          if (mode === 'guest') {
+            setIsGuest(true);
+          }
+        }
+      } catch {
+        // Storage access blocked or unavailable
+      }
+    });
+  }, []);
+
+  if (initialUser !== prevInitialUser) {
+    setPrevInitialUser(initialUser);
+    setUser(initialUser ?? null);
+    setLoading(initialUser === undefined);
+  }
 
   const setGuestMode = useCallback((val: boolean) => {
     setIsGuest(val);
@@ -104,53 +122,77 @@ export function AuthProvider({
     }
   }, []);
 
+  // On initial mount: if initialUser is explicitly provided from SSR (even as null), skip redundant fetch
   useEffect(() => {
+    if (initialUser !== undefined) {
+      return;
+    }
+
     let active = true;
-    if (!initialUser) {
-      fetch('/api/auth/me', { credentials: 'same-origin' })
-        .then(async (res) => {
-          if (!active) return;
-          if (res.ok) {
-            const json = await res.json();
-            if (json?.success && json?.data?.user) {
-              setUser(json.data.user);
-              if (typeof window !== 'undefined') {
-                window.localStorage.setItem(STORAGE_KEY_HAD_SESSION, 'true');
-                window.localStorage.removeItem(STORAGE_KEY_MODE);
-              }
-              setIsGuest(false);
-              setSessionExpired(false);
-            } else {
-              setUser(null);
+    fetch('/api/auth/me', { credentials: 'same-origin' })
+      .then(async (res) => {
+        if (!active) return;
+        if (res.ok) {
+          const json = await res.json();
+          if (json?.success && json?.data?.user) {
+            setUser(json.data.user);
+            if (typeof window !== 'undefined') {
+              window.localStorage.setItem(STORAGE_KEY_HAD_SESSION, 'true');
+              window.localStorage.removeItem(STORAGE_KEY_MODE);
             }
-          } else if (res.status === 401) {
-            try {
-              const errJson = await res.json();
-              if (errJson?.code === 'AUTH_SESSION_EXPIRED') {
-                const hadSession = typeof window !== 'undefined' && window.localStorage.getItem(STORAGE_KEY_HAD_SESSION) === 'true';
-                if (hadSession) {
-                  setSessionExpired(true);
-                }
-              }
-            } catch {
-              // ignore
-            }
-            setUser(null);
+            setIsGuest(false);
+            setSessionExpired(false);
           } else {
             setUser(null);
           }
-        })
-        .catch(() => {
-          if (active) setUser(null);
-        })
-        .finally(() => {
-          if (active) setLoading(false);
-        });
-    }
+        } else if (res.status === 401) {
+          try {
+            const errJson = await res.json();
+            if (errJson?.code === 'AUTH_SESSION_EXPIRED') {
+              const hadSession = typeof window !== 'undefined' && window.localStorage.getItem(STORAGE_KEY_HAD_SESSION) === 'true';
+              if (hadSession) {
+                setSessionExpired(true);
+              }
+            }
+          } catch {
+            // ignore
+          }
+          setUser(null);
+        } else {
+          setUser(null);
+        }
+      })
+      .catch(() => {
+        if (active) setUser(null);
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+
     return () => {
       active = false;
     };
   }, [initialUser]);
+
+  // Tab focus and visibility revalidation: silently verify session if enough time (5 mins) has elapsed
+  useEffect(() => {
+    const handleVisibilityOrFocus = () => {
+      if (typeof document === 'undefined' || document.visibilityState !== 'visible') return;
+      const now = Date.now();
+      if (user && now - lastMeCheckRef.current > 5 * 60 * 1000) {
+        lastMeCheckRef.current = now;
+        refreshUser();
+      }
+    };
+
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+
+    return () => {
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+    };
+  }, [user, refreshUser]);
 
   const login = useCallback(
     async (data: {

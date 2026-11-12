@@ -21,6 +21,7 @@ export default function BottomNav() {
             <Link
               key={item.href}
               href={item.href}
+              prefetch={true}
               aria-label={label}
               className={`flex flex-col items-center justify-center min-h-[44px] min-w-[48px] py-1 px-1 sm:px-3 rounded-xl transition-colors ${
                 isActive

@@ -12,48 +12,76 @@ import { translations, getTranslations } from '../src/locales/translations.ts';
 import type { PrayerStatus } from '../src/types/prayer.ts';
 
 describe('QA & Release Audit: 5-Pillar Enhancement Suite', () => {
-  describe('Pillar 1: Notifications Usability & Multi-Platform States', () => {
-    it('verifies notification translation keys exist across uz, ru, and en dictionaries', () => {
+  describe('Pillar 1: Dashboard Usability & Clean Elimination of Prayer Reminders', () => {
+    it('verifies notification and reminder translation keys are cleanly eliminated across uz, ru, and en dictionaries', () => {
       const langs = ['uz', 'ru', 'en'] as const;
+      const deprecatedKeys = [
+        'notifications',
+        'notificationsEnabled',
+        'notificationsBlocked',
+        'enableNotifications',
+        'remindersOn',
+        'remindersOff',
+        'testNotification',
+        'testNotificationBody',
+        'prayerNotificationBody',
+        'notificationsUnsupported',
+        'notificationsHelpTitle',
+        'notificationsHelpDesc',
+        'notificationsHelpStepChrome',
+        'notificationsHelpStepSafari',
+        'notificationsHelpClose',
+      ];
+
       for (const lang of langs) {
-        const t = getTranslations(lang);
-        assert.ok(t.dashboard.remindersOn, `remindersOn missing in ${lang}`);
-        assert.ok(t.dashboard.remindersOff, `remindersOff missing in ${lang}`);
-        assert.ok(t.dashboard.enableNotifications, `enableNotifications missing in ${lang}`);
-        assert.ok(t.dashboard.notificationsBlocked, `notificationsBlocked missing in ${lang}`);
-        assert.ok(t.dashboard.notificationsUnsupported, `notificationsUnsupported missing in ${lang}`);
-        assert.ok(t.dashboard.notificationsHelpTitle, `notificationsHelpTitle missing in ${lang}`);
-        assert.ok(t.dashboard.notificationsHelpStepChrome, `notificationsHelpStepChrome missing in ${lang}`);
-        assert.ok(t.dashboard.notificationsHelpStepSafari, `notificationsHelpStepSafari missing in ${lang}`);
+        const t = getTranslations(lang) as unknown as { dashboard: Record<string, unknown> };
+        for (const key of deprecatedKeys) {
+          assert.equal(
+            t.dashboard[key],
+            undefined,
+            `Deprecated reminder key "${key}" must be absent in ${lang} dictionary`
+          );
+        }
       }
     });
 
-    it('handles simulated notification state transitions safely', () => {
-      type NotificationState = 'granted' | 'denied' | 'default' | 'unsupported';
+    it('verifies core dashboard usability and responsive status presentation keys exist', () => {
+      const langs = ['uz', 'ru', 'en'] as const;
+      for (const lang of langs) {
+        const t = getTranslations(lang);
+        // Core dashboard strings
+        assert.ok(t.dashboard.todayPrayers, `todayPrayers missing in ${lang}`);
+        assert.ok(t.dashboard.nextPrayer, `nextPrayer missing in ${lang}`);
+        assert.ok(t.dashboard.in, `in missing in ${lang}`);
+        assert.ok(t.dashboard.statusLive, `statusLive missing in ${lang}`);
+        assert.ok(t.dashboard.allCaughtUp, `allCaughtUp missing in ${lang}`);
+        assert.ok(t.dashboard.streakDays, `streakDays missing in ${lang}`);
+        assert.ok(t.dashboard.overnightIshaActive, `overnightIshaActive missing in ${lang}`);
+        assert.ok(t.dashboard.overnightIshaBadge, `overnightIshaBadge missing in ${lang}`);
+        assert.ok(t.dashboard.hijriBadge, `hijriBadge missing in ${lang}`);
 
-      function resolveNotificationUI(permission: NotificationState, remindersEnabled: boolean) {
-        if (permission === 'unsupported') {
-          return { labelKey: 'notificationsUnsupported', canToggle: false, isHelpAvailable: false };
-        }
-        if (permission === 'denied') {
-          return { labelKey: 'notificationsBlocked', canToggle: false, isHelpAvailable: true };
-        }
-        if (permission === 'default') {
-          return { labelKey: 'enableNotifications', canToggle: true, isHelpAvailable: false };
-        }
-        // permission === 'granted'
-        return {
-          labelKey: remindersEnabled ? 'remindersOn' : 'remindersOff',
-          canToggle: true,
-          isHelpAvailable: false,
-        };
+        // Status presentation labels
+        assert.ok(t.statuses.PENDING, `PENDING status label missing in ${lang}`);
+        assert.ok(t.statuses.PRAYED_ON_TIME, `PRAYED_ON_TIME status label missing in ${lang}`);
+        assert.ok(t.statuses.PRAYED, `PRAYED status label missing in ${lang}`);
+        assert.ok(t.statuses.MADE_UP, `MADE_UP status label missing in ${lang}`);
+        assert.ok(t.statuses.MISSED, `MISSED status label missing in ${lang}`);
+      }
+    });
+
+    it('verifies responsive next prayer countdown formatting operates without notification dependencies', () => {
+      function formatCountdown(hours: number, mins: number, secs: number): string {
+        const pad = (n: number) => String(Math.max(0, Math.floor(n))).padStart(2, '0');
+        return `${pad(hours)}:${pad(mins)}:${pad(secs)}`;
       }
 
-      assert.equal(resolveNotificationUI('granted', true).labelKey, 'remindersOn');
-      assert.equal(resolveNotificationUI('granted', false).labelKey, 'remindersOff');
-      assert.equal(resolveNotificationUI('default', false).labelKey, 'enableNotifications');
-      assert.equal(resolveNotificationUI('denied', false).isHelpAvailable, true);
-      assert.equal(resolveNotificationUI('unsupported', false).labelKey, 'notificationsUnsupported');
+      // Normal countdown values
+      assert.equal(formatCountdown(2, 45, 9), '02:45:09');
+      assert.equal(formatCountdown(0, 0, 0), '00:00:00');
+      assert.equal(formatCountdown(11, 59, 59), '11:59:59');
+
+      // Defensive / boundary handling
+      assert.equal(formatCountdown(-1, -5, -30), '00:00:00');
     });
   });
 

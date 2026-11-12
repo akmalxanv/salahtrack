@@ -12,7 +12,7 @@ import { PUT as updateProfileHandler } from '../src/app/api/user/profile/route.t
 import { GET as getPrayerTimesHandler, METHOD_MAP, clearPrayerTimesCache } from '../src/app/api/prayer-times/route.ts';
 import { GET as getMemberPrayersHandler } from '../src/app/api/groups/[id]/members/[memberId]/prayers/route.ts';
 import { GET as getMemberHistoryHandler } from '../src/app/api/groups/[id]/member-history/route.ts';
-import { GET as getLeaderboardHandler } from '../src/app/api/leaderboard/route.ts';
+import { GET as getLeaderboardHandler, clearLeaderboardCache } from '../src/app/api/leaderboard/route.ts';
 import { findCityByNameOrId, findCityByCoordinates } from '../src/lib/cities.ts';
 
 interface MockUserDoc {
@@ -352,6 +352,7 @@ describe('Backend Enhancements: Location, Methods, Circle Prayer History & Leade
     setupMockFetch();
     mockFetchFailure = false;
     clearPrayerTimesCache();
+    clearLeaderboardCache();
   });
 
   after(() => {

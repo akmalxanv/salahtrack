@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
  * - Module-level caching for /api/prayer-times
  * - In-flight Promise deduplication (StrictMode double-mount protection)
  * - Parameter equality comparison with lastSyncedKeyRef
- * - Storage event isolation: prayer status click / qaza click / reminders toggle NEVER re-fetch timings
+ * - Storage event isolation: prayer status click / qaza counter NEVER re-fetch timings
  * - Location update event triggers re-fetch / cache lookup
  */
 
@@ -302,7 +302,7 @@ describe('Client-Side Prayer Times Sync & Cache Architecture', () => {
     assert.equal(lastSyncedKeyRef.current, '2026-11-07|41.2995|69.2401|Tashkent|MWL');
   });
 
-  it('6. verifies that prayer status toggles, qaza counter, and reminders do NOT trigger syncPrayerTimes', () => {
+  it('6. verifies that prayer status toggles and qaza counter do NOT trigger syncPrayerTimes (reminders eliminated)', () => {
     // In HomeDashboard.tsx:
     // `syncPrayerTimes` effect dependencies are:
     // [isMounted, setPrayers, user?.preferences?.calculationMethod, user?.preferences?.city, user?.preferences?.latitude, user?.preferences?.longitude, activeLiturgicalDate, locationRevision]

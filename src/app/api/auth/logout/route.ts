@@ -5,6 +5,7 @@ import {
   PRIMARY_SESSION_COOKIE,
   LEGACY_SESSION_COOKIE,
   getExpiredSessionCookieOptions,
+  invalidateSessionCache,
 } from '../../../../lib/auth/index.ts';
 
 export async function POST(request: NextRequest) {
@@ -14,6 +15,9 @@ export async function POST(request: NextRequest) {
       request.cookies.get(LEGACY_SESSION_COOKIE)?.value;
 
     if (token) {
+      // Invalidate in-memory session cache immediately
+      invalidateSessionCache(token);
+
       try {
         await connectDB();
         // Server-side session invalidation: immediately delete the active session document

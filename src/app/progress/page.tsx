@@ -97,6 +97,23 @@ interface StatsData {
   };
 }
 
+// Module-level in-memory cache to enable 0ms instant display and avoid loaders on client route navigation
+interface ProgressCache {
+  stats: StatsData | null;
+  paymentHistory: QazaPaymentReceipt[];
+  userId: string | null;
+  statsTimestamp: number;
+  paymentsTimestamp: number;
+}
+
+const progressCache: ProgressCache = {
+  stats: null,
+  paymentHistory: [],
+  userId: null,
+  statsTimestamp: 0,
+  paymentsTimestamp: 0,
+};
+
 type TabType = 'overview' | 'history' | 'qaza';
 
 function ProgressContent() {
@@ -141,18 +158,34 @@ function ProgressContent() {
   // Historical updating indicators
   const [updatingPrayerKey, setUpdatingPrayerKey] = useState<string | null>(null);
 
-  // Data states
-  const [stats, setStats] = useState<StatsData | null>(null);
+  const userId = user?.id;
+
+  // Data states with 0ms instantaneous display from in-memory cache
+  const [stats, setStats] = useState<StatsData | null>(() => {
+    if (userId && progressCache.userId === userId && progressCache.stats) {
+      return progressCache.stats;
+    }
+    return null;
+  });
   const [recordsByDate, setRecordsByDate] = useState<Record<string, PrayerHistoryRecord>>({});
-  const [loadingStats, setLoadingStats] = useState(false);
+  const [loadingStats, setLoadingStats] = useState<boolean>(() => {
+    return Boolean(userId && !(progressCache.userId === userId && progressCache.stats));
+  });
   const [loadingHistory, setLoadingHistory] = useState(false);
 
   // Local fallback Qaza state & settled donations with stable defaults
   const [localQaza] = useLocalStorage<number>('salahtrack_qaza_count', 0);
   const [settledDonations] = useLocalStorage<number>('salahtrack_settled_donations', 0);
-  const [paymentHistory, setPaymentHistory] = useState<QazaPaymentReceipt[]>([]);
+  const [paymentHistory, setPaymentHistory] = useState<QazaPaymentReceipt[]>(() => {
+    if (userId && progressCache.userId === userId && progressCache.paymentHistory.length > 0) {
+      return progressCache.paymentHistory;
+    }
+    return [];
+  });
   const [expandedReceiptIds, setExpandedReceiptIds] = useState<Set<string>>(new Set());
-  const [loadingPayments, setLoadingPayments] = useState(false);
+  const [loadingPayments, setLoadingPayments] = useState<boolean>(() => {
+    return Boolean(userId && !(progressCache.userId === userId && progressCache.paymentHistory.length > 0));
+  });
 
   const toggleExpandReceipt = useCallback((receiptId: string) => {
     setExpandedReceiptIds((prev) => {
@@ -167,111 +200,110 @@ function ProgressContent() {
   }, []);
   const [isPayModalOpen, setIsPayModalOpen] = useState(false);
 
-  const userId = user?.id;
-
-  // 1. Fetch Stats from API (re-runs only when userId changes)
-  const fetchStats = useCallback(async () => {
-    if (!userId) return;
-    setLoadingStats(true);
-    try {
-      const res = await fetch('/api/stats');
-      if (res.ok) {
-        const json = await res.json();
-        if (json.success) {
-          setStats(json.data);
-        }
+  // 1. Fetch Stats from API (SWR: silent background revalidation if cached)
+  const fetchStats = useCallback(
+    async (isBackground = false) => {
+      if (!userId) return;
+      if (!isBackground) {
+        setLoadingStats(true);
       }
-    } catch (err) {
-      console.error('Failed to fetch progress stats:', err);
-    } finally {
-      setLoadingStats(false);
-    }
-  }, [userId]);
-
-  const fetchPaymentHistory = useCallback(async () => {
-    if (!userId) return;
-    try {
-      const res = await fetch('/api/prayers/qaza-payment');
-      if (res.ok) {
-        const json = await res.json();
-        if (json.success && Array.isArray(json.data)) {
-          setPaymentHistory(json.data);
-        }
-      }
-    } catch (err) {
-      console.error('Failed to fetch payment history:', err);
-    } finally {
-      setLoadingPayments(false);
-    }
-  }, [userId]);
-
-  useEffect(() => {
-    if (!userId) return;
-    const abortController = new AbortController();
-
-    async function loadPayments() {
-      await Promise.resolve();
-      setLoadingPayments(true);
       try {
-        const res = await fetch('/api/prayers/qaza-payment', { signal: abortController.signal });
-        if (res.ok) {
-          const json = await res.json();
-          if (json.success && Array.isArray(json.data)) {
-            setPaymentHistory(json.data);
-          }
-        }
-      } catch (err: unknown) {
-        if ((err as Error)?.name !== 'AbortError') {
-          console.error('Failed to fetch payment history:', err);
-        }
-      } finally {
-        setLoadingPayments(false);
-      }
-    }
-
-    loadPayments();
-    return () => {
-      abortController.abort();
-    };
-  }, [userId]);
-
-  const handlePaymentModalSuccess = useCallback(async () => {
-    await Promise.all([fetchStats(), fetchPaymentHistory()]);
-  }, [fetchStats, fetchPaymentHistory]);
-
-  useEffect(() => {
-    if (!userId) return;
-    const abortController = new AbortController();
-
-    async function loadStats() {
-      try {
-        const res = await fetch('/api/stats', { signal: abortController.signal });
+        const res = await fetch('/api/stats');
         if (res.ok) {
           const json = await res.json();
           if (json.success) {
             setStats(json.data);
+            progressCache.stats = json.data;
+            progressCache.userId = userId;
+            progressCache.statsTimestamp = Date.now();
           }
         }
-      } catch (err: unknown) {
-        if ((err as Error)?.name !== 'AbortError') {
-          console.error('Failed to fetch stats:', err);
-        }
+      } catch (err) {
+        console.error('Failed to fetch progress stats:', err);
       } finally {
         setLoadingStats(false);
       }
-    }
+    },
+    [userId]
+  );
 
-    loadStats();
-    return () => {
-      abortController.abort();
+  const fetchPaymentHistory = useCallback(
+    async (isBackground = false) => {
+      if (!userId) return;
+      if (!isBackground) {
+        setLoadingPayments(true);
+      }
+      try {
+        const res = await fetch('/api/prayers/qaza-payment');
+        if (res.ok) {
+          const json = await res.json();
+          if (json.success && Array.isArray(json.data)) {
+            setPaymentHistory(json.data);
+            progressCache.paymentHistory = json.data;
+            progressCache.userId = userId;
+            progressCache.paymentsTimestamp = Date.now();
+          }
+        }
+      } catch (err) {
+        console.error('Failed to fetch payment history:', err);
+      } finally {
+        setLoadingPayments(false);
+      }
+    },
+    [userId]
+  );
+
+  useEffect(() => {
+    if (!userId) return;
+    const hasCachedPayments = progressCache.userId === userId && progressCache.paymentHistory.length > 0;
+    const isPaymentsFresh = hasCachedPayments && Date.now() - progressCache.paymentsTimestamp < 30000;
+
+    if (!isPaymentsFresh) {
+      queueMicrotask(() => {
+        fetchPaymentHistory(Boolean(hasCachedPayments));
+      });
+    }
+  }, [userId, fetchPaymentHistory]);
+
+  const handlePaymentModalSuccess = useCallback(async () => {
+    await Promise.all([fetchStats(false), fetchPaymentHistory(false)]);
+  }, [fetchStats, fetchPaymentHistory]);
+
+  useEffect(() => {
+    if (!userId) return;
+    const hasCachedStats = progressCache.userId === userId && progressCache.stats;
+    const isStatsFresh = hasCachedStats && Date.now() - progressCache.statsTimestamp < 30000;
+
+    if (!isStatsFresh) {
+      queueMicrotask(() => {
+        fetchStats(Boolean(hasCachedStats));
+      });
+    }
+  }, [userId, fetchStats]);
+
+  // Tab focus revalidation: silently refresh stale stats
+  useEffect(() => {
+    const handleFocusRevalidate = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible' && userId) {
+        const isStatsStale = Date.now() - progressCache.statsTimestamp >= 30000;
+        if (isStatsStale) {
+          fetchStats(true);
+        }
+      }
     };
-  }, [userId]);
+
+    window.addEventListener('focus', handleFocusRevalidate);
+    document.addEventListener('visibilitychange', handleFocusRevalidate);
+
+    return () => {
+      window.removeEventListener('focus', handleFocusRevalidate);
+      document.removeEventListener('visibilitychange', handleFocusRevalidate);
+    };
+  }, [userId, fetchStats]);
 
   // 2. Fetch Monthly History (Dual-Tier: LocalStorage offline/guest fallback + MongoDB Atlas when authenticated)
-  useEffect(() => {
-    const abortController = new AbortController();
-
-    async function loadMonthHistory() {
+  const fetchMonthHistory = useCallback(
+    async (signal?: AbortSignal) => {
       // Step A: Load cached records from localStorage first (0ms instantaneous offline UI)
       try {
         const storedHistory = getStoredHistoryRecords();
@@ -305,7 +337,7 @@ function ProgressContent() {
 
         const res = await fetch(
           `/api/prayers/history?startDate=${startOfMonthStr}&endDate=${endOfMonthStr}`,
-          { signal: abortController.signal }
+          signal ? { signal } : undefined
         );
 
         if (res.ok) {
@@ -332,14 +364,45 @@ function ProgressContent() {
       } finally {
         setLoadingHistory(false);
       }
+    },
+    [userId, viewYear, viewMonth, liturgicalTodayStr]
+  );
+
+  useEffect(() => {
+    const abortController = new AbortController();
+    let ignore = false;
+    async function loadHistory() {
+      if (!ignore) {
+        await fetchMonthHistory(abortController.signal);
+      }
     }
-
-    loadMonthHistory();
-
+    loadHistory();
     return () => {
+      ignore = true;
       abortController.abort();
     };
-  }, [userId, viewYear, viewMonth, liturgicalTodayStr]);
+  }, [fetchMonthHistory]);
+
+  // Auto-reload when returning to the tab/window/page ("comes back so info isn't stuck")
+  useEffect(() => {
+    const handleRevalidate = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        fetchStats();
+        fetchMonthHistory();
+        if (userId) {
+          fetchPaymentHistory();
+        }
+      }
+    };
+
+    window.addEventListener('focus', handleRevalidate);
+    document.addEventListener('visibilitychange', handleRevalidate);
+
+    return () => {
+      window.removeEventListener('focus', handleRevalidate);
+      document.removeEventListener('visibilitychange', handleRevalidate);
+    };
+  }, [fetchStats, fetchMonthHistory, fetchPaymentHistory, userId]);
 
   // Reactive synchronization with HomeDashboard and other tabs via local-storage-update
   useEffect(() => {

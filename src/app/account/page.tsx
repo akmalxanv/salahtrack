@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useMemo, Suspense } from 'react';
+import React, { useState, useMemo, useEffect, Suspense } from 'react';
 import Link from 'next/link';
 import {
   User as UserIcon,
@@ -80,27 +80,12 @@ function AuthenticatedAccountView({
     return { score: 3, label: t.account.passwordStrong, colorClass: 'bg-emerald-500 text-emerald-600 dark:text-emerald-400' };
   }, [newPassword, t]);
 
-  // Location State
+  // Location State - initialize purely from user preferences for SSR consistency
   const [locationData, setLocationData] = useState(() => {
-    let initialName = user.preferences?.city || '';
-    let initialLat = user.preferences?.latitude;
-    let initialLng = user.preferences?.longitude;
-    let initialTz = user.preferences?.timezone || '';
-
-    if (!initialName && typeof initialLat !== 'number') {
-      try {
-        const stored = typeof window !== 'undefined' ? localStorage.getItem('salahtrack_location') : null;
-        if (stored) {
-          const parsed = JSON.parse(stored);
-          if (parsed.city) initialName = parsed.city;
-          if (typeof parsed.lat === 'number') initialLat = parsed.lat;
-          if (typeof parsed.lng === 'number') initialLng = parsed.lng;
-          if (parsed.timezone) initialTz = parsed.timezone;
-        }
-      } catch {
-        // ignore
-      }
-    }
+    const initialName = user.preferences?.city || '';
+    const initialLat = user.preferences?.latitude;
+    const initialLng = user.preferences?.longitude;
+    const initialTz = user.preferences?.timezone || '';
 
     const finalLat = typeof initialLat === 'number' && Number.isFinite(initialLat) ? initialLat : 41.2995;
     const finalLng = typeof initialLng === 'number' && Number.isFinite(initialLng) ? initialLng : 69.2401;
@@ -118,6 +103,39 @@ function AuthenticatedAccountView({
       timezone: finalTimezone,
     };
   });
+
+  // Client-side fallback to cached localStorage location if user profile has no location set
+  useEffect(() => {
+    if (!user.preferences?.city && typeof user.preferences?.latitude !== 'number') {
+      queueMicrotask(() => {
+        try {
+          const stored = localStorage.getItem('salahtrack_location');
+          if (stored) {
+            const parsed = JSON.parse(stored);
+            const initialName = parsed.city || '';
+            const initialLat = typeof parsed.lat === 'number' ? parsed.lat : 41.2995;
+            const initialLng = typeof parsed.lng === 'number' ? parsed.lng : 69.2401;
+            const initialTz = parsed.timezone || '';
+
+            const preset = findCityByCoordinates(initialLat, initialLng, 25) || (initialName ? findCityByNameOrId(initialName) : undefined);
+            const finalName = initialName || (preset ? (preset.nativeNames[lang] || preset.name) : 'Tashkent');
+            const finalCountry = preset?.country || (Math.abs(initialLat - 41.2995) < 0.05 ? 'Uzbekistan' : '');
+            const finalTimezone = initialTz || preset?.timezone || 'Asia/Tashkent';
+
+            setLocationData({
+              cityName: finalName,
+              country: finalCountry,
+              latitude: initialLat,
+              longitude: initialLng,
+              timezone: finalTimezone,
+            });
+          }
+        } catch {
+          // ignore
+        }
+      });
+    }
+  }, [user.preferences?.city, user.preferences?.latitude, lang]);
 
   const [isCityModalOpen, setIsCityModalOpen] = useState(false);
   const [locationSaving, setLocationSaving] = useState(false);
@@ -826,31 +844,36 @@ function AuthenticatedAccountView({
 
 function GuestSettingsView() {
   const { t, lang } = useLanguage();
-  const [calcMethod, setCalcMethod] = useState(() => {
-    if (typeof window !== 'undefined') {
-      return localStorage.getItem('salahtrack_calc_method') || 'MWL';
-    }
-    return 'MWL';
+  const [calcMethod, setCalcMethod] = useState('MWL');
+  const [locationData, setLocationData] = useState({
+    city: 'Tashkent',
+    lat: 41.2995,
+    lng: 69.2401,
+    timezone: 'Asia/Tashkent',
   });
-  const [locationData, setLocationData] = useState(() => {
-    let city = 'Tashkent';
-    let lat = 41.2995;
-    let lng = 69.2401;
-    let tz = 'Asia/Tashkent';
-    try {
-      const stored = typeof window !== 'undefined' ? localStorage.getItem('salahtrack_location') : null;
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed.city) city = parsed.city;
-        if (typeof parsed.lat === 'number') lat = parsed.lat;
-        if (typeof parsed.lng === 'number') lng = parsed.lng;
-        if (parsed.timezone) tz = parsed.timezone;
+
+  useEffect(() => {
+    queueMicrotask(() => {
+      try {
+        const storedMethod = localStorage.getItem('salahtrack_calc_method');
+        if (storedMethod) {
+          setCalcMethod(storedMethod);
+        }
+        const stored = localStorage.getItem('salahtrack_location');
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          setLocationData({
+            city: parsed.city || 'Tashkent',
+            lat: typeof parsed.lat === 'number' ? parsed.lat : 41.2995,
+            lng: typeof parsed.lng === 'number' ? parsed.lng : 69.2401,
+            timezone: parsed.timezone || 'Asia/Tashkent',
+          });
+        }
+      } catch {
+        // ignore
       }
-    } catch {
-      // ignore
-    }
-    return { city, lat, lng, timezone: tz };
-  });
+    });
+  }, []);
 
   const [isCityModalOpen, setIsCityModalOpen] = useState(false);
   const [savedNotice, setSavedNotice] = useState<string | null>(null);

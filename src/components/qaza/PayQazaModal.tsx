@@ -339,7 +339,7 @@ export default function PayQazaModal({
 
         {/* Content Body */}
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
-          {/* Prominent Educational Reminder */}
+          {/* Prominent Educational Notice */}
           <div className="p-3.5 rounded-xl bg-amber-50/90 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/60 text-xs text-amber-900 dark:text-amber-200 flex items-start gap-2.5">
             <AlertCircle className="w-4 h-4 shrink-0 text-amber-600 dark:text-amber-400 mt-0.5" />
             <p className="text-[11px] leading-relaxed font-medium">
