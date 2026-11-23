@@ -363,4 +363,69 @@ describe('POST /api/prayers/rollover', () => {
     assert.strictEqual(json.streak.best, 2);
     assert.strictEqual(json.streak.lastActiveDate, '2026-10-17');
   });
+
+  it('automatically resolves fromDate from prior tracked records when fromDate is omitted in body', async () => {
+    // User tracked prayers on 2026-10-14 with pending prayers
+    const trackedRecord = createMockRecord('2026-10-14', testUserId, {
+      fajr: 'PRAYED_ON_TIME',
+      dhuhr: 'PENDING',
+      asr: 'PENDING',
+      maghrib: 'PENDING',
+      isha: 'PENDING',
+    });
+    mockRecords.push(trackedRecord);
+
+    const req = new NextRequest('http://localhost:3000/api/prayers/rollover', {
+      method: 'POST',
+      headers: { cookie: `salahtrack_session=${validSessionToken}` },
+      body: JSON.stringify({ toDate: '2026-10-16' }), // fromDate omitted!
+    });
+
+    const res = await rolloverHandler(req);
+    assert.strictEqual(res.status, 200);
+
+    const json = await res.json();
+    assert.strictEqual(json.success, true);
+    assert.strictEqual(json.fromDate, '2026-10-14');
+    assert.strictEqual(json.toDate, '2026-10-16');
+
+    // Lingering pending prayers on 2026-10-14 must be converted to MISSED
+    assert.strictEqual(trackedRecord.prayers.fajr.status, 'PRAYED_ON_TIME');
+    assert.strictEqual(trackedRecord.prayers.dhuhr.status, 'MISSED');
+    assert.strictEqual(trackedRecord.prayers.asr.status, 'MISSED');
+    assert.strictEqual(trackedRecord.prayers.maghrib.status, 'MISSED');
+    assert.strictEqual(trackedRecord.prayers.isha.status, 'MISSED');
+
+    // Intermediate day 2026-10-15 must be created with MISSED
+    const inter = mockRecords.find((r) => r.date === '2026-10-15');
+    assert.ok(inter, 'Intermediate date 2026-10-15 must be created');
+    assert.strictEqual(inter.finesAccrued, 75000);
+  });
+
+  it('CRITICAL CONSTRAINT: Never automatically marks prayers as missed for dates before user first tracking date', async () => {
+    // Brand new user with zero prior prayer records
+    // User account created in mockUsers, but no PrayerRecord documents exist
+    const req = new NextRequest('http://localhost:3000/api/prayers/rollover', {
+      method: 'POST',
+      headers: { cookie: `salahtrack_session=${validSessionToken}` },
+      body: JSON.stringify({ toDate: '2026-10-20' }),
+    });
+
+    const res = await rolloverHandler(req);
+    assert.strictEqual(res.status, 200);
+
+    const json = await res.json();
+    assert.strictEqual(json.success, true);
+    assert.strictEqual(json.fromDate, null);
+
+    // Verify zero MISSED records or intermediate gap records were generated for any date before 2026-10-20
+    const priorRecords = mockRecords.filter((r) => r.date < '2026-10-20');
+    assert.strictEqual(priorRecords.length, 0, 'Must NOT fabricate any missed records prior to first tracking date');
+
+    // Today (2026-10-20) initialized with default PENDING
+    const todayRec = mockRecords.find((r) => r.date === '2026-10-20');
+    assert.ok(todayRec, 'Today record must be initialized');
+    assert.strictEqual(todayRec.finesAccrued, 0);
+    assert.strictEqual(todayRec.prayers.fajr.status, 'PENDING');
+  });
 });

@@ -3,6 +3,7 @@ import { connectDB, execLean } from '../../../lib/mongodb.ts';
 import { PrayerRecord, type IPrayerRecord } from '../../../models/Prayer.ts';
 import { authenticateRequest } from '../../../lib/auth/index.ts';
 import { getLiturgicalDate } from '../../../lib/prayer-cycle.ts';
+import { ensureUserRolledOver } from '../../../lib/prayer-rollover.ts';
 import type { PrayerId, PrayerStatus } from '../../../types/prayer.ts';
 
 const VALID_PRAYER_IDS: PrayerId[] = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
@@ -86,11 +87,15 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const dateParam = searchParams.get('date');
     const timezoneParam = searchParams.get('timezone') || undefined;
+    const currentLiturgicalDate = getLiturgicalDate(new Date(), undefined, timezoneParam);
     const targetDate = dateParam && isValidCalendarDate(dateParam)
       ? dateParam
-      : getLiturgicalDate(new Date(), undefined, timezoneParam);
+      : currentLiturgicalDate;
 
     await connectDB();
+
+    // Auto-rollover uncompleted past prayers before returning
+    await ensureUserRolledOver(auth.user.id, currentLiturgicalDate, { timezone: timezoneParam, fillGapDays: false });
 
     const record = await execLean<IPrayerRecord | null>(
       PrayerRecord.findOne({
@@ -228,6 +233,10 @@ export async function POST(request: NextRequest) {
     }
 
     await connectDB();
+
+    // Auto-rollover uncompleted past prayers before modifying
+    const currentLiturgicalDate = getLiturgicalDate(new Date(), undefined, timezone);
+    await ensureUserRolledOver(auth.user.id, currentLiturgicalDate, { timezone, fillGapDays: false, excludeDate: targetDate });
 
     const existingRecord = await execLean<IPrayerRecord | null>(
       PrayerRecord.findOne({

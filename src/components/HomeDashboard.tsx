@@ -506,6 +506,17 @@ export default function HomeDashboard({
 
     async function syncCloudData() {
       try {
+        // Reconcile server-side rollover for authenticated user across all devices/sessions
+        try {
+          await fetch('/api/prayers/rollover', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ toDate: activeLiturgicalDate }),
+          });
+        } catch {
+          // Non-blocking background network fallback
+        }
+
         const res = await fetch(`/api/prayers?date=${activeLiturgicalDate}`);
         if (!res.ok) return;
         const json = await res.json();
@@ -1216,10 +1227,10 @@ export default function HomeDashboard({
   const ringOffset = ringCircumference - (completedCount / 5) * ringCircumference;
 
   return (
-    <div className="space-y-4 sm:space-y-6">
+    <div className="space-y-5 sm:space-y-6">
       {/* Prominent Guest Mode Banner */}
       {!user && (
-        <div className="relative overflow-hidden rounded-2xl border border-amber-300/80 dark:border-amber-700/60 bg-gradient-to-r from-amber-50 via-amber-50/80 to-amber-100/50 dark:from-amber-950/40 dark:via-amber-950/30 dark:to-amber-900/20 p-4 sm:p-5 shadow-xs">
+        <div className="relative overflow-hidden rounded-2xl border border-amber-300/80 dark:border-amber-700/60 bg-gradient-to-r from-amber-50 via-amber-50/80 to-amber-100/50 dark:from-amber-950/40 dark:via-amber-950/30 dark:to-amber-900/20 p-4.5 sm:p-5 shadow-xs">
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3.5">
             <div className="flex items-start gap-3">
               <div className="w-10 h-10 rounded-xl bg-amber-500/10 dark:bg-amber-500/20 border border-amber-500/30 text-amber-700 dark:text-amber-400 flex items-center justify-center shrink-0 mt-0.5">
@@ -1258,7 +1269,7 @@ export default function HomeDashboard({
       )}
 
       {/* Top Header Bar: Unified, Attractive, and Visually Balanced */}
-      <div className="p-4 sm:p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800/90 shadow-2xs">
+      <div className="p-4.5 sm:p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800/90 shadow-2xs">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           {/* Left: Gregorian & Hijri Date */}
           <div className="space-y-1">
@@ -1273,7 +1284,7 @@ export default function HomeDashboard({
 
             {/* Small, elegant Hijri Date secondary line directly below Gregorian date */}
             {hijriDate && (
-              <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 font-normal flex items-center gap-1.5 pl-7 mt-0.5">
+              <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 font-normal flex items-center gap-1.5 pl-7 mt-1">
                 <Moon className="w-3 h-3 text-emerald-600/70 dark:text-emerald-400/70 shrink-0" />
                 <span>{hijriDate}</span>
               </p>
@@ -1313,9 +1324,9 @@ export default function HomeDashboard({
       {/* ========================================================================= */}
       {/* 2-Column Responsive Header: Next Prayer Card & Daily Completion Progress */}
       {/* ========================================================================= */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-5">
         {/* Card A: Next Prayer Card */}
-        <div className="rounded-2xl bg-gradient-to-br from-slate-900 via-slate-850 to-slate-800 text-white p-5 shadow-sm border border-slate-700/80 flex flex-col justify-between">
+        <div className="rounded-2xl bg-gradient-to-br from-slate-900 via-slate-850 to-slate-800 text-white p-5 sm:p-6 shadow-sm border border-slate-700/80 flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
@@ -1419,7 +1430,7 @@ export default function HomeDashboard({
         </div>
 
         {/* Card B: Daily Prayer Progress Card (with Visual Progress Ring) */}
-        <div className="rounded-2xl bg-white dark:bg-slate-900 p-5 shadow-xs border border-slate-200 dark:border-slate-800 flex flex-col justify-between">
+        <div className="rounded-2xl bg-white dark:bg-slate-900 p-5 sm:p-6 shadow-xs border border-slate-200 dark:border-slate-800 flex flex-col justify-between">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
               {t.dashboard.dailyProgressTitle}
@@ -1570,7 +1581,7 @@ export default function HomeDashboard({
                 </span>
               )}
             </div>
-            <p className="text-xs text-emerald-100 font-medium mt-0.5">
+            <p className="text-xs text-emerald-100 font-medium mt-1">
               {t.accountability.spiritualPendingCount}
             </p>
           </div>
@@ -1582,7 +1593,7 @@ export default function HomeDashboard({
                 {formatCurrency(totalSadaqahOwed, lang)}
               </span>
             )}
-            <p className="text-xs text-emerald-100 font-medium mt-0.5">
+            <p className="text-xs text-emerald-100 font-medium mt-1">
               {t.accountability.totalFinancialDebt}
             </p>
           </div>
@@ -1593,18 +1604,18 @@ export default function HomeDashboard({
       {/* Today's Prayers List (Chronological with instant feedback & status menu)  */}
       {/* ========================================================================= */}
       <div>
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center justify-between mb-3.5 sm:mb-4">
           <div>
             <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">
               {t.dashboard.todayPrayers}
             </h2>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
               {t.dashboard.completedRatio}: {completedCount} / 5
             </p>
           </div>
         </div>
 
-        <div className="space-y-3">
+        <div className="space-y-3.5 sm:space-y-4">
           {prayers.map((prayer) => {
             const config = STATUS_CONFIG[prayer.status];
             const isMenuOpen = activeMenuPrayerId === prayer.id;
@@ -1618,7 +1629,7 @@ export default function HomeDashboard({
                 onClick={() => {
                   handleQuickToggle(prayer.id);
                 }}
-                className={`relative rounded-2xl border p-4 transition-all shadow-xs select-none cursor-pointer hover:border-slate-300 dark:hover:border-slate-700 ${config.bgClass} ${config.borderClass}`}
+                className={`relative rounded-2xl border p-4.5 sm:p-5 transition-all shadow-xs select-none cursor-pointer hover:border-slate-300 dark:hover:border-slate-700 ${config.bgClass} ${config.borderClass}`}
               >
                 <div className="flex items-center justify-between">
                   {/* Left: Quick toggle button & prayer name */}
@@ -1658,7 +1669,7 @@ export default function HomeDashboard({
                           </span>
                         )}
                       </div>
-                      <div className="flex items-center gap-1.5 text-xs text-slate-400 mt-0.5">
+                      <div className="flex items-center gap-1.5 text-xs text-slate-400 mt-1">
                         <Clock className="w-3 h-3" />
                         <span>{prayer.time} – {prayer.endTime}</span>
                       </div>

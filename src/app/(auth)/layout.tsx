@@ -16,7 +16,7 @@ export default function AuthLayout({
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col justify-between selection:bg-emerald-500 selection:text-white">
       {/* Auth Navigation Header */}
-      <header className="w-full max-w-5xl mx-auto px-4 py-6 flex items-center justify-between">
+      <header className="w-full max-w-5xl mx-auto px-5 py-6 flex items-center justify-between">
         <Link
           href="/"
           className="flex items-center gap-2.5 group transition-transform active:scale-95"
@@ -34,14 +34,14 @@ export default function AuthLayout({
       </header>
 
       {/* Main Centered Form Container */}
-      <main className="flex-1 flex items-center justify-center p-4 sm:p-6 md:p-8">
+      <main className="flex-1 flex items-center justify-center p-5 sm:p-6 md:p-8">
         <div className="w-full max-w-md">
           {children}
         </div>
       </main>
 
       {/* Calm Footer */}
-      <footer className="w-full max-w-5xl mx-auto px-4 py-6 text-center text-xs text-slate-400 dark:text-slate-600">
+      <footer className="w-full max-w-5xl mx-auto px-5 py-6 text-center text-xs text-slate-400 dark:text-slate-600">
         <p>© {new Date().getFullYear()} Namozlarim.uz. {t.auth.footerTagline}</p>
       </footer>
     </div>

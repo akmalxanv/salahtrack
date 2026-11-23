@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LogOut, LogIn } from 'lucide-react';
+import { LogOut, LogIn, UserPlus } from 'lucide-react';
 import LanguageSelector from './LanguageSelector';
 import BrandLogo from './BrandLogo';
 import { useLanguage } from '@/context/LanguageContext';
@@ -82,21 +82,22 @@ export default function Sidebar() {
             </button>
           </div>
         ) : (
-          <div className="flex items-center gap-2">
+          <div className="flex flex-col gap-2">
             <Link
               href="/login"
               prefetch={true}
-              className="flex-1 py-2 px-3 text-center rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-medium transition-colors flex items-center justify-center gap-1.5 shadow-xs"
+              className="w-full py-2.5 px-3 text-center rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold transition-colors flex items-center justify-center gap-2 shadow-xs"
             >
-              <LogIn className="w-3.5 h-3.5" />
+              <LogIn className="w-4 h-4 shrink-0" />
               <span>{t.nav.login}</span>
             </Link>
             <Link
               href="/signup"
               prefetch={true}
-              className="py-2 px-3 text-center rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 text-xs font-medium transition-colors"
+              className="w-full py-2.5 px-3 text-center rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 text-xs font-semibold transition-colors flex items-center justify-center gap-2"
             >
-              {t.nav.signup}
+              <UserPlus className="w-4 h-4 shrink-0" />
+              <span>{t.nav.signup}</span>
             </Link>
           </div>
         )}

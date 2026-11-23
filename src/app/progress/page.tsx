@@ -129,7 +129,7 @@ function ProgressContent() {
   // Single Source of Truth for Tab Navigation (derived from searchParams to eliminate state update depth loops)
   const tabParam = searchParams.get('tab');
   const activeTab: TabType =
-    tabParam === 'history' ? 'history' : tabParam === 'qaza' ? 'qaza' : 'overview';
+    tabParam === 'overview' ? 'overview' : tabParam === 'qaza' ? 'qaza' : 'history';
 
   const handleTabChange = useCallback(
     (tab: TabType) => {
@@ -618,7 +618,7 @@ function ProgressContent() {
   }, [pendingQazaCount, localQaza]);
 
   return (
-    <div className="space-y-4 sm:space-y-6">
+    <div className="space-y-5 sm:space-y-6">
       {/* Header */}
       <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
@@ -628,7 +628,7 @@ function ProgressContent() {
             </span>
             <span>{t.progress.title}</span>
           </h1>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1.5">
             {t.progress.subtitle}
           </p>
         </div>
@@ -646,7 +646,7 @@ function ProgressContent() {
 
       {/* Guest Mode Notice */}
       {!user && (
-        <div className="p-4 rounded-2xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200/70 dark:border-amber-900/40 text-amber-800 dark:text-amber-300 text-xs flex items-center justify-between gap-3">
+        <div className="p-4 sm:p-4.5 rounded-2xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200/70 dark:border-amber-900/40 text-amber-800 dark:text-amber-300 text-xs flex items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">
             <AlertCircle className="w-4 h-4 shrink-0 text-amber-600 dark:text-amber-400" />
             <span>{t.progress.signInPrompt}</span>
@@ -670,21 +670,6 @@ function ProgressContent() {
           <button
             type="button"
             role="tab"
-            aria-selected={activeTab === 'overview'}
-            onClick={() => handleTabChange('overview')}
-            className={`min-h-[44px] py-2.5 px-3.5 border-b-2 text-xs sm:text-sm font-semibold whitespace-nowrap transition-colors flex items-center gap-2 cursor-pointer ${
-              activeTab === 'overview'
-                ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
-                : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
-            }`}
-          >
-            <TrendingUp className="w-4 h-4" />
-            <span>{t.progress.tabs.overview}</span>
-          </button>
-
-          <button
-            type="button"
-            role="tab"
             aria-selected={activeTab === 'history'}
             onClick={() => handleTabChange('history')}
             className={`min-h-[44px] py-2.5 px-3.5 border-b-2 text-xs sm:text-sm font-semibold whitespace-nowrap transition-colors flex items-center gap-2 cursor-pointer ${
@@ -697,6 +682,20 @@ function ProgressContent() {
             <span>{t.progress.tabs.history}</span>
           </button>
 
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'overview'}
+            onClick={() => handleTabChange('overview')}
+            className={`min-h-[44px] py-2.5 px-3.5 border-b-2 text-xs sm:text-sm font-semibold whitespace-nowrap transition-colors flex items-center gap-2 cursor-pointer ${
+              activeTab === 'overview'
+                ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
+                : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
+            }`}
+          >
+            <TrendingUp className="w-4 h-4" />
+            <span>{t.progress.tabs.overview}</span>
+          </button>
 
           <button
             type="button"
@@ -715,18 +714,44 @@ function ProgressContent() {
         </nav>
       </div>
 
-      {/* ==================== TAB 1: OVERVIEW ==================== */}
+      {/* ==================== TAB 1: INTERACTIVE HISTORY & MONTHLY CALENDAR ==================== */}
+      {activeTab === 'history' && (
+        <div className="space-y-6">
+          {/* Historical notice */}
+          <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-800 flex items-center justify-between text-xs text-slate-600 dark:text-slate-400">
+            <div className="flex items-center gap-2">
+              <Info className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>{t.progress.historicalEditNotice}</span>
+            </div>
+          </div>
+
+          {/* Interactive Monthly Calendar & Selected Day Inspector */}
+          <MonthlyHistoryCalendar
+            selectedDate={selectedDate}
+            onSelectDate={handleSelectDate}
+            records={recordsByDate}
+            onUpdatePrayerStatus={handleHistoricalCorrection}
+            updatingPrayerKey={updatingPrayerKey}
+            viewYear={viewYear}
+            viewMonth={viewMonth}
+            onChangeMonth={handleChangeMonth}
+            isLoading={loadingHistory}
+          />
+        </div>
+      )}
+
+      {/* ==================== TAB 2: OVERVIEW ==================== */}
       {activeTab === 'overview' && (
         loadingStats && !stats ? (
           <div className="py-12 flex justify-center text-slate-400">
             <Loader2 className="w-8 h-8 animate-spin text-emerald-600" />
           </div>
         ) : (
-          <div className="space-y-4 sm:space-y-6">
+          <div className="space-y-5 sm:space-y-6">
             {/* Executive KPI Stats Cards */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
               {/* Completion */}
-              <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs">
+              <div className="p-4.5 sm:p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs">
                 <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 block mb-1">
                   {t.progress.summary.completionRate}
                 </span>
@@ -745,7 +770,7 @@ function ProgressContent() {
               </div>
 
               {/* Streak */}
-              <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs">
+              <div className="p-4.5 sm:p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs">
                 <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 block mb-1">
                   {t.progress.summary.currentStreak}
                 </span>
@@ -762,7 +787,7 @@ function ProgressContent() {
               </div>
 
               {/* On-Time Rate */}
-              <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs">
+              <div className="p-4.5 sm:p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs">
                 <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 block mb-1">
                   {t.progress.summary.onTimeRate}
                 </span>
@@ -776,7 +801,7 @@ function ProgressContent() {
               </div>
 
               {/* Accountability Outstanding Balance */}
-              <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs">
+              <div className="p-4.5 sm:p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs">
                 <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 block mb-1">
                   {t.accountability.title}
                 </span>
@@ -804,9 +829,9 @@ function ProgressContent() {
             </div>
 
             {/* Consolidated Analytics Section */}
-            <div id="analytics-section" className="space-y-4 sm:space-y-6 pt-2 scroll-mt-6">
+            <div id="analytics-section" className="space-y-5 sm:space-y-6 pt-2 scroll-mt-6">
               {/* Consistency by Prayer */}
-              <div className="rounded-2xl border border-slate-200 bg-white p-3.5 sm:p-6 dark:border-slate-800 dark:bg-slate-900 shadow-xs space-y-5">
+              <div className="rounded-2xl border border-slate-200 bg-white p-4.5 sm:p-6 dark:border-slate-800 dark:bg-slate-900 shadow-xs space-y-5">
                 <div className="flex items-center gap-2.5">
                   <BarChart3 className="w-5 h-5 text-emerald-600" />
                   <div>
@@ -847,7 +872,7 @@ function ProgressContent() {
 
               {/* 30-Day Metric Breakdown Cards */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div className="p-4 rounded-2xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-100 dark:border-emerald-900/40">
+                <div className="p-4 sm:p-5 rounded-2xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-100 dark:border-emerald-900/40">
                   <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 block mb-1">
                     {t.statuses.PRAYED}
                   </span>
@@ -855,7 +880,7 @@ function ProgressContent() {
                     {(stats?.counts30d.onTime || 0) + (stats?.counts30d.late || 0)}
                   </span>
                 </div>
-                <div className="p-4 rounded-2xl bg-sky-50/50 dark:bg-sky-950/20 border border-sky-100 dark:border-sky-900/40">
+                <div className="p-4 sm:p-5 rounded-2xl bg-sky-50/50 dark:bg-sky-950/20 border border-sky-100 dark:border-sky-900/40">
                   <span className="text-xs font-semibold text-sky-700 dark:text-sky-400 block mb-1">
                     {t.statuses.MADE_UP}
                   </span>
@@ -863,7 +888,7 @@ function ProgressContent() {
                     {stats?.counts30d.madeUp || 0}
                   </span>
                 </div>
-                <div className="p-4 rounded-2xl bg-rose-50/50 dark:bg-rose-950/20 border border-rose-100 dark:border-rose-900/40">
+                <div className="p-4 sm:p-5 rounded-2xl bg-rose-50/50 dark:bg-rose-950/20 border border-rose-100 dark:border-rose-900/40">
                   <span className="text-xs font-semibold text-rose-700 dark:text-rose-400 block mb-1">
                     {t.statuses.MISSED}
                   </span>
@@ -875,7 +900,7 @@ function ProgressContent() {
             </div>
 
             {/* Quick Insights Banner */}
-            <div className="p-4 sm:p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-gradient-to-r from-emerald-500/10 via-teal-500/5 to-transparent flex items-center justify-between gap-4">
+            <div className="p-4.5 sm:p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-gradient-to-r from-emerald-500/10 via-teal-500/5 to-transparent flex items-center justify-between gap-4">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0">
                   <Award className="w-5 h-5" />
@@ -884,7 +909,7 @@ function ProgressContent() {
                   <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">
                     {t.progress.insights.title}
                   </h3>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
                     {t.progress.insights.streakEncouragement}
                   </p>
                 </div>
@@ -899,7 +924,7 @@ function ProgressContent() {
             </div>
 
             {/* Recent History Preview */}
-            <div className="rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 shadow-xs p-3.5 sm:p-6 space-y-4">
+            <div className="rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 shadow-xs p-4.5 sm:p-6 space-y-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2.5">
                   <HistoryIcon className="w-5 h-5 text-emerald-600" />
@@ -962,32 +987,6 @@ function ProgressContent() {
             </div>
           </div>
         )
-      )}
-
-      {/* ==================== TAB 2: INTERACTIVE HISTORY & MONTHLY CALENDAR ==================== */}
-      {activeTab === 'history' && (
-        <div className="space-y-6">
-          {/* Historical notice */}
-          <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-800 flex items-center justify-between text-xs text-slate-600 dark:text-slate-400">
-            <div className="flex items-center gap-2">
-              <Info className="w-4 h-4 text-emerald-600 shrink-0" />
-              <span>{t.progress.historicalEditNotice}</span>
-            </div>
-          </div>
-
-          {/* Interactive Monthly Calendar & Selected Day Inspector */}
-          <MonthlyHistoryCalendar
-            selectedDate={selectedDate}
-            onSelectDate={handleSelectDate}
-            records={recordsByDate}
-            onUpdatePrayerStatus={handleHistoricalCorrection}
-            updatingPrayerKey={updatingPrayerKey}
-            viewYear={viewYear}
-            viewMonth={viewMonth}
-            onChangeMonth={handleChangeMonth}
-            isLoading={loadingHistory}
-          />
-        </div>
       )}
 
 
@@ -1114,7 +1113,7 @@ function ProgressContent() {
             </div>
 
             {/* Payoff Projection Calculator */}
-            <div className="rounded-2xl border border-slate-200 bg-white p-3.5 sm:p-6 dark:border-slate-800 dark:bg-slate-900 shadow-xs space-y-4">
+            <div className="rounded-2xl border border-slate-200 bg-white p-4.5 sm:p-6 dark:border-slate-800 dark:bg-slate-900 shadow-xs space-y-4">
               <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
                 <Sparkles className="w-4 h-4 text-sky-600 dark:text-sky-400" />
                 <span>{t.progress.calculatorTitle}</span>
@@ -1271,7 +1270,7 @@ function ProgressContent() {
             </div>
 
             {/* Detailed Fine Breakdown Table / Cards */}
-            <div className="rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 shadow-xs p-3.5 sm:p-6 space-y-4">
+            <div className="rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 shadow-xs p-4.5 sm:p-6 space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
                 <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
                   <span>{t.progress.accountabilityBreakdown}</span>
@@ -1377,7 +1376,7 @@ function ProgressContent() {
             </div>
 
             {/* Payment History Section */}
-            <div className="rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 shadow-xs p-3.5 sm:p-6 space-y-4">
+            <div className="rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 shadow-xs p-4.5 sm:p-6 space-y-4">
               <div className="flex items-center justify-between">
                 <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
                   <span>{t.accountability.paymentHistory}</span>
