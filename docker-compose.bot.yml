@@ -1,0 +1,19 @@
+# Runs the Telegram bot on our own server:
+#   docker compose -f docker-compose.bot.yml up -d --build
+# Secrets come from .env.bot next to this file (chmod 600, never committed):
+#   MONGODB_URI=...   TELEGRAM_BOT_TOKEN=...
+services:
+  salahtrack-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.bot
+    image: salahtrack-bot
+    container_name: salahtrack-bot
+    env_file: .env.bot
+    restart: unless-stopped
+    mem_limit: 256m
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'

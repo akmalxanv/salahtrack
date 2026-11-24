@@ -683,6 +683,20 @@ export interface TranslationContent {
     passwordWeak: string;
     passwordMedium: string;
     passwordStrong: string;
+    telegram: {
+      title: string;
+      description: string;
+      consent: string;
+      connect: string;
+      openBot: string;
+      linkExpires: string;
+      linkedAs: string;
+      unlink: string;
+      checkStatus: string;
+      notConfigured: string;
+      error: string;
+      groupHint: string;
+    };
   };
   apiErrors: {
     AUTH_UNAUTHORIZED: string;
@@ -1327,6 +1341,20 @@ export const translations: Record<Language, TranslationContent> = {
       passwordWeak: 'Слабый',
       passwordMedium: 'Средний',
       passwordStrong: 'Надежный',
+      telegram: {
+        title: "Telegram",
+        description: "Привяжите Telegram, чтобы бот группы напоминал вам о намазах и упоминал вас в отчётах.",
+        consent: "После привязки статус ваших намазов и долги видны участникам ваших групп в Telegram.",
+        connect: "Подключить Telegram",
+        openBot: "Открыть бота",
+        linkExpires: "Ссылка действует 15 минут. Нажмите «Start» в боте.",
+        linkedAs: "Привязан",
+        unlink: "Отвязать",
+        checkStatus: "Я нажал Start — проверить",
+        notConfigured: "Telegram-бот ещё не настроен на сервере.",
+        error: "Не удалось выполнить действие. Попробуйте ещё раз.",
+        groupHint: "Владелец группы: добавьте бота в чат и отправьте /connect КОД_ПРИГЛАШЕНИЯ.",
+      },
     },
     apiErrors: {
       AUTH_UNAUTHORIZED: 'Требуется авторизация',
@@ -1970,6 +1998,20 @@ export const translations: Record<Language, TranslationContent> = {
       passwordWeak: 'Weak',
       passwordMedium: 'Medium',
       passwordStrong: 'Strong',
+      telegram: {
+        title: "Telegram",
+        description: "Link Telegram so your group bot can remind you about prayers and mention you in reports.",
+        consent: "Once linked, your prayer status and debts are visible to members of your groups in Telegram.",
+        connect: "Connect Telegram",
+        openBot: "Open bot",
+        linkExpires: "The link is valid for 15 minutes. Press \"Start\" in the bot.",
+        linkedAs: "Linked",
+        unlink: "Unlink",
+        checkStatus: "I pressed Start — check",
+        notConfigured: "The Telegram bot is not configured on the server yet.",
+        error: "Something went wrong. Please try again.",
+        groupHint: "Group owner: add the bot to your chat and send /connect INVITE_CODE.",
+      },
     },
     apiErrors: {
       AUTH_UNAUTHORIZED: 'Authentication required',
@@ -2613,6 +2655,20 @@ export const translations: Record<Language, TranslationContent> = {
       passwordWeak: 'Zaif',
       passwordMedium: 'O‘rtacha',
       passwordStrong: 'Mustahkam',
+      telegram: {
+        title: "Telegram",
+        description: "Guruh boti sizga namozlarni eslatishi va hisobotlarda belgilashi uchun Telegramni ulang.",
+        consent: "Ulangandan so'ng namozlaringiz holati va qarzlaringiz Telegramdagi guruh a'zolariga ko'rinadi.",
+        connect: "Telegramni ulash",
+        openBot: "Botni ochish",
+        linkExpires: "Havola 15 daqiqa amal qiladi. Botda «Start» tugmasini bosing.",
+        linkedAs: "Ulangan",
+        unlink: "Uzish",
+        checkStatus: "Start bosdim — tekshirish",
+        notConfigured: "Telegram bot hali serverda sozlanmagan.",
+        error: "Amalni bajarib bo'lmadi. Qayta urinib ko'ring.",
+        groupHint: "Guruh egasi: botni chatga qo'shing va /connect TAKLIF_KODI yuboring.",
+      },
     },
     apiErrors: {
       AUTH_UNAUTHORIZED: 'Avtorizatsiyadan o‘tish talab qilinadi',

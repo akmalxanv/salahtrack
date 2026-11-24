@@ -21,6 +21,7 @@ import {
 import { useLanguage } from '@/context/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
 import ContactCreator from '@/components/ContactCreator';
+import TelegramLinkCard from '@/components/TelegramLinkCard';
 import { findCityByCoordinates, findCityByNameOrId } from '@/lib/cities';
 import { CityPickerModal } from '@/components/qibla/CityPickerModal';
 import type { CityPreset } from '@/types/qibla';
@@ -745,6 +746,8 @@ function AuthenticatedAccountView({
           </div>
         </div>
       </div>
+
+      <TelegramLinkCard />
 
       <ContactCreator className="pt-2" />
     </div>

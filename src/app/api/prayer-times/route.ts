@@ -291,6 +291,59 @@ async function fetchFromFatvo(
   }
 }
 
+/**
+ * Server-side helper (used by the Telegram notifier): one day of fatvo.uz times for a
+ * fixed location, sharing the same in-memory cache and in-flight dedup as GET.
+ * Returns null when fatvo.uz is unavailable — callers must not invent times.
+ */
+export async function getPrayerTimesForLocation(params: {
+  lat: number;
+  lng: number;
+  timezone: string;
+  date: string; // YYYY-MM-DD, local to the location
+  lang?: PrayerTimesLang;
+  cityName?: string;
+}): Promise<PrayerTimesPayload | null> {
+  const { lat, lng, timezone, date } = params;
+  if (!isValidLatLng(lat, lng) || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  const lang: PrayerTimesLang = params.lang && SUPPORTED_LANGS.includes(params.lang) ? params.lang : 'uz';
+  const tzOffset =
+    getTimezoneOffsetHours(timezone, new Date(`${date}T12:00:00Z`)) ?? Math.round(lng / 15);
+
+  const cacheKey = buildPrayerTimesCacheKey(date, lat, lng, tzOffset, lang);
+  const cached = getPrayerTimesFromCache(cacheKey);
+  if (cached) return cached;
+
+  let inFlight = inFlightRequests.get(cacheKey);
+  if (!inFlight) {
+    const upstreamParams = new URLSearchParams({
+      lat: String(lat),
+      lon: String(lng),
+      date: date.split('-').reverse().join('-'),
+      tz_offset: String(tzOffset),
+      lang,
+    });
+    inFlight = fetchFromFatvo(`${FATVO_API_BASE}?${upstreamParams.toString()}`, {
+      lat,
+      lng,
+      cityName: params.cityName || CUSTOM_LOCATION,
+      countryName: '',
+      timezone,
+      tzOffset,
+      isoDate: date,
+    })
+      .then((payload) => {
+        if (payload) setPrayerTimesInCache(cacheKey, payload);
+        return payload;
+      })
+      .finally(() => {
+        inFlightRequests.delete(cacheKey);
+      });
+    inFlightRequests.set(cacheKey, inFlight);
+  }
+  return inFlight;
+}
+
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);

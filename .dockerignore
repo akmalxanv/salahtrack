@@ -1,0 +1,10 @@
+node_modules
+.next
+.git
+.husky
+.agents
+.env*
+tests
+public
+scripts
+*.md

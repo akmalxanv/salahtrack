@@ -17,6 +17,15 @@ export interface IUser extends Document {
   };
   passwordResetTokenHash?: string;
   passwordResetExpires?: Date;
+  /** Linked Telegram account (set by the bot after the user sends their one-time link code). */
+  telegram?: {
+    userId: number;
+    username?: string;
+    firstName?: string;
+    linkedAt: Date;
+  };
+  telegramLinkCodeHash?: string;
+  telegramLinkExpires?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -91,6 +100,21 @@ const UserSchema = new Schema<IUser>(
       type: Date,
       select: false, // Never included in default queries
     },
+    telegram: {
+      userId: { type: Number },
+      username: { type: String, trim: true, maxlength: 64 },
+      firstName: { type: String, trim: true, maxlength: 128 },
+      linkedAt: { type: Date },
+    },
+    // SHA-256 hash of the one-time link code (raw code is never stored)
+    telegramLinkCodeHash: {
+      type: String,
+      select: false,
+    },
+    telegramLinkExpires: {
+      type: Date,
+      select: false,
+    },
   },
   {
     timestamps: true,
@@ -99,12 +123,21 @@ const UserSchema = new Schema<IUser>(
         delete ret.passwordHash;
         delete ret.passwordResetTokenHash;
         delete ret.passwordResetExpires;
+        delete ret.telegramLinkCodeHash;
+        delete ret.telegramLinkExpires;
         delete ret.__v;
         return ret;
       },
     },
   }
 );
+
+// One Telegram account can be linked to at most one SalahTrack user
+UserSchema.index(
+  { 'telegram.userId': 1 },
+  { unique: true, partialFilterExpression: { 'telegram.userId': { $type: 'number' } } }
+);
+UserSchema.index({ telegramLinkCodeHash: 1 }, { sparse: true });
 
 export const User: Model<IUser> =
   (mongoose.models && mongoose.models.User) || mongoose.model<IUser>('User', UserSchema);
