@@ -14,7 +14,7 @@ import { findCityByCoordinates, findCityByNameOrId } from '../cities.ts';
 import { getTimezoneOffsetHours } from '../../app/api/prayer-times/route.ts';
 import { getZonedDateParts } from '../prayer-cycle.ts';
 import type { PrayerId } from '../../types/prayer.ts';
-import { sendMessage, deleteMessage, type TelegramUpdate, type TelegramMessage } from './api.ts';
+import { sendMessage, deleteMessage, callTelegram, type TelegramUpdate, type TelegramMessage } from './api.ts';
 import { botText, sanitizeBotLang, type BotLang } from './messages.ts';
 import { hashLinkCode, isWellFormedLinkCode, TELEGRAM_BOT_USERNAME } from './link.ts';
 import { buildDebtReport, getGroupTimes } from './notify.ts';
@@ -41,6 +41,23 @@ export function parseCommand(text: string | undefined, botUsername: string = TEL
 async function findLinkedUser(telegramUserId: number | undefined) {
   if (typeof telegramUserId !== 'number') return null;
   return User.findOne({ 'telegram.userId': telegramUserId }).select('_id name preferences').lean();
+}
+
+function isGroupMember(group: { members: { userId: { toString(): string } }[] }, userId: string): boolean {
+  return group.members.some((m) => m.userId.toString() === userId);
+}
+
+/** Anonymous admins post as the group itself; Telegram only allows admins to do that. */
+function isAnonymousChatAdmin(msg: TelegramMessage): boolean {
+  return msg.sender_chat?.id === msg.chat.id;
+}
+
+/** Whether the sender is the owner or an admin of this Telegram chat (asks Telegram). */
+async function isTelegramChatAdmin(msg: TelegramMessage): Promise<boolean> {
+  if (isAnonymousChatAdmin(msg)) return true;
+  if (!msg.from) return false;
+  const member = await callTelegram<{ status: string }>('getChatMember', { chat_id: msg.chat.id, user_id: msg.from.id });
+  return member?.status === 'creator' || member?.status === 'administrator';
 }
 
 function isGroupAdmin(group: { members: { userId: { toString(): string }; role: string }[] }, userId: string): boolean {
@@ -135,8 +152,20 @@ async function handleConnect(msg: TelegramMessage, inviteCode: string, lang: Bot
   // The invite code lets anyone join the group: remove it from the chat (works if the bot is admin)
   await deleteMessage(chatId, msg.message_id);
 
-  const group = await Group.findOne({ inviteCode: code }).select('_id name members').lean();
-  if (!group || !isGroupAdmin(group, user._id.toString())) {
+  const group = await Group.findOne({ inviteCode: code }).select('_id name members telegram').lean();
+  if (!group) {
+    await sendMessage(chatId, botText.connectDenied(lang));
+    return;
+  }
+
+  // Allowed: an admin of the SalahTrack group, OR an admin of this Telegram chat who is a
+  // member of the SalahTrack group. Moving a group that already posts to a DIFFERENT chat
+  // stays app-admin-only, so a member cannot redirect everyone's debt reports to their own chat.
+  const userId = user._id.toString();
+  const appAdmin = isGroupAdmin(group, userId);
+  const boundElsewhere = typeof group.telegram?.chatId === 'number' && group.telegram.chatId !== chatId;
+  const chatAdminMember = !boundElsewhere && isGroupMember(group, userId) && (await isTelegramChatAdmin(msg));
+  if (!appAdmin && !chatAdminMember) {
     await sendMessage(chatId, botText.connectDenied(lang));
     return;
   }
@@ -226,7 +255,8 @@ async function handleGroupCommand(msg: TelegramMessage, cmd: ParsedCommand): Pro
     }
     case 'lang':
     case 'disconnect': {
-      if (!linked || !isGroupAdmin(group, linked._id.toString())) {
+      const appAdmin = linked ? isGroupAdmin(group, linked._id.toString()) : false;
+      if (!appAdmin && !(await isTelegramChatAdmin(msg))) {
         await sendMessage(chatId, botText.adminOnly(lang));
         return;
       }
@@ -280,7 +310,8 @@ export async function handleTelegramUpdate(update: TelegramUpdate): Promise<void
     return;
   }
 
-  if (!msg.from || msg.from.is_bot) return;
+  // Ignore bots, except Telegram's stand-in sender for anonymous group admins
+  if (!msg.from || (msg.from.is_bot && !isAnonymousChatAdmin(msg))) return;
   const cmd = parseCommand(msg.text);
   if (!cmd) return;
   console.log(`${new Date().toISOString()} command /${cmd.name} in ${msg.chat.type} chat ${msg.chat.id}`);

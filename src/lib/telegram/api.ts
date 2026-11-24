@@ -24,6 +24,8 @@ export interface TelegramChat {
 export interface TelegramMessage {
   message_id: number;
   from?: TelegramUser;
+  /** Set when an anonymous group admin posts "as the group" (sender_chat.id === chat.id). */
+  sender_chat?: TelegramChat;
   chat: TelegramChat;
   text?: string;
   migrate_to_chat_id?: number;

@@ -189,9 +189,9 @@ export const botText = {
 
   connectDenied(lang: BotLang): string {
     return {
-      uz: '❌ Guruh topilmadi yoki siz uning egasi/admini emassiz.',
-      ru: '❌ Группа не найдена, или вы не её владелец/админ.',
-      en: "❌ Group not found, or you are not its owner/admin.",
+      uz: "❌ Guruh topilmadi yoki ruxsat yo'q. Ilovadagi guruh admini yoki ushbu chat admini (guruh a'zosi) bo'lishingiz kerak.",
+      ru: '❌ Группа не найдена или нет прав. Нужно быть админом группы в приложении или админом этого чата (и участником группы).',
+      en: "❌ Group not found or not allowed. You must be a group admin in the app, or an admin of this chat who is a member of the group.",
     }[lang];
   },
 
@@ -229,9 +229,9 @@ export const botText = {
 
   adminOnly(lang: BotLang): string {
     return {
-      uz: '❌ Bu buyruq faqat guruh egasi yoki admini uchun.',
-      ru: '❌ Эта команда только для владельца или админа группы.',
-      en: '❌ Only the group owner or an admin can do this.',
+      uz: '❌ Bu buyruq faqat chat yoki ilovadagi guruh egasi/admini uchun.',
+      ru: '❌ Эта команда только для владельца/админа чата или группы в приложении.',
+      en: '❌ Only an owner/admin of this chat or of the group in the app can do this.',
     }[lang];
   },
 
