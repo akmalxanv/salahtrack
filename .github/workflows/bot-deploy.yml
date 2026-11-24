@@ -1,0 +1,82 @@
+# CI/CD for the Telegram bot (bot/index.ts), which runs in Docker on our own server.
+# The website itself is deployed by Vercel's Git integration, not by this workflow.
+#
+# On push to main (bot-related paths) or manual run:
+#   1. test   — typecheck, lint, unit tests
+#   2. deploy — send the bot source over SSH; the server's forced-command script
+#               (deploy/salahtrack-bot-deploy.sh) rebuilds and restarts the container.
+#
+# Repository secrets:
+#   BOT_DEPLOY_HOST         server IP / hostname
+#   BOT_DEPLOY_SSH_KEY      private key whose public half is bound to the deploy script
+#   BOT_DEPLOY_KNOWN_HOSTS  output of `ssh-keyscan <host>` (pins the server identity)
+name: Bot CI/CD
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'bot/**'
+      - 'src/**'
+      - 'tests/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig.json'
+      - 'Dockerfile.bot'
+      - 'docker-compose.bot.yml'
+      - '.dockerignore'
+      - '.github/workflows/bot-deploy.yml'
+  workflow_dispatch:
+
+# Never run two deploys at once; queue instead of cancelling a deploy mid-way
+concurrency:
+  group: bot-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure SSH
+        env:
+          SSH_KEY: ${{ secrets.BOT_DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.BOT_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Deploy bot
+        env:
+          HOST: ${{ secrets.BOT_DEPLOY_HOST }}
+        run: |
+          git archive HEAD package.json package-lock.json tsconfig.json src bot \
+            Dockerfile.bot docker-compose.bot.yml .dockerignore \
+          | ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o BatchMode=yes "root@$HOST"
+
+      - name: Remove SSH key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key

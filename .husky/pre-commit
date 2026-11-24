@@ -3,7 +3,8 @@
 echo "🔍 [pre-commit] Checking for forbidden secrets and private keys..."
 
 # 1. Guard against committing secret files (.env, .env.local, private keys, certificates) at any directory depth
-FORBIDDEN_FILES=$(git diff --cached --name-only | grep -E '(^|/)(\.env(\..+)?|.*\.pem|.*\.key|id_rsa.*|.*\.pfx)$' || true)
+#    .env.example is the public placeholder template, so it is explicitly allowed.
+FORBIDDEN_FILES=$(git diff --cached --name-only | grep -E '(^|/)(\.env(\..+)?|.*\.pem|.*\.key|id_rsa.*|.*\.pfx)$' | grep -vE '(^|/)\.env\.example$' || true)
 if [ -n "$FORBIDDEN_FILES" ]; then
   echo "❌ [pre-commit] Error: Attempting to commit forbidden secret files:"
   echo "$FORBIDDEN_FILES"
