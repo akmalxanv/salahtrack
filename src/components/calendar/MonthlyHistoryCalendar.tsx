@@ -41,6 +41,7 @@ export interface MonthlyHistoryCalendarProps {
   onChangeMonth: (year: number, month: number) => void;
   isLoading?: boolean;
   readOnly?: boolean;
+  earliestTrackingDate?: string;
 }
 
 export default function MonthlyHistoryCalendar({
@@ -54,6 +55,7 @@ export default function MonthlyHistoryCalendar({
   onChangeMonth,
   isLoading = false,
   readOnly = false,
+  earliestTrackingDate,
 }: MonthlyHistoryCalendarProps) {
   const { t, lang } = useLanguage();
   const calendarDate = useMemo(() => getCalendarDate(), []);
@@ -133,15 +135,52 @@ export default function MonthlyHistoryCalendar({
   const selectedRecord = records[selectedDate];
   const selectedPrayers = selectedRecord?.prayers;
 
+  // Derive or use earliest tracking date
+  const computedEarliestTrackingDate = useMemo(() => {
+    if (earliestTrackingDate) return earliestTrackingDate;
+
+    let earliest: string | null = null;
+    for (const [dateStr, record] of Object.entries(records)) {
+      if (!record?.prayers) continue;
+      const hasTrackedPrayer = PRAYER_IDS.some((p) => {
+        const s = record.prayers[p]?.status;
+        return (
+          s === 'PRAYED_ON_TIME' ||
+          s === 'PRAYED' ||
+          s === 'PRAYED_LATE' ||
+          s === 'MADE_UP' ||
+          s === 'MISSED'
+        );
+      });
+      if (hasTrackedPrayer) {
+        if (!earliest || dateStr < earliest) {
+          earliest = dateStr;
+        }
+      }
+    }
+    return earliest || undefined;
+  }, [earliestTrackingDate, records]);
+
+  const shouldAutoMissSelectedDate = useMemo(() => {
+    const isPastLiturgicalDate = selectedDate < liturgicalDate;
+    const isAfterOrOnEarliestTracking = computedEarliestTrackingDate
+      ? selectedDate >= computedEarliestTrackingDate
+      : false;
+    return isPastLiturgicalDate && isAfterOrOnEarliestTracking;
+  }, [selectedDate, liturgicalDate, computedEarliestTrackingDate]);
+
   const selectedDayCompletion = useMemo(() => {
-    if (!selectedPrayers) return { completed: 0, total: 5, onTime: 0, missed: 0, madeUp: 0 };
     let completed = 0;
     let onTime = 0;
     let missed = 0;
     let madeUp = 0;
 
     for (const p of PRAYER_IDS) {
-      const status = selectedPrayers[p]?.status;
+      let status: PrayerStatus = selectedPrayers?.[p]?.status || 'PENDING';
+      if (status === 'PENDING' && shouldAutoMissSelectedDate) {
+        status = 'MISSED';
+      }
+
       if (status === 'PRAYED_ON_TIME' || status === 'PRAYED' || status === 'PRAYED_LATE') {
         completed++;
         onTime++;
@@ -154,7 +193,7 @@ export default function MonthlyHistoryCalendar({
     }
 
     return { completed, total: 5, onTime, missed, madeUp };
-  }, [selectedPrayers]);
+  }, [selectedPrayers, shouldAutoMissSelectedDate]);
 
   // Format localized display for selected date
   const formattedSelectedDate = useMemo(() => {
@@ -300,18 +339,31 @@ export default function MonthlyHistoryCalendar({
               const record = records[dateStr];
               const prayers = record?.prayers;
 
+              const isPastLiturgicalDate = dateStr < liturgicalDate;
+              const isAfterOrOnEarliestTracking = computedEarliestTrackingDate
+                ? dateStr >= computedEarliestTrackingDate
+                : false;
+              const shouldAutoMiss = isPastLiturgicalDate && isAfterOrOnEarliestTracking;
+
               // Calculate day prayer statuses
               let onTime = 0;
               let madeUp = 0;
 
               for (const p of PRAYER_IDS) {
-                const status = prayers?.[p]?.status || 'PENDING';
-                if (status === 'PRAYED_ON_TIME' || status === 'PRAYED' || status === 'PRAYED_LATE') onTime++;
-                else if (status === 'MADE_UP') madeUp++;
+                let effectiveStatus: PrayerStatus = prayers?.[p]?.status || 'PENDING';
+                if (effectiveStatus === 'PENDING' && shouldAutoMiss) {
+                  effectiveStatus = 'MISSED';
+                }
+
+                if (effectiveStatus === 'PRAYED_ON_TIME' || effectiveStatus === 'PRAYED' || effectiveStatus === 'PRAYED_LATE') {
+                  onTime++;
+                } else if (effectiveStatus === 'MADE_UP') {
+                  madeUp++;
+                }
               }
 
               const completed = onTime + madeUp;
-              const hasData = record !== undefined;
+              const hasData = record !== undefined || shouldAutoMiss;
 
               return (
                 <button
@@ -358,14 +410,18 @@ export default function MonthlyHistoryCalendar({
                   {!isFuture && (
                     <div className="w-full flex items-center justify-center gap-0.5 sm:gap-1 mt-auto pb-0.5">
                       {PRAYER_IDS.map((p) => {
-                        const status = prayers?.[p]?.status;
+                        let effectiveStatus: PrayerStatus = prayers?.[p]?.status || 'PENDING';
+                        if (effectiveStatus === 'PENDING' && shouldAutoMiss) {
+                          effectiveStatus = 'MISSED';
+                        }
+
                         let dotBg = 'bg-slate-200 dark:bg-slate-700';
 
-                        if (status === 'PRAYED_ON_TIME' || status === 'PRAYED' || status === 'PRAYED_LATE') {
+                        if (effectiveStatus === 'PRAYED_ON_TIME' || effectiveStatus === 'PRAYED' || effectiveStatus === 'PRAYED_LATE') {
                           dotBg = 'bg-emerald-500';
-                        } else if (status === 'MISSED') {
+                        } else if (effectiveStatus === 'MISSED') {
                           dotBg = 'bg-rose-500';
-                        } else if (status === 'MADE_UP') {
+                        } else if (effectiveStatus === 'MADE_UP') {
                           dotBg = 'bg-sky-500';
                         }
 
@@ -380,7 +436,7 @@ export default function MonthlyHistoryCalendar({
                   )}
 
                   {/* Tablet/Desktop fractional completion badge */}
-                  {!isFuture && hasData && completed > 0 && (
+                  {!isFuture && hasData && (completed > 0 || shouldAutoMiss) && (
                     <span className="hidden sm:inline-block text-[9px] font-bold text-slate-500 dark:text-slate-400 leading-none">
                       {completed}/5
                     </span>
@@ -473,7 +529,10 @@ export default function MonthlyHistoryCalendar({
 
             <div className="space-y-2.5">
               {PRAYER_IDS.map((p) => {
-                const prayerStatus: PrayerStatus = selectedPrayers?.[p]?.status || 'PENDING';
+                let prayerStatus: PrayerStatus = selectedPrayers?.[p]?.status || 'PENDING';
+                if (prayerStatus === 'PENDING' && shouldAutoMissSelectedDate) {
+                  prayerStatus = 'MISSED';
+                }
                 const IconComponent = PRAYER_ICONS[p];
                 const prayerKey = `${selectedDate}-${p}`;
                 const isRowUpdating = updatingPrayerKey === prayerKey;
@@ -552,8 +611,8 @@ export default function MonthlyHistoryCalendar({
                           </button>
                         </div>
 
-                        {/* Reset to Pending (if already marked) */}
-                        {prayerStatus !== 'PENDING' && (
+                        {/* Reset to Pending (if already marked and not auto-missed) */}
+                        {prayerStatus !== 'PENDING' && !shouldAutoMissSelectedDate && (
                           <div className="flex justify-end pt-0.5">
                             <button
                               type="button"

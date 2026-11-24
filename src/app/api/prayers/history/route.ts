@@ -2,13 +2,17 @@ import { NextRequest, NextResponse } from 'next/server.js';
 import { connectDB, execLean } from '../../../../lib/mongodb.ts';
 import { PrayerRecord } from '../../../../models/Prayer.ts';
 import { authenticateRequest } from '../../../../lib/auth/index.ts';
+import { getLiturgicalDate } from '../../../../lib/prayer-cycle.ts';
+import { ensureUserRolledOver, getUserFirstTrackingDate } from '../../../../lib/prayer-rollover.ts';
 
 /**
- * GET /api/prayers/history?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
+ * GET /api/prayers/history?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD&timezone=...
  *
  * Retrieves the authenticated user's private prayer ledger history across a date range.
  * Defaults to the current month if parameters are omitted.
  * Enforces ownership: only returns documents where userId matches the authenticated session.
+ * Reconciles uncompleted past prayer records before returning, converting lingering PENDING -> MISSED.
+ * Returns earliestTrackingDate so client can accurately render pre-tracking vs uncompleted days.
  */
 export async function GET(request: NextRequest) {
   try {
@@ -23,6 +27,9 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const startDateParam = searchParams.get('startDate');
     const endDateParam = searchParams.get('endDate');
+    const timezone = searchParams.get('timezone') || undefined;
+
+    const currentLiturgicalDate = getLiturgicalDate(new Date(), undefined, timezone);
 
     const now = new Date();
     const defaultEndDate = now.toISOString().split('T')[0];
@@ -39,6 +46,10 @@ export async function GET(request: NextRequest) {
 
     await connectDB();
 
+    // Auto-rollover uncompleted past prayers before returning
+    await ensureUserRolledOver(auth.user.id, currentLiturgicalDate, { timezone, fillGapDays: false });
+    const earliestTrackingDate = await getUserFirstTrackingDate(auth.user.id, currentLiturgicalDate);
+
     const records = await execLean<unknown[]>(
       PrayerRecord.find({
         userId: auth.user.id,
@@ -54,6 +65,7 @@ export async function GET(request: NextRequest) {
           total: records.length,
           startDate,
           endDate,
+          earliestTrackingDate,
         },
       },
       { status: 200 }

@@ -95,7 +95,7 @@ export async function GET(request: NextRequest) {
     await connectDB();
 
     // Auto-rollover uncompleted past prayers before returning
-    await ensureUserRolledOver(auth.user.id, currentLiturgicalDate, { timezone: timezoneParam, fillGapDays: false });
+    await ensureUserRolledOver(auth.user.id, currentLiturgicalDate, { timezone: timezoneParam, fillGapDays: true });
 
     const record = await execLean<IPrayerRecord | null>(
       PrayerRecord.findOne({

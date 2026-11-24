@@ -326,6 +326,45 @@ describe('History Calendar, Date Generation & Progress Regression Suite', () => 
       assert.equal(json.data.total, 1);
       assert.equal(json.data.records[0].userId.toString(), userAId.toString());
       assert.equal(json.data.records[0].finesAccrued, 0);
+      assert.equal(json.data.earliestTrackingDate, '2026-10-15');
+    });
+
+    it('rolls over lingering PENDING prayers on past dates to MISSED and returns earliestTrackingDate', async () => {
+      const userAId = new mongoose.Types.ObjectId();
+      const tokenA = createAuthSession(userAId, 'usera');
+
+      // User has past record with lingering PENDING prayers
+      mockRecords.push({
+        _id: new mongoose.Types.ObjectId(),
+        userId: userAId,
+        date: '2026-10-10',
+        prayers: {
+          fajr: { status: 'PRAYED_ON_TIME' },
+          dhuhr: { status: 'PENDING' },
+          asr: { status: 'PENDING' },
+          maghrib: { status: 'PENDING' },
+          isha: { status: 'PENDING' },
+        },
+        finesAccrued: 0,
+        save: async function () { return this; },
+      });
+
+      const req = new NextRequest('http://localhost:3000/api/prayers/history?startDate=2026-10-01&endDate=2026-10-20', {
+        headers: { Cookie: `salahtrack_session=${tokenA}` },
+      });
+
+      const res = await getHistoryHandler(req);
+      assert.equal(res.status, 200);
+      const json = await res.json();
+      assert.equal(json.success, true);
+      assert.equal(json.data.earliestTrackingDate, '2026-10-10');
+      assert.equal(json.data.records.length, 1);
+      assert.equal(json.data.records[0].prayers.fajr.status, 'PRAYED_ON_TIME');
+      assert.equal(json.data.records[0].prayers.dhuhr.status, 'MISSED');
+      assert.equal(json.data.records[0].prayers.asr.status, 'MISSED');
+      assert.equal(json.data.records[0].prayers.maghrib.status, 'MISSED');
+      assert.equal(json.data.records[0].prayers.isha.status, 'MISSED');
+      assert.ok(json.data.records[0].finesAccrued > 0);
     });
   });
 

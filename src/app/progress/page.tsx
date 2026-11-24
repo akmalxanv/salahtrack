@@ -44,6 +44,7 @@ import {
   saveStoredHistoryRecords,
   mirrorDailyPrayersToHistory,
   saveDailyPrayersSync,
+  catchupMultiDayGap,
 } from '@/lib/storage-sync';
 
 const PRAYER_IDS: PrayerId[] = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
@@ -154,6 +155,7 @@ function ProgressContent() {
   const [viewYear, setViewYear] = useState(() => todayDate.getFullYear());
   const [viewMonth, setViewMonth] = useState(() => todayDate.getMonth());
   const [selectedDate, setSelectedDate] = useState(() => getLiturgicalDate());
+  const [earliestTrackingDate, setEarliestTrackingDate] = useState<string | undefined>(undefined);
 
   // Historical updating indicators
   const [updatingPrayerKey, setUpdatingPrayerKey] = useState<string | null>(null);
@@ -308,7 +310,35 @@ function ProgressContent() {
       try {
         const storedHistory = getStoredHistoryRecords();
         if (storedHistory && Object.keys(storedHistory).length > 0) {
-          setRecordsByDate((prev) => ({ ...prev, ...storedHistory }));
+          let earliestDate: string | undefined = undefined;
+          for (const [dateStr, record] of Object.entries(storedHistory)) {
+            if (!record?.prayers) continue;
+            const hasTrackedPrayer = PRAYER_IDS.some((p) => {
+              const s = record.prayers[p]?.status;
+              return (
+                s === 'PRAYED_ON_TIME' ||
+                s === 'PRAYED' ||
+                s === 'PRAYED_LATE' ||
+                s === 'MADE_UP' ||
+                s === 'MISSED'
+              );
+            });
+            if (hasTrackedPrayer) {
+              if (!earliestDate || dateStr < earliestDate) {
+                earliestDate = dateStr;
+              }
+            }
+          }
+
+          if (earliestDate) {
+            setEarliestTrackingDate(earliestDate);
+            if (earliestDate < liturgicalTodayStr) {
+              catchupMultiDayGap(earliestDate, liturgicalTodayStr);
+            }
+          }
+
+          const refreshedHistory = getStoredHistoryRecords();
+          setRecordsByDate((prev) => ({ ...prev, ...refreshedHistory }));
         }
 
         // Also check if daily store has prayers for active liturgical date and mirror if missing
@@ -328,6 +358,13 @@ function ProgressContent() {
       // Step B: If authenticated, fetch server truth for the selected month
       if (!userId) return;
 
+      // In background, trigger rollover to catch up any missed days up to liturgical today
+      fetch('/api/prayers/rollover', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ toDate: liturgicalTodayStr }),
+      }).catch(() => {});
+
       setLoadingHistory(true);
       try {
         const monthStr = String(viewMonth + 1).padStart(2, '0');
@@ -342,19 +379,24 @@ function ProgressContent() {
 
         if (res.ok) {
           const json = await res.json();
-          if (json.success && Array.isArray(json.data?.records)) {
-            const mappedRecords: Record<string, PrayerHistoryRecord> = {};
-            for (const rec of json.data.records) {
-              if (rec.date) {
-                mappedRecords[rec.date] = rec;
-              }
+          if (json.success && json.data) {
+            if (json.data.earliestTrackingDate) {
+              setEarliestTrackingDate(json.data.earliestTrackingDate);
             }
+            if (Array.isArray(json.data.records)) {
+              const mappedRecords: Record<string, PrayerHistoryRecord> = {};
+              for (const rec of json.data.records) {
+                if (rec.date) {
+                  mappedRecords[rec.date] = rec;
+                }
+              }
 
-            setRecordsByDate((prev) => {
-              const updated = { ...prev, ...mappedRecords };
-              saveStoredHistoryRecords(updated);
-              return updated;
-            });
+              setRecordsByDate((prev) => {
+                const updated = { ...prev, ...mappedRecords };
+                saveStoredHistoryRecords(updated);
+                return updated;
+              });
+            }
           }
         }
       } catch (err: unknown) {
@@ -736,6 +778,7 @@ function ProgressContent() {
             viewMonth={viewMonth}
             onChangeMonth={handleChangeMonth}
             isLoading={loadingHistory}
+            earliestTrackingDate={earliestTrackingDate}
           />
         </div>
       )}
