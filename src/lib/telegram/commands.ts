@@ -98,7 +98,7 @@ async function handleLink(msg: TelegramMessage, code: string, lang: BotLang): Pr
       },
       $unset: { telegramLinkCodeHash: 1, telegramLinkExpires: 1 },
     },
-    { new: true }
+    { returnDocument: 'after' }
   )
     .select('_id name preferences')
     .lean();
@@ -110,6 +110,15 @@ async function handleLink(msg: TelegramMessage, code: string, lang: BotLang): Pr
   await sendMessage(msg.chat.id, botText.linked(sanitizeBotLang(user.preferences?.language), user.name));
 }
 
+/**
+ * Invite codes are stored as XXXX-XXXX (see generateInviteCode). Accepts any case,
+ * with or without the hyphen, and returns the stored form — or null if malformed.
+ */
+export function normalizeInviteCode(raw: string): string | null {
+  const match = /^([A-Z0-9]{4})-?([A-Z0-9]{4})$/.exec(raw.trim().toUpperCase());
+  return match ? `${match[1]}-${match[2]}` : null;
+}
+
 async function handleConnect(msg: TelegramMessage, inviteCode: string, lang: BotLang): Promise<void> {
   const chatId = msg.chat.id;
   const user = await findLinkedUser(msg.from?.id);
@@ -117,8 +126,8 @@ async function handleConnect(msg: TelegramMessage, inviteCode: string, lang: Bot
     await sendMessage(chatId, botText.mustLinkFirst(lang));
     return;
   }
-  const code = inviteCode.toUpperCase();
-  if (!/^[A-Z0-9]{4,16}$/.test(code)) {
+  const code = normalizeInviteCode(inviteCode);
+  if (!code) {
     await sendMessage(chatId, botText.connectUsage(lang));
     return;
   }
@@ -274,6 +283,7 @@ export async function handleTelegramUpdate(update: TelegramUpdate): Promise<void
   if (!msg.from || msg.from.is_bot) return;
   const cmd = parseCommand(msg.text);
   if (!cmd) return;
+  console.log(`${new Date().toISOString()} command /${cmd.name} in ${msg.chat.type} chat ${msg.chat.id}`);
 
   if (msg.chat.type === 'private') {
     await handlePrivateCommand(msg, cmd);

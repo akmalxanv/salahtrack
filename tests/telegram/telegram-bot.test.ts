@@ -10,7 +10,7 @@ import {
 } from '../../src/lib/telegram/schedule.ts';
 import { escapeHtml, mentionHtml } from '../../src/lib/telegram/api.ts';
 import { generateLinkCode, hashLinkCode, isWellFormedLinkCode, buildDeepLink } from '../../src/lib/telegram/link.ts';
-import { parseCommand } from '../../src/lib/telegram/commands.ts';
+import { parseCommand, normalizeInviteCode } from '../../src/lib/telegram/commands.ts';
 import { botText } from '../../src/lib/telegram/messages.ts';
 
 // Tashkent, UTC+5. 2026-11-27 is a Friday.
@@ -110,5 +110,19 @@ describe('telegram command parsing', () => {
     assert.deepEqual(parseCommand('/times@SalahBot', 'SalahBot'), { name: 'times', arg: '' });
     assert.equal(parseCommand('/times@OtherBot', 'SalahBot'), null);
     assert.equal(parseCommand('hello', 'SalahBot'), null);
+  });
+});
+
+describe('telegram invite codes', () => {
+  it('accepts the stored XXXX-XXXX format in any case, with or without hyphen', () => {
+    assert.equal(normalizeInviteCode('DJCV-4WGF'), 'DJCV-4WGF');
+    assert.equal(normalizeInviteCode(' djcv-4wgf '), 'DJCV-4WGF');
+    assert.equal(normalizeInviteCode('DJCV4WGF'), 'DJCV-4WGF');
+  });
+
+  it('rejects malformed codes', () => {
+    assert.equal(normalizeInviteCode('DJCV-4WG'), null);
+    assert.equal(normalizeInviteCode('DJCV--4WGF'), null);
+    assert.equal(normalizeInviteCode('{"$gt":""}'), null);
   });
 });
