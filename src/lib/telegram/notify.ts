@@ -96,12 +96,13 @@ export async function buildDebtReport(group: LeanGroup, lang: BotLang): Promise<
   const members = await getLinkedMembers(group);
   const timezone = group.telegram?.timezone;
 
-  // Same lazy rollover the app runs on load: yesterday's unmarked prayers become MISSED,
+  // Same lazy rollover the app's dashboard runs on load: past unmarked prayers become MISSED and
+  // whole days with no record at all (member didn't open the app) are filled with 5 MISSED prayers,
   // so the report matches what each member sees in the app.
   const today = await getGroupTimes(group, getZonedDateParts(new Date(), timezone).dateStr);
   const liturgicalDate = getLiturgicalDate(new Date(), today?.timings.fajr.time, timezone);
   for (const m of members) {
-    await ensureUserRolledOver(m.userId, liturgicalDate, { timezone, fillGapDays: false }).catch((err) =>
+    await ensureUserRolledOver(m.userId, liturgicalDate, { timezone, fillGapDays: true }).catch((err) =>
       console.error('[telegram] rollover failed for member', err)
     );
   }
