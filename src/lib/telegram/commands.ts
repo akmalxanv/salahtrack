@@ -16,7 +16,7 @@ import { getZonedDateParts } from '../prayer-cycle.ts';
 import type { PrayerId } from '../../types/prayer.ts';
 import { sendMessage, deleteMessage, type TelegramUpdate, type TelegramMessage } from './api.ts';
 import { botText, sanitizeBotLang, type BotLang } from './messages.ts';
-import { hashLinkCode, isWellFormedLinkCode } from './link.ts';
+import { hashLinkCode, isWellFormedLinkCode, TELEGRAM_BOT_USERNAME } from './link.ts';
 import { buildDebtReport, getGroupTimes } from './notify.ts';
 import { PRAYER_IDS } from './schedule.ts';
 
@@ -29,7 +29,7 @@ interface ParsedCommand {
   arg: string;
 }
 
-export function parseCommand(text: string | undefined, botUsername = process.env.TELEGRAM_BOT_USERNAME): ParsedCommand | null {
+export function parseCommand(text: string | undefined, botUsername: string = TELEGRAM_BOT_USERNAME): ParsedCommand | null {
   if (!text) return null;
   const match = /^\/([a-z_]+)(?:@([A-Za-z0-9_]+))?(?:\s+([\s\S]*))?$/i.exec(text.trim());
   if (!match) return null;

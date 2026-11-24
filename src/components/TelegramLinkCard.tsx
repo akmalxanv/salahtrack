@@ -8,7 +8,6 @@ interface TelegramStatus {
   linked: boolean;
   username: string | null;
   firstName: string | null;
-  botConfigured: boolean;
 }
 
 /**
@@ -117,8 +116,6 @@ export default function TelegramLinkCard() {
             <span>{tt.unlink}</span>
           </button>
         </div>
-      ) : !status.botConfigured ? (
-        <p className="text-xs text-slate-500 dark:text-slate-400">{tt.notConfigured}</p>
       ) : (
         <div className="space-y-3">
           <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">{tt.consent}</p>

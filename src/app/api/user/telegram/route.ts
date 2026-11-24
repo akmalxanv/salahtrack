@@ -32,8 +32,6 @@ export async function GET(request: NextRequest) {
         username: tg?.username ?? null,
         firstName: tg?.firstName ?? null,
         linkedAt: tg?.linkedAt ?? null,
-        // The website only builds deep links; the token lives on the bot server
-        botConfigured: Boolean(process.env.TELEGRAM_BOT_USERNAME),
       },
     });
   } catch (error) {

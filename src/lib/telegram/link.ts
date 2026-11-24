@@ -10,6 +10,9 @@ import { createHash, randomBytes } from 'node:crypto';
 
 export const LINK_CODE_TTL_MS = 15 * 60 * 1000;
 
+/** Public @username of the SalahTrack bot (not a secret; the token stays server-side). */
+export const TELEGRAM_BOT_USERNAME = 'namozlarimrobot';
+
 /** 24 random bytes → 32 base64url chars; Telegram start params allow [A-Za-z0-9_-]{1,64}. */
 export function generateLinkCode(): { code: string; hash: string } {
   const code = randomBytes(24).toString('base64url');
@@ -24,7 +27,7 @@ export function isWellFormedLinkCode(code: unknown): code is string {
   return typeof code === 'string' && /^[A-Za-z0-9_-]{32}$/.test(code);
 }
 
-export function buildDeepLink(code: string, botUsername = process.env.TELEGRAM_BOT_USERNAME): string | null {
+export function buildDeepLink(code: string, botUsername: string = TELEGRAM_BOT_USERNAME): string | null {
   if (!botUsername || !/^[A-Za-z0-9_]{5,32}$/.test(botUsername)) return null;
   return `https://t.me/${botUsername}?start=${code}`;
 }
