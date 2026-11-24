@@ -107,6 +107,12 @@ export async function getUserFirstTrackingDate(
   const normalizedUserId = typeof userId === 'string' ? userId : userId.toString();
   let earliestRecordDate: string | null = null;
 
+  try {
+    await connectDB();
+  } catch {
+    // Graceful fallback for mock DB environments
+  }
+
   // Check PrayerRecord collection for earliest recorded prayer date
   if (isDbOperationSafe('find')) {
     try {

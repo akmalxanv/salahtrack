@@ -23,7 +23,7 @@ import type { PrayerStatus } from '../../../../types/prayer.ts';
  * 3. Enforces calendar validation when fromDate / toDate are supplied.
  * 4. On fromDate: converts any lingering PENDING prayers to MISSED, calculates fines, and persists.
  * 5. For intermediate days (if user was away for > 1 day): creates records with all 5 MISSED prayers
- *    and 75,000 UZS fines accrued for any missing days.
+ *    and calculated accountability fines accrued for any missing days.
  * 6. Ensures overall user history since tracking commencement is rolled over via ensureUserRolledOver.
  * 7. On toDate: ensures document exists with default PENDING prayers.
  * 8. Recalculates user's streak deterministically across all records relative to toDate.
@@ -31,6 +31,7 @@ import type { PrayerStatus } from '../../../../types/prayer.ts';
  */
 export async function POST(request: NextRequest) {
   try {
+    await connectDB();
     const auth = await authenticateRequest(request);
     if (!auth) {
       return NextResponse.json(
@@ -103,7 +104,9 @@ export async function POST(request: NextRequest) {
             ? await (q as { sort: (order: unknown) => Promise<Array<{ date: string }>> }).sort({ date: -1 })
             : await q;
           if (Array.isArray(records)) {
-            const priorRecords = records.filter((r) => r.date < resolvedToDate);
+            const priorRecords = records
+              .filter((r) => r?.date && isValidCalendarDate(r.date) && r.date < resolvedToDate)
+              .sort((a, b) => b.date.localeCompare(a.date));
             if (priorRecords.length > 0) {
               lastRecordedDate = priorRecords[0].date;
             }
@@ -179,7 +182,7 @@ export async function POST(request: NextRequest) {
               userId: auth.user.id,
               date: interDate,
               prayers: missedPrayers,
-              finesAccrued: 75000,
+              finesAccrued: calculateAccountabilityFines(interDate, missedPrayers, resolvedToDate),
             });
             await interRecord.save();
           } catch (err: unknown) {

@@ -33,10 +33,11 @@ import type {
   PrayerHistoryRecord,
   PrayerItem,
   QazaPaymentReceipt,
+  SinglePrayerEntry,
 } from '@/types/prayer';
 import PayQazaModal from '@/components/qaza/PayQazaModal';
 import MonthlyHistoryCalendar from '@/components/calendar/MonthlyHistoryCalendar';
-import { calculateAccountabilityLedger } from '@/lib/accountability';
+import { calculateAccountabilityLedger, calculateAccountabilityFines } from '@/lib/accountability';
 import { formatCurrency } from '@/lib/formatters';
 import { getCalendarDate, getLiturgicalDate } from '@/lib/prayer-cycle';
 import {
@@ -283,26 +284,6 @@ function ProgressContent() {
     }
   }, [userId, fetchStats]);
 
-  // Tab focus revalidation: silently refresh stale stats
-  useEffect(() => {
-    const handleFocusRevalidate = () => {
-      if (typeof document !== 'undefined' && document.visibilityState === 'visible' && userId) {
-        const isStatsStale = Date.now() - progressCache.statsTimestamp >= 30000;
-        if (isStatsStale) {
-          fetchStats(true);
-        }
-      }
-    };
-
-    window.addEventListener('focus', handleFocusRevalidate);
-    document.addEventListener('visibilitychange', handleFocusRevalidate);
-
-    return () => {
-      window.removeEventListener('focus', handleFocusRevalidate);
-      document.removeEventListener('visibilitychange', handleFocusRevalidate);
-    };
-  }, [userId, fetchStats]);
-
   // 2. Fetch Monthly History (Dual-Tier: LocalStorage offline/guest fallback + MongoDB Atlas when authenticated)
   const fetchMonthHistory = useCallback(
     async (signal?: AbortSignal) => {
@@ -357,13 +338,6 @@ function ProgressContent() {
 
       // Step B: If authenticated, fetch server truth for the selected month
       if (!userId) return;
-
-      // In background, trigger rollover to catch up any missed days up to liturgical today
-      fetch('/api/prayers/rollover', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ toDate: liturgicalTodayStr }),
-      }).catch(() => {});
 
       setLoadingHistory(true);
       try {
@@ -425,26 +399,58 @@ function ProgressContent() {
     };
   }, [fetchMonthHistory]);
 
-  // Auto-reload when returning to the tab/window/page ("comes back so info isn't stuck")
+  // 3. Coordinated Server Rollover Synchronization
+  const runRolloverSync = useCallback(async () => {
+    if (!userId) return;
+    try {
+      const res = await fetch('/api/prayers/rollover', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ toDate: liturgicalTodayStr }),
+      });
+      if (res.ok) {
+        // Clear cached stats timestamp so fresh database debt is retrieved
+        progressCache.statsTimestamp = 0;
+        await Promise.all([fetchStats(true), fetchMonthHistory()]);
+      }
+    } catch (err) {
+      console.warn('Rollover sync error:', err);
+    }
+  }, [userId, liturgicalTodayStr, fetchStats, fetchMonthHistory]);
+
+  // Synchronize server rollover on load when user is authenticated
   useEffect(() => {
-    const handleRevalidate = () => {
+    if (!userId) return;
+    queueMicrotask(() => {
+      runRolloverSync();
+    });
+  }, [userId, runRolloverSync]);
+
+  // Tab focus revalidation: silently refresh stale stats, run rollover sync, and refresh payments
+  useEffect(() => {
+    const handleFocusRevalidate = () => {
       if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
-        fetchStats();
-        fetchMonthHistory();
         if (userId) {
-          fetchPaymentHistory();
+          const isStatsStale = Date.now() - progressCache.statsTimestamp >= 30000;
+          if (isStatsStale) {
+            fetchStats(true);
+          }
+          runRolloverSync();
+          fetchPaymentHistory(true);
+        } else {
+          fetchMonthHistory();
         }
       }
     };
 
-    window.addEventListener('focus', handleRevalidate);
-    document.addEventListener('visibilitychange', handleRevalidate);
+    window.addEventListener('focus', handleFocusRevalidate);
+    document.addEventListener('visibilitychange', handleFocusRevalidate);
 
     return () => {
-      window.removeEventListener('focus', handleRevalidate);
-      document.removeEventListener('visibilitychange', handleRevalidate);
+      window.removeEventListener('focus', handleFocusRevalidate);
+      document.removeEventListener('visibilitychange', handleFocusRevalidate);
     };
-  }, [fetchStats, fetchMonthHistory, fetchPaymentHistory, userId]);
+  }, [userId, fetchStats, runRolloverSync, fetchPaymentHistory, fetchMonthHistory]);
 
   // Reactive synchronization with HomeDashboard and other tabs via local-storage-update
   useEffect(() => {
@@ -575,10 +581,105 @@ function ProgressContent() {
     [calendarTodayStr, liturgicalTodayStr, t.progress.futureDateError, user, fetchStats]
   );
 
-  // Analytical breakdown of MISSED prayers from history
+  // Derive or use earliest tracking date from recorded history
+  const effectiveEarliestDate = useMemo(() => {
+    if (earliestTrackingDate) return earliestTrackingDate;
+
+    let earliest: string | undefined = undefined;
+    for (const [dateStr, record] of Object.entries(recordsByDate)) {
+      if (!record?.prayers) continue;
+      const hasTrackedPrayer = PRAYER_IDS.some((p) => {
+        const s = record.prayers[p]?.status;
+        return (
+          s === 'PRAYED_ON_TIME' ||
+          s === 'PRAYED' ||
+          s === 'PRAYED_LATE' ||
+          s === 'MADE_UP' ||
+          s === 'MISSED'
+        );
+      });
+      if (hasTrackedPrayer) {
+        if (!earliest || dateStr < earliest) {
+          earliest = dateStr;
+        }
+      }
+    }
+    return earliest;
+  }, [earliestTrackingDate, recordsByDate]);
+
+  // Construct effectiveRecordsByDate:
+  // For any date between earliestTrackingDate and liturgicalTodayStr (earliestTrackingDate <= curDate < liturgicalTodayStr):
+  // If recordsByDate[curDate] is missing or has prayers with status === 'PENDING':
+  // Project missing day or pending prayers as status: 'MISSED' with finesAccrued calculated.
+  // Pre-tracking dates < earliestTrackingDate remain strictly untouched!
+  const effectiveRecordsByDate = useMemo(() => {
+    const result: Record<string, PrayerHistoryRecord> = { ...recordsByDate };
+
+    if (effectiveEarliestDate && effectiveEarliestDate < liturgicalTodayStr) {
+      const [fromY, fromM, fromD] = effectiveEarliestDate.split('-').map(Number);
+      const [toY, toM, toD] = liturgicalTodayStr.split('-').map(Number);
+
+      if (!isNaN(fromY) && !isNaN(fromM) && !isNaN(fromD) && !isNaN(toY) && !isNaN(toM) && !isNaN(toD)) {
+        let currentUtc = Date.UTC(fromY, fromM - 1, fromD);
+        const endUtc = Date.UTC(toY, toM - 1, toD);
+
+        while (currentUtc < endUtc) {
+          const d = new Date(currentUtc);
+          const y = d.getUTCFullYear();
+          const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+          const day = String(d.getUTCDate()).padStart(2, '0');
+          const curDate = `${y}-${m}-${day}`;
+
+          const existingRecord = result[curDate];
+
+          if (!existingRecord) {
+            const prayers: Record<PrayerId, SinglePrayerEntry> = {
+              fajr: { status: 'MISSED' },
+              dhuhr: { status: 'MISSED' },
+              asr: { status: 'MISSED' },
+              maghrib: { status: 'MISSED' },
+              isha: { status: 'MISSED' },
+            };
+            result[curDate] = {
+              date: curDate,
+              prayers,
+              finesAccrued: calculateAccountabilityFines(curDate, prayers, liturgicalTodayStr),
+            };
+          } else {
+            let hasPending = false;
+            const updatedPrayers: Record<PrayerId, SinglePrayerEntry> = { ...existingRecord.prayers };
+            for (const pid of PRAYER_IDS) {
+              const entry = updatedPrayers[pid];
+              if (!entry || entry.status === 'PENDING') {
+                hasPending = true;
+                updatedPrayers[pid] = {
+                  ...entry,
+                  status: 'MISSED',
+                };
+              }
+            }
+
+            if (hasPending) {
+              result[curDate] = {
+                ...existingRecord,
+                prayers: updatedPrayers,
+                finesAccrued: calculateAccountabilityFines(curDate, updatedPrayers, liturgicalTodayStr),
+              };
+            }
+          }
+
+          currentUtc += 24 * 60 * 60 * 1000;
+        }
+      }
+    }
+
+    return result;
+  }, [recordsByDate, effectiveEarliestDate, liturgicalTodayStr]);
+
+  // Analytical breakdown of MISSED prayers from effective history
   const historyMissedByPrayer = useMemo(() => {
     const counts: Record<PrayerId, number> = { fajr: 0, dhuhr: 0, asr: 0, maghrib: 0, isha: 0 };
-    for (const record of Object.values(recordsByDate)) {
+    for (const record of Object.values(effectiveRecordsByDate)) {
       if (!record.prayers) continue;
       for (const p of PRAYER_IDS) {
         if (record.prayers[p]?.status === 'MISSED') {
@@ -587,12 +688,12 @@ function ProgressContent() {
       }
     }
     return counts;
-  }, [recordsByDate]);
+  }, [effectiveRecordsByDate]);
 
   // Sorted list of historical records (descending date)
   const sortedHistoryRecords = useMemo(() => {
-    return Object.values(recordsByDate).sort((a, b) => b.date.localeCompare(a.date));
-  }, [recordsByDate]);
+    return Object.values(effectiveRecordsByDate).sort((a, b) => b.date.localeCompare(a.date));
+  }, [effectiveRecordsByDate]);
 
   // Analytical stats breakdown computed across historical records
   const prayerBreakdown = useMemo(() => {
@@ -623,24 +724,31 @@ function ProgressContent() {
   // Accountability calculations: single source of truth calculation for instant 0ms offline/pre-fetch UI,
   // reconciled with server stats once fetched. Prevents arbitrary default multiplication bug.
   const localLedger = useMemo(() => {
-    return calculateAccountabilityLedger(recordsByDate);
-  }, [recordsByDate]);
+    return calculateAccountabilityLedger(effectiveRecordsByDate);
+  }, [effectiveRecordsByDate]);
 
   const isStatsLoading = Boolean(user && !stats);
 
   const fineItems = useMemo(() => {
-    return stats?.accountability?.breakdown || (isStatsLoading ? [] : localLedger.items);
+    if (stats?.accountability?.breakdown && stats.accountability.breakdown.length > 0) {
+      return stats.accountability.breakdown;
+    }
+    return isStatsLoading ? [] : localLedger.items;
   }, [stats?.accountability?.breakdown, isStatsLoading, localLedger.items]);
 
   const accountabilityTotal =
-    stats?.accountability?.totalFinancialDebt ??
-    stats?.accountability?.totalAmount ??
-    (isStatsLoading ? 0 : localLedger.totalAmount);
+    (stats?.accountability?.totalFinancialDebt !== undefined && stats.accountability.totalFinancialDebt > 0)
+      ? stats.accountability.totalFinancialDebt
+      : (stats?.accountability?.totalAmount !== undefined && stats.accountability.totalAmount > 0)
+      ? stats.accountability.totalAmount
+      : (localLedger.totalAmount || (stats?.accountability?.totalFinancialDebt ?? stats?.accountability?.totalAmount ?? 0));
 
   const pendingQazaCount =
-    stats?.accountability?.pendingQazaCount ??
-    stats?.accountability?.totalMissed ??
-    (isStatsLoading ? 0 : (localLedger.pendingQazaCount ?? localLedger.missedCount));
+    (stats?.accountability?.pendingQazaCount !== undefined && stats.accountability.pendingQazaCount > 0)
+      ? stats.accountability.pendingQazaCount
+      : (stats?.accountability?.totalMissed !== undefined && stats.accountability.totalMissed > 0)
+      ? stats.accountability.totalMissed
+      : ((localLedger.pendingQazaCount ?? localLedger.missedCount) || (stats?.accountability?.pendingQazaCount ?? stats?.accountability?.totalMissed ?? 0));
 
   const accountabilityOverdue =
     stats?.accountability?.totalOverdue ??
@@ -771,7 +879,7 @@ function ProgressContent() {
           <MonthlyHistoryCalendar
             selectedDate={selectedDate}
             onSelectDate={handleSelectDate}
-            records={recordsByDate}
+            records={effectiveRecordsByDate}
             onUpdatePrayerStatus={handleHistoricalCorrection}
             updatingPrayerKey={updatingPrayerKey}
             viewYear={viewYear}
