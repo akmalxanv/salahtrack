@@ -2,7 +2,7 @@
  * Telegram update router: handles bot commands and chat membership changes.
  *
  * Authorization model:
- *  - Telegram identities are trusted only after the webhook secret check (route.ts).
+ *  - Telegram identities come from Telegram itself (long polling over HTTPS with the bot token).
  *  - A Telegram user maps to a SalahTrack user only through a one-time link code.
  *  - Group-changing commands (/connect, /disconnect, /lang) require the linked
  *    SalahTrack user to be owner/admin of that SalahTrack group (checked server-side).
@@ -10,8 +10,6 @@
 import { connectDB } from '../mongodb.ts';
 import { Group } from '../../models/Group.ts';
 import { User } from '../../models/User.ts';
-import { findCityByCoordinates, findCityByNameOrId } from '../cities.ts';
-import { getTimezoneOffsetHours } from '../../app/api/prayer-times/route.ts';
 import { getZonedDateParts } from '../prayer-cycle.ts';
 import type { PrayerId } from '../../types/prayer.ts';
 import { sendMessage, deleteMessage, callTelegram, type TelegramUpdate, type TelegramMessage } from './api.ts';
@@ -19,8 +17,9 @@ import { botText, sanitizeBotLang, type BotLang } from './messages.ts';
 import { hashLinkCode, isWellFormedLinkCode, TELEGRAM_BOT_USERNAME } from './link.ts';
 import { buildDebtReport, getGroupTimes } from './notify.ts';
 import { PRAYER_IDS } from './schedule.ts';
+import { resolveLocation } from './user-context.ts';
+import { handleCallbackQuery, sendPersonalView, setUserLanguage, unlinkTelegram } from './personal.ts';
 
-const DEFAULT_LOCATION = { city: 'Tashkent', lat: 41.2995, lng: 69.2401, timezone: 'Asia/Tashkent' };
 const DEBTS_COOLDOWN_MS = 2 * 60 * 1000;
 const lastDebtsReply = new Map<number, number>();
 
@@ -62,27 +61,6 @@ async function isTelegramChatAdmin(msg: TelegramMessage): Promise<boolean> {
 
 function isGroupAdmin(group: { members: { userId: { toString(): string }; role: string }[] }, userId: string): boolean {
   return group.members.some((m) => m.userId.toString() === userId && (m.role === 'owner' || m.role === 'admin'));
-}
-
-function resolveLocation(prefs: { city?: string; latitude?: number; longitude?: number; timezone?: string } | undefined) {
-  const lat = prefs?.latitude;
-  const lng = prefs?.longitude;
-  if (typeof lat === 'number' && typeof lng === 'number' && Math.abs(lat) <= 90 && Math.abs(lng) <= 180) {
-    const known = findCityByCoordinates(lat, lng);
-    const tz = known?.timezone ?? prefs?.timezone;
-    const timezone = tz && getTimezoneOffsetHours(tz, new Date()) !== null ? tz : DEFAULT_LOCATION.timezone;
-    return { city: known?.name ?? prefs?.city ?? '', lat, lng, timezone };
-  }
-  const preset = prefs?.city ? findCityByNameOrId(prefs.city) : undefined;
-  if (preset) {
-    return {
-      city: preset.name,
-      lat: preset.coordinates.lat,
-      lng: preset.coordinates.lng,
-      timezone: preset.timezone ?? DEFAULT_LOCATION.timezone,
-    };
-  }
-  return DEFAULT_LOCATION;
 }
 
 async function handleLink(msg: TelegramMessage, code: string, lang: BotLang): Promise<void> {
@@ -278,21 +256,61 @@ async function handleGroupCommand(msg: TelegramMessage, cmd: ParsedCommand): Pro
 }
 
 async function handlePrivateCommand(msg: TelegramMessage, cmd: ParsedCommand): Promise<void> {
+  const chatId = msg.chat.id;
   const linked = await findLinkedUser(msg.from?.id);
   const lang = sanitizeBotLang(linked?.preferences?.language);
   if (cmd.name === 'start' && cmd.arg) {
     await handleLink(msg, cmd.arg, lang);
     return;
   }
-  if (cmd.name === 'start') {
-    await sendMessage(msg.chat.id, `${botText.privateStart(lang)}\n\n${botText.help(lang)}`);
+
+  const personal: Record<string, 't' | 'q' | 's'> = { today: 't', qaza: 'q', debts: 'q', stats: 's' };
+  if (personal[cmd.name] || cmd.name === 'lang' || cmd.name === 'unlink') {
+    if (!linked) {
+      await sendMessage(chatId, `${botText.mustLinkFirst(lang)}\n\n${botText.privateStart(lang)}`);
+      return;
+    }
+    if (personal[cmd.name]) {
+      await sendPersonalView(chatId, linked, personal[cmd.name]);
+      return;
+    }
+    if (cmd.name === 'unlink') {
+      await unlinkTelegram(linked);
+      await sendMessage(chatId, botText.unlinked(lang));
+      return;
+    }
+    const next = cmd.arg.toLowerCase();
+    if (next !== 'uz' && next !== 'ru' && next !== 'en') {
+      await sendMessage(chatId, '/lang uz | ru | en');
+      return;
+    }
+    await setUserLanguage(linked, next);
+    await sendMessage(chatId, botText.langChanged(next));
     return;
   }
-  await sendMessage(msg.chat.id, botText.help(lang));
+
+  if (cmd.name === 'start') {
+    if (linked) {
+      await sendMessage(chatId, botText.privateHelp(lang));
+      await sendPersonalView(chatId, linked, 't');
+      return;
+    }
+    await sendMessage(chatId, `${botText.privateStart(lang)}\n\n${botText.help(lang)}`);
+    return;
+  }
+  await sendMessage(chatId, linked ? botText.privateHelp(lang) : botText.help(lang));
 }
 
 export async function handleTelegramUpdate(update: TelegramUpdate): Promise<void> {
   await connectDB();
+
+  // Inline button pressed (prayer status, payments, view switches)
+  if (update.callback_query) {
+    if (update.callback_query.from.is_bot) return;
+    console.log(`${new Date().toISOString()} callback ${update.callback_query.data?.split('|')[0] ?? '?'} from ${update.callback_query.message?.chat.type ?? '?'} chat`);
+    await handleCallbackQuery(update.callback_query);
+    return;
+  }
 
   // Bot removed from a group → stop posting there
   const member = update.my_chat_member;

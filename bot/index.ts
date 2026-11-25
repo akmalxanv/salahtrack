@@ -49,7 +49,7 @@ async function getUpdates(offset: number): Promise<TelegramResponse<TelegramUpda
     const res = await fetch(`https://api.telegram.org/bot${token}/getUpdates`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ offset, timeout: POLL_TIMEOUT_SEC, allowed_updates: ['message', 'my_chat_member'] }),
+      body: JSON.stringify({ offset, timeout: POLL_TIMEOUT_SEC, allowed_updates: ['message', 'my_chat_member', 'callback_query'] }),
       signal: pollAbort.signal,
     });
     return (await res.json()) as TelegramResponse<TelegramUpdate[]>;
@@ -147,11 +147,14 @@ log(`bot @${me?.username ?? '?'}`);
 
 // Polling and webhooks are mutually exclusive: make sure no webhook is registered
 await startupCall('deleteWebhook', {});
-for (const [language_code, commands] of Object.entries(BOT_COMMANDS)) {
-  await startupCall('setMyCommands', {
-    commands: commands.map(([command, description]) => ({ command, description })),
-    ...(language_code === 'uz' ? {} : { language_code }),
-  });
+for (const [language_code, menus] of Object.entries(BOT_COMMANDS)) {
+  for (const [kind, commands] of Object.entries(menus)) {
+    await startupCall('setMyCommands', {
+      commands: commands.map(([command, description]) => ({ command, description })),
+      scope: { type: kind === 'private' ? 'all_private_chats' : 'all_group_chats' },
+      ...(language_code === 'uz' ? {} : { language_code }),
+    });
+  }
 }
 
 setInterval(() => void tick(), TICK_INTERVAL_MS);

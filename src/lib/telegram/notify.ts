@@ -1,7 +1,7 @@
 /**
  * Telegram group notifier: turns due schedule events into messages.
  *
- * Called by GET /api/telegram/cron every ~5 minutes. For each SalahTrack group that has
+ * Called by the bot process (bot/index.ts) every minute. For each SalahTrack group that has
  * a connected Telegram chat it:
  *   1. loads fatvo.uz times for the group's location (yesterday + today),
  *   2. picks the events that are due (see schedule.ts),
@@ -23,8 +23,9 @@ import { calculateStreakFromHistory } from '../streak.ts';
 import { getZonedDateParts, getLiturgicalDate } from '../prayer-cycle.ts';
 import { ensureUserRolledOver, getDateWithDayOffset } from '../prayer-rollover.ts';
 import type { PrayerId } from '../../types/prayer.ts';
-import { sendMessageDetailed, mentionHtml } from './api.ts';
-import { botText, sanitizeBotLang, type BotLang, type DebtLine, type LeaderLine } from './messages.ts';
+import { sendMessageDetailed, mentionHtml, type InlineKeyboard } from './api.ts';
+import { cb } from './callbacks.ts';
+import { botText, groupButtons, sanitizeBotLang, type BotLang, type DebtLine, type LeaderLine } from './messages.ts';
 import { buildDayEvents, dueEvents, PRAYER_IDS, type DayTimings, type ScheduledEvent } from './schedule.ts';
 
 type LeanGroup = Pick<IGroup, '_id' | 'name' | 'members' | 'telegram'>;
@@ -176,20 +177,42 @@ export async function buildWeeklyLeaderboard(group: LeanGroup, lang: BotLang, en
   return botText.weeklyLeaderboard(lang, lines, startDate, endDate);
 }
 
-async function renderEvent(group: LeanGroup, event: ScheduledEvent, date: string, lang: BotLang): Promise<string | null> {
+interface RenderedEvent {
+  html: string;
+  keyboard?: InlineKeyboard;
+}
+
+/**
+ * Inline buttons on announcements. "I prayed" marks the PRESSER's own prayer for that
+ * day (resolved from their Telegram id), so one shared message works for every member.
+ */
+export function eventKeyboard(event: ScheduledEvent, date: string, lang: BotLang): InlineKeyboard | undefined {
   switch (event.kind) {
     case 'start':
-      return botText.prayerStarted(lang, event.prayer, event.time, group.telegram?.city);
+    case 'nudge':
+      return [[{ text: groupButtons.prayed(lang), callback_data: cb.status('g', date, event.prayer, 'P') }]];
+    case 'summary':
+      return [[{ text: groupButtons.myDebts(lang), callback_data: cb.myDebts() }]];
+    default:
+      return undefined;
+  }
+}
+
+async function renderEvent(group: LeanGroup, event: ScheduledEvent, date: string, lang: BotLang): Promise<RenderedEvent | null> {
+  const keyboard = eventKeyboard(event, date, lang);
+  switch (event.kind) {
+    case 'start':
+      return { html: botText.prayerStarted(lang, event.prayer, event.time, group.telegram?.city), keyboard };
     case 'nudge': {
       const unmarked = await findUnmarked(await getLinkedMembers(group), date, event.prayer);
       if (unmarked.length === 0) return null; // everyone marked — stay quiet
-      return botText.nudge(lang, event.prayer, event.endsAt, unmarked.map((m) => m.mention));
+      return { html: botText.nudge(lang, event.prayer, event.endsAt, unmarked.map((m) => m.mention)), keyboard };
     }
     case 'summary':
-      return buildDebtReport(group, lang);
+      return { html: await buildDebtReport(group, lang), keyboard };
     case 'weekly':
       // Friday morning: report the 7 complete days ending yesterday
-      return buildWeeklyLeaderboard(group, lang, getDateWithDayOffset(date, -1));
+      return { html: await buildWeeklyLeaderboard(group, lang, getDateWithDayOffset(date, -1)) };
   }
 }
 
@@ -235,9 +258,9 @@ export async function runTelegramTick(now: number = Date.now()): Promise<TickRes
         const key = `${group._id.toString()}:${date}:${event.id}`;
         if (!(await claim(key, group._id))) continue;
         try {
-          const html = await renderEvent(group, event, date, lang);
-          if (!html) continue; // nothing to say; keep the claim
-          const outcome = await sendMessageDetailed(tg.chatId, html);
+          const rendered = await renderEvent(group, event, date, lang);
+          if (!rendered) continue; // nothing to say; keep the claim
+          const outcome = await sendMessageDetailed(tg.chatId, rendered.html, rendered.keyboard);
           if (outcome === 'ok') {
             result.sent++;
           } else {

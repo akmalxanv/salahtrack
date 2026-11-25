@@ -39,9 +39,9 @@ export const botText = {
     const name = `<b>${escapeHtml(formatPrayerName(prayer, lang))}</b>`;
     const where = city ? ` (${escapeHtml(city)})` : '';
     return {
-      uz: `🕌 ${name} vaqti kirdi — ${time}${where}.\nNamozni o'qib, ilovada belgilashni unutmang.`,
-      ru: `🕌 Наступило время намаза ${name} — ${time}${where}.\nНе забудьте отметить намаз в приложении.`,
-      en: `🕌 ${name} time has started — ${time}${where}.\nDon't forget to mark it in the app.`,
+      uz: `🕌 ${name} vaqti kirdi — ${time}${where}.\nNamozni o'qigach, quyidagi tugmani bosing yoki ilovada belgilang.`,
+      ru: `🕌 Наступило время намаза ${name} — ${time}${where}.\nПосле намаза нажмите кнопку ниже или отметьте его в приложении.`,
+      en: `🕌 ${name} time has started — ${time}${where}.\nAfter praying, tap the button below or mark it in the app.`,
     }[lang];
   },
 
@@ -121,6 +121,8 @@ export const botText = {
         '/debts — hozirgi qarzlar hisoboti',
         '/lang uz|ru|en — bot tili (guruh admini)',
         '/disconnect — guruhni uzish (guruh admini)',
+        '',
+        "Shaxsiy chatda: /today, /qaza, /stats — namozlarni belgilash va qarzlarni to'lash.",
       ],
       ru: [
         '<b>SalahTrack бот</b>',
@@ -132,6 +134,8 @@ export const botText = {
         '/debts — текущий отчёт о долгах',
         '/lang uz|ru|en — язык бота (админ группы)',
         '/disconnect — отключить группу (админ группы)',
+        '',
+        'В личном чате: /today, /qaza, /stats — отмечать намазы и оплачивать долги.',
       ],
       en: [
         '<b>SalahTrack bot</b>',
@@ -143,6 +147,8 @@ export const botText = {
         '/debts — current debt report',
         '/lang uz|ru|en — bot language (group admin)',
         '/disconnect — disconnect the group (group admin)',
+        '',
+        'In a private chat: /today, /qaza, /stats — mark prayers and pay fines.',
       ],
     }[lang].join('\n');
   },
@@ -152,6 +158,52 @@ export const botText = {
       uz: `✅ Telegram SalahTrack hisobingizga ulandi: <b>${escapeHtml(name)}</b>.\nEndi guruh eslatmalarida sizni belgilay olaman. Ulanish orqali guruhingizda namoz holati va qarzlaringiz ko'rsatilishiga rozilik bildirasiz.`,
       ru: `✅ Telegram привязан к аккаунту SalahTrack: <b>${escapeHtml(name)}</b>.\nТеперь я смогу упоминать вас в напоминаниях. Привязывая аккаунт, вы соглашаетесь, что статус намазов и долги видны вашей группе.`,
       en: `✅ Telegram linked to your SalahTrack account: <b>${escapeHtml(name)}</b>.\nI can now mention you in group reminders. By linking, you agree that your prayer status and debts are visible to your group.`,
+    }[lang];
+  },
+
+  privateHelp(lang: BotLang): string {
+    return {
+      uz: [
+        '<b>SalahTrack bot</b>',
+        '',
+        "/today — bugungi namozlar: o'qidim / qazosini o'qidim / qazo",
+        "/qaza — qazo va qarzlar: to'lash, qazosini o'qidim",
+        '/stats — statistika va ketma-ket kunlar',
+        '/lang uz|ru|en — ilova va bot tili',
+        '/unlink — Telegramni hisobdan uzish',
+        '',
+        "Guruhda: <code>/connect TAKLIF_KODI</code>, /times, /debts",
+      ],
+      ru: [
+        '<b>SalahTrack бот</b>',
+        '',
+        '/today — намазы на сегодня: совершил / восполнил / каза',
+        '/qaza — каза и долги: оплатить, отметить восполнение',
+        '/stats — статистика и серия дней',
+        '/lang uz|ru|en — язык приложения и бота',
+        '/unlink — отвязать Telegram от аккаунта',
+        '',
+        'В группе: <code>/connect КОД_ПРИГЛАШЕНИЯ</code>, /times, /debts',
+      ],
+      en: [
+        '<b>SalahTrack bot</b>',
+        '',
+        "/today — today's prayers: prayed / made up / qaza",
+        '/qaza — qaza & debts: pay fines, mark as made up',
+        '/stats — stats and streak',
+        '/lang uz|ru|en — app and bot language',
+        '/unlink — unlink Telegram from your account',
+        '',
+        'In a group: <code>/connect INVITE_CODE</code>, /times, /debts',
+      ],
+    }[lang].join('\n');
+  },
+
+  unlinked(lang: BotLang): string {
+    return {
+      uz: "✅ Telegram hisobingizdan uzildi. Qayta ulash uchun ilovada Hisob → Telegram.",
+      ru: '✅ Telegram отвязан от аккаунта. Чтобы привязать снова: Аккаунт → Telegram в приложении.',
+      en: '✅ Telegram unlinked from your account. To link again: Account → Telegram in the app.',
     }[lang];
   },
 
@@ -248,30 +300,72 @@ export const botText = {
   },
 };
 
+/** Labels for inline buttons on group announcements. */
+export const groupButtons = {
+  prayed: (lang: BotLang) => ({ uz: "✅ O'qidim", ru: '✅ Я совершил', en: '✅ I prayed' })[lang],
+  myDebts: (lang: BotLang) => ({ uz: '💳 Mening qarzlarim', ru: '💳 Мои долги', en: '💳 My debts' })[lang],
+};
+
 /** Command menu shown in Telegram, per language (registered by the bot on startup). */
-export const BOT_COMMANDS: Record<BotLang, [string, string][]> = {
-  uz: [
-    ['times', 'Bugungi namoz vaqtlari'],
-    ['debts', 'Qarzlar hisoboti'],
-    ['connect', 'Guruhni ulash: /connect TAKLIF_KODI'],
-    ['disconnect', 'Guruhni uzish'],
-    ['lang', 'Bot tili: /lang uz|ru|en'],
-    ['help', 'Yordam'],
-  ],
-  ru: [
-    ['times', 'Время намаза на сегодня'],
-    ['debts', 'Отчёт о долгах'],
-    ['connect', 'Привязать группу: /connect КОД'],
-    ['disconnect', 'Отключить группу'],
-    ['lang', 'Язык бота: /lang uz|ru|en'],
-    ['help', 'Помощь'],
-  ],
-  en: [
-    ['times', "Today's prayer times"],
-    ['debts', 'Debt report'],
-    ['connect', 'Connect group: /connect INVITE_CODE'],
-    ['disconnect', 'Disconnect group'],
-    ['lang', 'Bot language: /lang uz|ru|en'],
-    ['help', 'Help'],
-  ],
+type CommandList = [string, string][];
+
+/**
+ * Command menus shown in Telegram, per language and chat kind (registered by the bot on
+ * startup with the all_group_chats / all_private_chats scopes).
+ */
+export const BOT_COMMANDS: Record<BotLang, { group: CommandList; private: CommandList }> = {
+  uz: {
+    group: [
+      ['times', 'Bugungi namoz vaqtlari'],
+      ['debts', 'Qarzlar hisoboti'],
+      ['connect', 'Guruhni ulash: /connect TAKLIF_KODI'],
+      ['disconnect', 'Guruhni uzish'],
+      ['lang', 'Bot tili: /lang uz|ru|en'],
+      ['help', 'Yordam'],
+    ],
+    private: [
+      ['today', 'Bugungi namozlarni belgilash'],
+      ['qaza', "Qazo va qarzlar, to'lash"],
+      ['stats', 'Statistika'],
+      ['lang', 'Til: /lang uz|ru|en'],
+      ['unlink', 'Telegramni uzish'],
+      ['help', 'Yordam'],
+    ],
+  },
+  ru: {
+    group: [
+      ['times', 'Время намаза на сегодня'],
+      ['debts', 'Отчёт о долгах'],
+      ['connect', 'Привязать группу: /connect КОД'],
+      ['disconnect', 'Отключить группу'],
+      ['lang', 'Язык бота: /lang uz|ru|en'],
+      ['help', 'Помощь'],
+    ],
+    private: [
+      ['today', 'Отметить намазы за сегодня'],
+      ['qaza', 'Каза и долги, оплата'],
+      ['stats', 'Статистика'],
+      ['lang', 'Язык: /lang uz|ru|en'],
+      ['unlink', 'Отвязать Telegram'],
+      ['help', 'Помощь'],
+    ],
+  },
+  en: {
+    group: [
+      ['times', "Today's prayer times"],
+      ['debts', 'Debt report'],
+      ['connect', 'Connect group: /connect INVITE_CODE'],
+      ['disconnect', 'Disconnect group'],
+      ['lang', 'Bot language: /lang uz|ru|en'],
+      ['help', 'Help'],
+    ],
+    private: [
+      ['today', "Mark today's prayers"],
+      ['qaza', 'Qaza & debts, pay fines'],
+      ['stats', 'Stats'],
+      ['lang', 'Language: /lang uz|ru|en'],
+      ['unlink', 'Unlink Telegram'],
+      ['help', 'Help'],
+    ],
+  },
 };

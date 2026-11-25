@@ -37,11 +37,28 @@ export interface TelegramChatMemberUpdated {
   new_chat_member: { status: string; user: TelegramUser };
 }
 
+export interface TelegramCallbackQuery {
+  id: string;
+  from: TelegramUser;
+  /** Absent for buttons on very old messages (Telegram drops the message after 48h). */
+  message?: TelegramMessage;
+  data?: string;
+}
+
 export interface TelegramUpdate {
   update_id: number;
   message?: TelegramMessage;
   my_chat_member?: TelegramChatMemberUpdated;
+  callback_query?: TelegramCallbackQuery;
 }
+
+export interface InlineButton {
+  text: string;
+  callback_data: string;
+}
+
+/** Rows of inline buttons shown under a message. */
+export type InlineKeyboard = InlineButton[][];
 
 /**
  * Outcome of a Bot API call:
@@ -72,8 +89,10 @@ export async function callTelegramDetailed<T = unknown>(
     });
     const data = (await res.json().catch(() => null)) as { ok?: boolean; result?: T; description?: string } | null;
     if (res.ok && data?.ok) return { status: 'ok', result: data.result as T };
-    // Never log the URL: it contains the bot token
-    console.error(`[telegram] ${method} failed: ${res.status} ${data?.description ?? ''}`);
+    // Never log the URL: it contains the bot token. Re-rendering an unchanged view is not an error.
+    if (!data?.description?.includes('message is not modified')) {
+      console.error(`[telegram] ${method} failed: ${res.status} ${data?.description ?? ''}`);
+    }
     return { status: data ? 'rejected' : 'unknown' };
   } catch (err) {
     console.error(`[telegram] ${method} error:`, err instanceof Error ? err.message : err);
@@ -89,18 +108,47 @@ export async function callTelegram<T = unknown>(method: string, payload: Record<
   return outcome.status === 'ok' ? outcome.result : null;
 }
 
-export async function sendMessageDetailed(chatId: number, html: string): Promise<'ok' | 'rejected' | 'unknown'> {
+export async function sendMessageDetailed(
+  chatId: number,
+  html: string,
+  keyboard?: InlineKeyboard
+): Promise<'ok' | 'rejected' | 'unknown'> {
   const outcome = await callTelegramDetailed('sendMessage', {
     chat_id: chatId,
     text: html,
     parse_mode: 'HTML',
     link_preview_options: { is_disabled: true },
+    ...(keyboard && keyboard.length > 0 ? { reply_markup: { inline_keyboard: keyboard } } : {}),
   });
   return outcome.status;
 }
 
-export async function sendMessage(chatId: number, html: string): Promise<boolean> {
-  return (await sendMessageDetailed(chatId, html)) === 'ok';
+export async function sendMessage(chatId: number, html: string, keyboard?: InlineKeyboard): Promise<boolean> {
+  return (await sendMessageDetailed(chatId, html, keyboard)) === 'ok';
+}
+
+/** Replaces a message's text and buttons in place (used to refresh a view after a button press). */
+export async function editMessage(chatId: number, messageId: number, html: string, keyboard?: InlineKeyboard): Promise<boolean> {
+  const outcome = await callTelegramDetailed('editMessageText', {
+    chat_id: chatId,
+    message_id: messageId,
+    text: html,
+    parse_mode: 'HTML',
+    link_preview_options: { is_disabled: true },
+    reply_markup: { inline_keyboard: keyboard ?? [] },
+  });
+  return outcome.status === 'ok';
+}
+
+/**
+ * Must be called for every callback query, otherwise the button keeps spinning.
+ * `text` is shown as a small toast (or an alert box when `alert` is true).
+ */
+export async function answerCallback(callbackQueryId: string, text?: string, alert = false): Promise<void> {
+  await callTelegram('answerCallbackQuery', {
+    callback_query_id: callbackQueryId,
+    ...(text ? { text: text.slice(0, 200), show_alert: alert } : {}),
+  });
 }
 
 export async function deleteMessage(chatId: number, messageId: number): Promise<void> {
