@@ -6,7 +6,6 @@ import { saveLocation } from '@/lib/location';
 import Link from 'next/link';
 import {
   User as UserIcon,
-  ShieldCheck,
   Compass,
   KeyRound,
   LogOut,
@@ -725,24 +724,6 @@ function AuthenticatedAccountView({
             </button>
           </div>
         </form>
-
-        {/* Embedded Argon2id Security & Session Badge */}
-        <div className="pt-4 border-t border-slate-100 dark:border-slate-800">
-          <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/80 dark:border-slate-800 flex items-start gap-3">
-            <ShieldCheck className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
-            <div className="space-y-0.5">
-              <h3 className="text-xs font-bold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
-                <span>{t.account.secureSessionTitle}</span>
-                <span className="px-1.5 py-0.2 rounded-sm text-[9px] font-mono bg-emerald-100 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 font-bold">
-                  Argon2id
-                </span>
-              </h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-                {t.account.argonSecurityNote}
-              </p>
-            </div>
-          </div>
-        </div>
       </div>
 
       <TelegramLinkCard />
