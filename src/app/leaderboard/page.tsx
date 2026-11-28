@@ -1,7 +1,8 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef, Suspense } from 'react';
 import Link from 'next/link';
+import { useSearchParams, useRouter } from 'next/navigation';
 import {
   Trophy,
   Calendar,
@@ -12,13 +13,19 @@ import {
   Users,
   Award,
   Flame,
+  AlertTriangle,
+  RefreshCw,
 } from 'lucide-react';
 import { useLanguage } from '@/context/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
+import PageHeader from '@/components/PageHeader';
 import GroupsManager from '@/components/GroupsManager';
+import { getBrowserTimezone } from '@/lib/location';
+import { subscribePrayerCacheInvalidation } from '@/lib/prayer-sync-bus';
 import type { LeaderboardEntry } from '@/app/api/leaderboard/route';
 
 type LeaderboardPeriod = 'daily' | 'weekly' | 'monthly';
+type LeaderboardTab = 'circles' | 'global';
 
 interface CachedPeriodData {
   data: LeaderboardEntry[];
@@ -27,56 +34,91 @@ interface CachedPeriodData {
   timestamp: number;
 }
 
-const CACHE_TTL_MS = 60 * 1000; // 60 seconds
+const CACHE_TTL_MS = 60 * 1000;
 
-export default function LeaderboardPage() {
+function LeaderboardContent() {
   const { t } = useLanguage();
   const { user, refreshUser } = useAuth();
+  const searchParams = useSearchParams();
+  const router = useRouter();
 
-  const [activeTab, setActiveTab] = useState<'global' | 'circles'>('global');
+  const tabParam = searchParams.get('tab');
+  const activeTab: LeaderboardTab = tabParam === 'global' ? 'global' : 'circles';
+
+  const handleTabChange = useCallback(
+    (tab: LeaderboardTab) => {
+      const params = new URLSearchParams(searchParams.toString());
+      params.set('tab', tab);
+      router.replace(`/leaderboard?${params.toString()}`, { scroll: false });
+    },
+    [router, searchParams]
+  );
+
+  const userTimezone = useMemo(
+    () => user?.preferences?.timezone || getBrowserTimezone(),
+    [user?.preferences?.timezone]
+  );
+
   const [period, setPeriod] = useState<LeaderboardPeriod>('daily');
   const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [leaderboardError, setLeaderboardError] = useState<string | null>(null);
   const [totalParticipants, setTotalParticipants] = useState(0);
-  const [isOptedIn, setIsOptedIn] = useState(false);
+  const [isOptedIn, setIsOptedIn] = useState<boolean>(() =>
+    Boolean(user?.preferences?.showOnLeaderboard)
+  );
+  const [prevUserShow, setPrevUserShow] = useState<boolean | undefined>(
+    user?.preferences?.showOnLeaderboard
+  );
   const [togglingOptIn, setTogglingOptIn] = useState(false);
 
-  // Client-side memory cache for period results to allow 0ms instantaneous tab switching
+  if (user?.preferences?.showOnLeaderboard !== prevUserShow) {
+    setPrevUserShow(user?.preferences?.showOnLeaderboard);
+    setIsOptedIn(Boolean(user?.preferences?.showOnLeaderboard));
+  }
+
   const periodCacheRef = useRef<Map<LeaderboardPeriod, CachedPeriodData>>(new Map());
   const inFlightAbortRef = useRef<AbortController | null>(null);
   const currentPeriodRef = useRef<LeaderboardPeriod>(period);
+  const optInSeqRef = useRef(0);
 
   useEffect(() => {
     currentPeriodRef.current = period;
   }, [period]);
 
+  // Clear local cache whenever prayer statuses or payments mutate elsewhere
   useEffect(() => {
-    if (user?.preferences?.showOnLeaderboard !== undefined) {
-      const show = Boolean(user.preferences.showOnLeaderboard);
-      queueMicrotask(() => {
-        setIsOptedIn(show);
-      });
-    }
-  }, [user]);
+    return subscribePrayerCacheInvalidation(() => {
+      periodCacheRef.current.clear();
+    });
+  }, []);
 
   const fetchLeaderboard = useCallback(
     async (targetPeriod: LeaderboardPeriod, isBackground = false) => {
-      // Abort any prior in-flight request to prevent out-of-order responses overwriting active tab
       if (inFlightAbortRef.current) {
         inFlightAbortRef.current.abort();
       }
       const controller = new AbortController();
       inFlightAbortRef.current = controller;
+      const fetchOptSeq = optInSeqRef.current;
 
       if (!isBackground) {
         setLoading(true);
       }
+      setLeaderboardError(null);
 
       try {
-        const res = await fetch(`/api/leaderboard?period=${targetPeriod}`, {
+        const tzQuery = userTimezone ? `&timezone=${encodeURIComponent(userTimezone)}` : '';
+        const res = await fetch(`/api/leaderboard?period=${targetPeriod}${tzQuery}`, {
           signal: controller.signal,
+          cache: 'no-store',
         });
-        if (!res.ok) return;
+        if (!res.ok) {
+          if (currentPeriodRef.current === targetPeriod) {
+            setLeaderboardError(t.leaderboard.loadError);
+          }
+          return;
+        }
         const json = await res.json();
         if (json?.success) {
           const freshData: CachedPeriodData = {
@@ -90,23 +132,28 @@ export default function LeaderboardPage() {
           if (currentPeriodRef.current === targetPeriod) {
             setEntries(freshData.data);
             setTotalParticipants(freshData.totalParticipants);
-            if (freshData.userOptedIn !== undefined) {
+            if (freshData.userOptedIn !== undefined && optInSeqRef.current === fetchOptSeq) {
               setIsOptedIn(freshData.userOptedIn);
             }
           }
+        } else if (currentPeriodRef.current === targetPeriod) {
+          setLeaderboardError(t.leaderboard.loadError);
         }
       } catch (err: unknown) {
         if (err instanceof Error && err.name === 'AbortError') {
-          return; // Aborted by subsequent tab change, safe to ignore
+          return;
         }
         console.error('Failed to fetch leaderboard:', err);
+        if (currentPeriodRef.current === targetPeriod) {
+          setLeaderboardError(t.leaderboard.loadError);
+        }
       } finally {
         if (inFlightAbortRef.current === controller && currentPeriodRef.current === targetPeriod) {
           setLoading(false);
         }
       }
     },
-    []
+    [userTimezone, t.leaderboard.loadError]
   );
 
   const handlePeriodChange = useCallback(
@@ -119,7 +166,6 @@ export default function LeaderboardPage() {
       const isFresh = cached && Date.now() - cached.timestamp < CACHE_TTL_MS;
 
       if (cached) {
-        // Instant 0ms latency display from client cache
         setEntries(cached.data);
         setTotalParticipants(cached.totalParticipants);
         if (cached.userOptedIn !== undefined) {
@@ -127,43 +173,58 @@ export default function LeaderboardPage() {
         }
         setLoading(false);
 
-        // If stale (> 60 seconds), revalidate silently in the background
         if (!isFresh) {
-          fetchLeaderboard(newPeriod, true);
-        } else {
-          // If fresh and an in-flight request exists, cancel it
-          if (inFlightAbortRef.current) {
-            inFlightAbortRef.current.abort();
-            inFlightAbortRef.current = null;
-          }
+          void fetchLeaderboard(newPeriod, true);
+        } else if (inFlightAbortRef.current) {
+          inFlightAbortRef.current.abort();
+          inFlightAbortRef.current = null;
         }
       } else {
         setLoading(true);
-        fetchLeaderboard(newPeriod, false);
+        void fetchLeaderboard(newPeriod, false);
       }
     },
     [period, fetchLeaderboard]
   );
 
-  // Initial mount: load active period and register abort cleanup
+  // Only fetch Global Leaderboard when that tab is active
   useEffect(() => {
-    fetchLeaderboard(currentPeriodRef.current, false);
+    if (activeTab !== 'global') return;
+
+    let ignore = false;
+    queueMicrotask(() => {
+      if (ignore) return;
+      const cached = periodCacheRef.current.get(currentPeriodRef.current);
+      const isFresh = cached && Date.now() - cached.timestamp < CACHE_TTL_MS;
+      if (cached) {
+        setEntries(cached.data);
+        setTotalParticipants(cached.totalParticipants);
+        setLoading(false);
+        if (!isFresh) {
+          void fetchLeaderboard(currentPeriodRef.current, true);
+        }
+      } else {
+        void fetchLeaderboard(currentPeriodRef.current, false);
+      }
+    });
 
     return () => {
+      ignore = true;
       if (inFlightAbortRef.current) {
         inFlightAbortRef.current.abort();
       }
     };
-  }, [fetchLeaderboard]);
+  }, [activeTab, fetchLeaderboard]);
 
-  // Auto-reload when returning to the tab/window/page ("comes back so info isn't stuck")
+  // Revalidate stale global leaderboard on tab focus when global tab is open
   useEffect(() => {
+    if (activeTab !== 'global') return;
     const handleRevalidate = () => {
       if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
         const cached = periodCacheRef.current.get(currentPeriodRef.current);
         const isStale = !cached || Date.now() - cached.timestamp >= CACHE_TTL_MS;
         if (isStale) {
-          fetchLeaderboard(currentPeriodRef.current, true);
+          void fetchLeaderboard(currentPeriodRef.current, true);
         }
       }
     };
@@ -175,13 +236,20 @@ export default function LeaderboardPage() {
       window.removeEventListener('focus', handleRevalidate);
       document.removeEventListener('visibilitychange', handleRevalidate);
     };
-  }, [fetchLeaderboard]);
+  }, [activeTab, fetchLeaderboard]);
 
   const handleToggleOptIn = async () => {
-    if (!user) return;
+    if (!user || togglingOptIn) return;
     setTogglingOptIn(true);
+    const seq = ++optInSeqRef.current;
+    if (inFlightAbortRef.current) {
+      inFlightAbortRef.current.abort();
+      inFlightAbortRef.current = null;
+    }
+
     const nextVal = !isOptedIn;
     setIsOptedIn(nextVal);
+    setPrevUserShow(nextVal);
 
     try {
       const res = await fetch('/api/user/profile', {
@@ -195,116 +263,126 @@ export default function LeaderboardPage() {
       });
 
       if (res.ok) {
-        // Invalidate period cache so all periods reflect the new opt-in state
+        const putJson = await res.json().catch(() => null);
+        const confirmed =
+          typeof putJson?.data?.user?.preferences?.showOnLeaderboard === 'boolean'
+            ? putJson.data.user.preferences.showOnLeaderboard
+            : nextVal;
+        if (optInSeqRef.current === seq) {
+          setIsOptedIn(confirmed);
+          setPrevUserShow(confirmed);
+        }
         periodCacheRef.current.clear();
         await refreshUser();
         await fetchLeaderboard(currentPeriodRef.current, false);
-      } else {
-        setIsOptedIn(!nextVal); // revert
+      } else if (optInSeqRef.current === seq) {
+        setIsOptedIn(!nextVal);
+        setPrevUserShow(!nextVal);
       }
     } catch {
-      setIsOptedIn(!nextVal); // revert
+      if (optInSeqRef.current === seq) {
+        setIsOptedIn(!nextVal);
+        setPrevUserShow(!nextVal);
+      }
     } finally {
       setTogglingOptIn(false);
     }
   };
 
-  // Modern, vibrant numerical ranking badge helper
   const getRankBadge = (rank: number) => {
     if (rank === 1) {
       return (
-        <span className="inline-flex items-center justify-center w-8 h-8 rounded-xl bg-gradient-to-tr from-amber-500 via-amber-400 to-yellow-300 text-slate-950 font-black text-xs shadow-sm shadow-amber-500/20 border border-amber-300">
-          1st
+        <span className="inline-flex items-center justify-center w-8 h-8 rounded-xl bg-gradient-to-tr from-amber-500 via-amber-400 to-yellow-300 text-slate-950 font-black text-xs shadow-sm shadow-amber-500/20 border border-amber-300 shrink-0">
+          #1
         </span>
       );
     }
     if (rank === 2) {
       return (
-        <span className="inline-flex items-center justify-center w-8 h-8 rounded-xl bg-gradient-to-tr from-slate-400 via-slate-300 to-slate-200 text-slate-900 font-black text-xs shadow-sm shadow-slate-400/20 border border-slate-300">
-          2nd
+        <span className="inline-flex items-center justify-center w-8 h-8 rounded-xl bg-gradient-to-tr from-slate-400 via-slate-300 to-slate-200 text-slate-900 font-black text-xs shadow-sm shadow-slate-400/20 border border-slate-300 shrink-0">
+          #2
         </span>
       );
     }
     if (rank === 3) {
       return (
-        <span className="inline-flex items-center justify-center w-8 h-8 rounded-xl bg-gradient-to-tr from-amber-700 via-amber-600 to-amber-500 text-white font-black text-xs shadow-sm shadow-amber-700/20 border border-amber-600">
-          3rd
+        <span className="inline-flex items-center justify-center w-8 h-8 rounded-xl bg-gradient-to-tr from-amber-700 via-amber-600 to-amber-500 text-white font-black text-xs shadow-sm shadow-amber-700/20 border border-amber-600 shrink-0">
+          #3
         </span>
       );
     }
     return (
-      <span className="inline-flex items-center justify-center w-8 h-8 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 font-bold text-xs border border-slate-200 dark:border-slate-700">
+      <span className="inline-flex items-center justify-center w-8 h-8 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 font-bold text-xs border border-slate-200 dark:border-slate-700 shrink-0">
         #{rank}
       </span>
     );
   };
 
-  // Top 3 entries for podium showcase (including ties)
   const topPodiumEntries = useMemo(() => {
     return entries.filter((e) => e.rank <= 3);
   }, [entries]);
 
   return (
-    <div className="space-y-6 max-w-5xl mx-auto pb-12">
-      {/* Header */}
-      <header className="space-y-1">
-        <div className="flex items-center gap-2 text-emerald-600 dark:text-emerald-400 font-semibold text-xs tracking-wider uppercase">
-          <Trophy className="w-4 h-4" />
-          <span>{t.nav.leaderboard}</span>
-        </div>
-        <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100">
-          {t.leaderboard.title}
-        </h1>
-        <p className="text-sm text-slate-500 dark:text-slate-400">
-          {t.leaderboard.subtitle}
-        </p>
-      </header>
+    <div className="space-y-5 sm:space-y-6 pb-8">
+      <PageHeader
+        icon={Trophy}
+        title={t.leaderboard.title}
+        subtitle={t.leaderboard.subtitle}
+      />
 
-      {/* Main View Switcher: Global Leaderboard vs Private Circles */}
-      <div className="flex items-center gap-1.5 p-1 rounded-2xl bg-slate-100 dark:bg-slate-800/80 w-fit">
+      {/* Primary View Switcher: My Circles FIRST, Overall Leaderboard SECOND */}
+      <div
+        className="flex items-center gap-1.5 p-1 rounded-2xl bg-slate-100 dark:bg-slate-800/80 w-full sm:w-fit"
+        role="tablist"
+        aria-label={t.leaderboard.title}
+      >
         <button
           type="button"
-          onClick={() => setActiveTab('global')}
-          className={`min-h-[44px] flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
-            activeTab === 'global'
-              ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-2xs'
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-          }`}
-        >
-          <Trophy className="w-4 h-4" />
-          <span>{t.groups.tabGlobal}</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveTab('circles')}
-          className={`min-h-[44px] flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
+          role="tab"
+          aria-selected={activeTab === 'circles'}
+          onClick={() => handleTabChange('circles')}
+          className={`flex-1 sm:flex-initial min-h-[42px] flex items-center justify-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-colors cursor-pointer ${
             activeTab === 'circles'
               ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-2xs'
               : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
           }`}
         >
-          <Users className="w-4 h-4" />
+          <Users className="w-4 h-4 shrink-0" />
           <span>{t.groups.tabGroups}</span>
+        </button>
+
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'global'}
+          onClick={() => handleTabChange('global')}
+          className={`flex-1 sm:flex-initial min-h-[42px] flex items-center justify-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-colors cursor-pointer ${
+            activeTab === 'global'
+              ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-2xs'
+              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+          }`}
+        >
+          <Trophy className="w-4 h-4 shrink-0" />
+          <span>{t.groups.tabGlobal}</span>
         </button>
       </div>
 
       {activeTab === 'circles' ? (
         <GroupsManager />
       ) : (
-        <div className="space-y-6">
-          {/* Privacy & Opt-in Banner */}
-          <div className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-5 dark:border-slate-800 dark:bg-slate-900 shadow-2xs space-y-3">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-              <div className="flex items-start gap-3">
-                <div className="w-9 h-9 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0 mt-0.5">
+        <div className="space-y-5">
+          {/* Privacy Toggle Card: Compact, private by default, accessible switch */}
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900 shadow-2xs">
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-9 h-9 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
                   <Shield className="w-4 h-4" />
                 </div>
-                <div>
+                <div className="min-w-0">
                   <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">
                     {t.leaderboard.optInPrompt}
                   </h2>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 leading-snug">
                     {t.leaderboard.optInNotice}
                   </p>
                 </div>
@@ -313,54 +391,46 @@ export default function LeaderboardPage() {
               {user ? (
                 <button
                   type="button"
-                  onClick={handleToggleOptIn}
+                  role="switch"
+                  aria-checked={isOptedIn}
+                  aria-label={t.leaderboard.optInPrompt}
                   disabled={togglingOptIn}
-                  className={`min-h-[44px] py-2 px-4 rounded-xl text-xs font-semibold transition-all shrink-0 flex items-center justify-center gap-2 cursor-pointer ${
+                  onClick={handleToggleOptIn}
+                  className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full border-2 border-transparent transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 cursor-pointer disabled:opacity-60 ${
                     isOptedIn
-                      ? 'bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300'
-                      : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm shadow-emerald-600/20'
+                      ? 'bg-emerald-600 dark:bg-emerald-500'
+                      : 'bg-slate-300 dark:bg-slate-700'
                   }`}
                 >
-                  {togglingOptIn ? (
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  ) : isOptedIn ? (
-                    <span>{t.leaderboard.optOutButton}</span>
-                  ) : (
-                    <span>{t.leaderboard.optInButton}</span>
-                  )}
+                  <span
+                    className={`pointer-events-none flex h-6 w-6 items-center justify-center rounded-full bg-white shadow-sm transition-transform duration-200 ${
+                      isOptedIn ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  >
+                    {togglingOptIn && (
+                      <Loader2 className="w-3 h-3 animate-spin text-emerald-600" />
+                    )}
+                  </span>
                 </button>
               ) : (
                 <Link
-                  href="/login"
-                  className="min-h-[44px] py-2 px-4 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-xl transition-colors shrink-0 flex items-center justify-center gap-1.5 shadow-sm"
+                  href="/login?redirect=/leaderboard?tab=global"
+                  className="min-h-[40px] py-2 px-3.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-xl transition-colors shrink-0 flex items-center justify-center gap-1.5 shadow-xs"
                 >
                   <LogIn className="w-3.5 h-3.5" />
                   <span>{t.nav.login}</span>
                 </Link>
               )}
             </div>
-
-            {user && (
-              <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center gap-2 text-xs">
-                <span
-                  className={`w-2 h-2 rounded-full ${
-                    isOptedIn ? 'bg-emerald-500' : 'bg-slate-400'
-                  }`}
-                />
-                <span className="font-medium text-slate-600 dark:text-slate-400">
-                  {isOptedIn ? t.leaderboard.optInStatusOn : t.leaderboard.optInStatusOff}
-                </span>
-              </div>
-            )}
           </div>
 
           {/* Period Selection Tabs & Participant Stats */}
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-slate-200/80 dark:border-slate-800/80 pb-3">
-            <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800/70 p-1 rounded-xl w-fit">
+            <div className="grid grid-cols-3 sm:flex items-center gap-1 bg-slate-100 dark:bg-slate-800/70 p-1 rounded-xl w-full sm:w-fit">
               <button
                 type="button"
                 onClick={() => handlePeriodChange('daily')}
-                className={`min-h-[38px] py-1.5 px-3.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                className={`min-h-[38px] py-1.5 px-2 sm:px-3.5 rounded-lg text-[11px] sm:text-xs font-semibold transition-colors cursor-pointer text-center truncate ${
                   period === 'daily'
                     ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
                     : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
@@ -371,7 +441,7 @@ export default function LeaderboardPage() {
               <button
                 type="button"
                 onClick={() => handlePeriodChange('weekly')}
-                className={`min-h-[38px] py-1.5 px-3.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                className={`min-h-[38px] py-1.5 px-2 sm:px-3.5 rounded-lg text-[11px] sm:text-xs font-semibold transition-colors cursor-pointer text-center truncate ${
                   period === 'weekly'
                     ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
                     : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
@@ -382,7 +452,7 @@ export default function LeaderboardPage() {
               <button
                 type="button"
                 onClick={() => handlePeriodChange('monthly')}
-                className={`min-h-[38px] py-1.5 px-3.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                className={`min-h-[38px] py-1.5 px-2 sm:px-3.5 rounded-lg text-[11px] sm:text-xs font-semibold transition-colors cursor-pointer text-center truncate ${
                   period === 'monthly'
                     ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
                     : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
@@ -400,14 +470,34 @@ export default function LeaderboardPage() {
             </div>
           </div>
 
+          {leaderboardError && (
+            <div
+              role="alert"
+              className="p-3.5 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs flex flex-wrap items-center justify-between gap-2.5"
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span className="font-medium">{leaderboardError}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => void fetchLeaderboard(period, false)}
+                className="min-h-[36px] px-3 py-1.5 rounded-xl bg-white dark:bg-slate-900 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 font-semibold inline-flex items-center gap-1.5 hover:bg-rose-100/60 dark:hover:bg-rose-900/40 cursor-pointer shrink-0"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>{t.common.retry}</span>
+              </button>
+            </div>
+          )}
+
           {/* Leaderboard Table / Cards */}
           {loading ? (
             <div className="p-12 text-center text-slate-400 flex flex-col items-center justify-center gap-3">
               <Loader2 className="w-6 h-6 animate-spin text-emerald-600" />
               <p className="text-sm font-medium">{t.common.loading}</p>
             </div>
-          ) : entries.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-slate-200 dark:border-slate-800 p-12 text-center space-y-3">
+          ) : entries.length === 0 && !leaderboardError ? (
+            <div className="rounded-2xl border border-dashed border-slate-200 dark:border-slate-800 p-10 text-center space-y-3">
               <Trophy className="w-10 h-10 text-slate-300 dark:text-slate-700 mx-auto" />
               <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">
                 {t.leaderboard.emptyLeaderboard}
@@ -417,10 +507,10 @@ export default function LeaderboardPage() {
               </p>
             </div>
           ) : (
-            <div className="space-y-6">
-              {/* Top 3 Podium Showcase (Ranks 1, 2, 3 with tie handling) */}
+            <div className="space-y-5">
+              {/* Top 3 Podium Showcase */}
               {topPodiumEntries.length > 0 && (
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5 sm:gap-4 items-end">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5 items-end">
                   {topPodiumEntries.map((entry) => {
                     const isFirst = entry.rank === 1;
                     const isSecond = entry.rank === 2;
@@ -429,7 +519,7 @@ export default function LeaderboardPage() {
                     return (
                       <div
                         key={entry.username}
-                        className={`p-4 sm:p-5 rounded-2xl border transition-all flex flex-col justify-between relative overflow-hidden ${
+                        className={`p-4 rounded-2xl border transition-all flex flex-col justify-between relative overflow-hidden ${
                           isFirst
                             ? 'bg-gradient-to-b from-amber-500/10 via-amber-500/5 to-white dark:to-slate-900 border-amber-300 dark:border-amber-700/80 shadow-md shadow-amber-500/10 md:-translate-y-1'
                             : isSecond
@@ -443,18 +533,11 @@ export default function LeaderboardPage() {
                             : ''
                         }`}
                       >
-                        {/* Rank Badge Header */}
                         <div className="flex items-center justify-between gap-2 mb-3">
                           <div className="flex items-center gap-2">
                             {getRankBadge(entry.rank)}
                             <span className="text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">
-                              {entry.rank === 1
-                                ? '1st'
-                                : entry.rank === 2
-                                ? '2nd'
-                                : entry.rank === 3
-                                ? '3rd'
-                                : `#${entry.rank}`}
+                              #{entry.rank}
                             </span>
                           </div>
 
@@ -465,7 +548,6 @@ export default function LeaderboardPage() {
                           )}
                         </div>
 
-                        {/* User Details */}
                         <div className="space-y-1">
                           <div className="flex items-center gap-2 flex-wrap">
                             <h3 className="font-bold text-base text-slate-900 dark:text-slate-100 truncate">
@@ -484,8 +566,7 @@ export default function LeaderboardPage() {
                           <p className="text-xs text-slate-400 truncate">@{entry.username}</p>
                         </div>
 
-                        {/* Performance Score & Percentage */}
-                        <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800/80 space-y-2">
+                        <div className="mt-3.5 pt-3 border-t border-slate-100 dark:border-slate-800/80 space-y-2">
                           <div className="flex items-baseline justify-between">
                             <span className="text-xs text-slate-500 dark:text-slate-400 font-medium">
                               {t.leaderboard.prayersCompleted}
@@ -508,7 +589,6 @@ export default function LeaderboardPage() {
                             </span>
                           </div>
 
-                          {/* Consistency Progress Bar */}
                           <div className="w-full bg-slate-100 dark:bg-slate-800 h-1.5 rounded-full overflow-hidden">
                             <div
                               className={`h-full rounded-full transition-all duration-500 ${
@@ -535,7 +615,7 @@ export default function LeaderboardPage() {
                 <div className="p-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
                   <div className="flex items-center gap-2 text-slate-900 dark:text-slate-100 font-bold text-sm">
                     <Award className="w-4 h-4 text-emerald-600" />
-                    <span>{t.leaderboard.title}</span>
+                    <span>{t.leaderboard.standings}</span>
                   </div>
                   <span className="text-xs text-slate-400">
                     {entries.length} {t.leaderboard.participantsCount}
@@ -552,7 +632,6 @@ export default function LeaderboardPage() {
                           : 'hover:bg-slate-50/80 dark:hover:bg-slate-800/50'
                       }`}
                     >
-                      {/* Left: Rank & User Info */}
                       <div className="flex items-center gap-3.5 min-w-0">
                         {getRankBadge(entry.rank)}
 
@@ -580,7 +659,6 @@ export default function LeaderboardPage() {
                         </div>
                       </div>
 
-                      {/* Right: Metrics */}
                       <div className="flex items-center gap-3 sm:gap-4 shrink-0 text-right">
                         {entry.currentStreak !== undefined && entry.currentStreak > 0 && (
                           <div
@@ -625,5 +703,19 @@ export default function LeaderboardPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function LeaderboardPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="py-12 flex justify-center text-slate-400">
+          <Loader2 className="w-8 h-8 animate-spin text-emerald-600" />
+        </div>
+      }
+    >
+      <LeaderboardContent />
+    </Suspense>
   );
 }

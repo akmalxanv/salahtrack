@@ -4,6 +4,7 @@ import { User } from '../../../models/User.ts';
 import { PrayerRecord } from '../../../models/Prayer.ts';
 import { authenticateRequest } from '../../../lib/auth/index.ts';
 import { calculateStreakFromHistory } from '../../../lib/streak.ts';
+import { getLiturgicalDate, sanitizeFajrTime, sanitizeTimezone } from '../../../lib/prayer-cycle.ts';
 import type { PrayerId } from '../../../types/prayer.ts';
 
 const PRAYER_KEYS: PrayerId[] = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
@@ -77,9 +78,11 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const period = searchParams.get('period') || 'daily';
     const dateParam = searchParams.get('date');
+    const fajrTime = sanitizeFajrTime(searchParams.get('fajrTime'));
+    const timezone = sanitizeTimezone(searchParams.get('timezone') || auth?.user?.preferences?.timezone);
 
     const now = new Date();
-    const todayStr = now.toISOString().split('T')[0];
+    const todayStr = getLiturgicalDate(now, fajrTime, timezone);
     const targetDate = dateParam && /^\d{4}-\d{2}-\d{2}$/.test(dateParam) ? dateParam : todayStr;
     const cacheKey = `${period}:${targetDate}`;
 
@@ -111,7 +114,7 @@ export async function GET(request: NextRequest) {
         {
           status: 200,
           headers: {
-            'Cache-Control': 'private, max-age=15, stale-while-revalidate=30',
+            'Cache-Control': 'private, no-store, max-age=0',
           },
         }
       );
@@ -148,7 +151,7 @@ export async function GET(request: NextRequest) {
         {
           status: 200,
           headers: {
-            'Cache-Control': 'private, max-age=15, stale-while-revalidate=30',
+            'Cache-Control': 'private, no-store, max-age=0',
           },
         }
       );
@@ -359,7 +362,7 @@ export async function GET(request: NextRequest) {
       {
         status: 200,
         headers: {
-          'Cache-Control': 'private, max-age=15, stale-while-revalidate=30',
+          'Cache-Control': 'private, no-store, max-age=0',
         },
       }
     );

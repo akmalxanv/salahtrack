@@ -1,7 +1,8 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useMemo, Suspense } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef, Suspense } from 'react';
 import Link from 'next/link';
+import dynamic from 'next/dynamic';
 import { useSearchParams, useRouter } from 'next/navigation';
 import {
   TrendingUp,
@@ -15,7 +16,6 @@ import {
   LogIn,
   ChevronRight,
   ChevronDown,
-  Award,
   Check,
   Info,
   RotateCcw,
@@ -26,6 +26,7 @@ import {
 import { useLanguage } from '@/context/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
 import { useLocalStorage } from '@/hooks/useLocalStorage';
+import PageHeader from '@/components/PageHeader';
 import type {
   PrayerId,
   PrayerStatus,
@@ -33,24 +34,53 @@ import type {
   PrayerHistoryRecord,
   PrayerItem,
   QazaPaymentReceipt,
-  SinglePrayerEntry,
 } from '@/types/prayer';
-import PayQazaModal from '@/components/qaza/PayQazaModal';
-import MonthlyHistoryCalendar from '@/components/calendar/MonthlyHistoryCalendar';
-import { calculateAccountabilityLedger, calculateAccountabilityFines } from '@/lib/accountability';
+import { calculateAccountabilityLedger } from '@/lib/accountability';
 import { formatCurrency } from '@/lib/formatters';
-import { getCalendarDate, getLiturgicalDate } from '@/lib/prayer-cycle';
+import {
+  getCalendarDate,
+  getLiturgicalDate,
+  PLATFORM_LAUNCH_DATE,
+} from '@/lib/prayer-cycle';
+import { getBrowserTimezone } from '@/lib/location';
 import {
   getStoredHistoryRecords,
   saveStoredHistoryRecords,
   mirrorDailyPrayersToHistory,
   saveDailyPrayersSync,
-  catchupMultiDayGap,
+  resetDateInStoredHistory,
+  syncDerivedMetricsToStorage,
+  getOrInitGuestStartDate,
+  enqueuePendingPrayerMutation,
+  removePendingPrayerMutation,
+  flushPendingPrayerMutations,
+  STORAGE_KEY_DAILY_PRAYERS,
 } from '@/lib/storage-sync';
+import {
+  invalidateAllPrayerCaches,
+  subscribePrayerCacheInvalidation,
+} from '@/lib/prayer-sync-bus';
+
+const PayQazaModal = dynamic(() => import('@/components/qaza/PayQazaModal'), {
+  ssr: false,
+});
+
+const MonthlyHistoryCalendar = dynamic(
+  () => import('@/components/calendar/MonthlyHistoryCalendar'),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="py-12 flex justify-center text-slate-400">
+        <Loader2 className="w-7 h-7 animate-spin text-emerald-600" />
+      </div>
+    ),
+  }
+);
 
 const PRAYER_IDS: PrayerId[] = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
 
 interface StatsData {
+  platformStartDate?: string;
   today: {
     completed: number;
     totalPossible: number;
@@ -76,6 +106,8 @@ interface StatsData {
     missed: number;
     madeUp: number;
   };
+  missedByPrayer?: Record<PrayerId, number>;
+  prayerBreakdown?: Record<PrayerId, { onTime: number; missed: number; total: number }>;
   streaks: {
     current: number;
     best: number;
@@ -99,7 +131,6 @@ interface StatsData {
   };
 }
 
-// Module-level in-memory cache to enable 0ms instant display and avoid loaders on client route navigation
 interface ProgressCache {
   stats: StatsData | null;
   paymentHistory: QazaPaymentReceipt[];
@@ -116,7 +147,14 @@ const progressCache: ProgressCache = {
   paymentsTimestamp: 0,
 };
 
-type TabType = 'overview' | 'history' | 'qaza';
+function clearProgressCache(): void {
+  progressCache.stats = null;
+  progressCache.paymentHistory = [];
+  progressCache.statsTimestamp = 0;
+  progressCache.paymentsTimestamp = 0;
+}
+
+type TabType = 'history' | 'overview' | 'qaza';
 
 function ProgressContent() {
   const { t, lang } = useLanguage();
@@ -124,11 +162,29 @@ function ProgressContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
 
-  const calendarTodayStr = useMemo(() => getCalendarDate(), []);
-  const liturgicalTodayStr = useMemo(() => getLiturgicalDate(), []);
-  const todayDate = useMemo(() => new Date(), []);
+  const userTimezone = useMemo(
+    () => user?.preferences?.timezone || getBrowserTimezone(),
+    [user?.preferences?.timezone]
+  );
 
-  // Single Source of Truth for Tab Navigation (derived from searchParams to eliminate state update depth loops)
+  // Live clock tick so calendar/liturgical dates stay accurate across midnight & Fajr rollover
+  const [now, setNow] = useState<Date>(() => new Date());
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setNow(new Date());
+    }, 60 * 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const calendarTodayStr = useMemo(
+    () => getCalendarDate(now, userTimezone),
+    [now, userTimezone]
+  );
+  const liturgicalTodayStr = useMemo(
+    () => getLiturgicalDate(now, undefined, userTimezone),
+    [now, userTimezone]
+  );
+
   const tabParam = searchParams.get('tab');
   const activeTab: TabType =
     tabParam === 'overview' ? 'overview' : tabParam === 'qaza' ? 'qaza' : 'history';
@@ -142,28 +198,42 @@ function ProgressContent() {
     [router, searchParams]
   );
 
-  // Smoothly scroll to the analytics section of overview if tab=analytics is requested
-  useEffect(() => {
-    if (tabParam === 'analytics') {
-      const el = document.getElementById('analytics-section');
-      if (el) {
-        el.scrollIntoView({ behavior: 'smooth' });
-      }
-    }
-  }, [tabParam]);
-
-  // Calendar View State
-  const [viewYear, setViewYear] = useState(() => todayDate.getFullYear());
-  const [viewMonth, setViewMonth] = useState(() => todayDate.getMonth());
-  const [selectedDate, setSelectedDate] = useState(() => getLiturgicalDate());
-  const [earliestTrackingDate, setEarliestTrackingDate] = useState<string | undefined>(undefined);
-
-  // Historical updating indicators
+  const [viewYear, setViewYear] = useState(() => Number(calendarTodayStr.slice(0, 4)));
+  const [viewMonth, setViewMonth] = useState(() => Number(calendarTodayStr.slice(5, 7)) - 1);
+  const [selectedDate, setSelectedDate] = useState(() => liturgicalTodayStr);
   const [updatingPrayerKey, setUpdatingPrayerKey] = useState<string | null>(null);
+  const [mutationError, setMutationError] = useState<string | null>(null);
+  const [showAllFines, setShowAllFines] = useState(false);
 
-  const userId = user?.id;
+  const userId = user?.id ?? null;
 
-  // Data states with 0ms instantaneous display from in-memory cache
+  // Platform start date (enforced client & server, hydration-safe)
+  const [guestStartDate, setGuestStartDate] = useState<string>(PLATFORM_LAUNCH_DATE);
+  useEffect(() => {
+    if (userId) return;
+    queueMicrotask(() => {
+      setGuestStartDate(getOrInitGuestStartDate(liturgicalTodayStr));
+    });
+  }, [userId, liturgicalTodayStr]);
+
+  const platformStartDate = user?.platformStartDate || guestStartDate;
+
+  // Clear module cache if user switches or logs out
+  useEffect(() => {
+    if (progressCache.userId && progressCache.userId !== userId) {
+      clearProgressCache();
+      progressCache.userId = userId;
+    }
+  }, [userId]);
+
+  // Listen to cross-route invalidation bus so Home -> Progress is never stale
+  useEffect(() => {
+    return subscribePrayerCacheInvalidation(() => {
+      progressCache.statsTimestamp = 0;
+      progressCache.paymentsTimestamp = 0;
+    });
+  }, []);
+
   const [stats, setStats] = useState<StatsData | null>(() => {
     if (userId && progressCache.userId === userId && progressCache.stats) {
       return progressCache.stats;
@@ -171,12 +241,15 @@ function ProgressContent() {
     return null;
   });
   const [recordsByDate, setRecordsByDate] = useState<Record<string, PrayerHistoryRecord>>({});
+  const recordsByDateRef = useRef<Record<string, PrayerHistoryRecord>>({});
+  useEffect(() => {
+    recordsByDateRef.current = recordsByDate;
+  }, [recordsByDate]);
   const [loadingStats, setLoadingStats] = useState<boolean>(() => {
     return Boolean(userId && !(progressCache.userId === userId && progressCache.stats));
   });
   const [loadingHistory, setLoadingHistory] = useState(false);
 
-  // Local fallback Qaza state & settled donations with stable defaults
   const [localQaza] = useLocalStorage<number>('salahtrack_qaza_count', 0);
   const [settledDonations] = useLocalStorage<number>('salahtrack_settled_donations', 0);
   const [paymentHistory, setPaymentHistory] = useState<QazaPaymentReceipt[]>(() => {
@@ -189,29 +262,42 @@ function ProgressContent() {
   const [loadingPayments, setLoadingPayments] = useState<boolean>(() => {
     return Boolean(userId && !(progressCache.userId === userId && progressCache.paymentHistory.length > 0));
   });
+  const [isPayModalOpen, setIsPayModalOpen] = useState(false);
+
+  const mutationAbortRefs = useRef<Map<string, AbortController>>(new Map());
+  const mutationSeqRefs = useRef<Map<string, number>>(new Map());
+  const lastFocusRefreshRef = useRef<number>(0);
+
+  useEffect(() => {
+    const controllers = mutationAbortRefs.current;
+    return () => {
+      controllers.forEach((c) => c.abort());
+      controllers.clear();
+    };
+  }, []);
 
   const toggleExpandReceipt = useCallback((receiptId: string) => {
     setExpandedReceiptIds((prev) => {
       const next = new Set(prev);
-      if (next.has(receiptId)) {
-        next.delete(receiptId);
-      } else {
-        next.add(receiptId);
-      }
+      if (next.has(receiptId)) next.delete(receiptId);
+      else next.add(receiptId);
       return next;
     });
   }, []);
-  const [isPayModalOpen, setIsPayModalOpen] = useState(false);
 
-  // 1. Fetch Stats from API (SWR: silent background revalidation if cached)
+  // Fetch /api/stats (feeds Overview + Qaza tabs in a single lean round-trip)
   const fetchStats = useCallback(
     async (isBackground = false) => {
-      if (!userId) return;
-      if (!isBackground) {
+      if (!userId) {
+        setLoadingStats(false);
+        return;
+      }
+      if (!isBackground && !progressCache.stats) {
         setLoadingStats(true);
       }
       try {
-        const res = await fetch('/api/stats');
+        const tzParam = userTimezone ? `&timezone=${encodeURIComponent(userTimezone)}` : '';
+        const res = await fetch(`/api/stats?today=${liturgicalTodayStr}${tzParam}`);
         if (res.ok) {
           const json = await res.json();
           if (json.success) {
@@ -219,6 +305,26 @@ function ProgressContent() {
             progressCache.stats = json.data;
             progressCache.userId = userId;
             progressCache.statsTimestamp = Date.now();
+
+            if (json.data?.accountability) {
+              try {
+                localStorage.setItem(
+                  'salahtrack_accountability_cache',
+                  JSON.stringify({
+                    totalAmount:
+                      json.data.accountability.totalFinancialDebt ??
+                      json.data.accountability.totalAmount ??
+                      0,
+                    pendingQazaCount:
+                      json.data.accountability.pendingQazaCount ??
+                      json.data.accountability.totalMissed ??
+                      0,
+                  })
+                );
+              } catch {
+                // ignore
+              }
+            }
           }
         }
       } catch (err) {
@@ -227,13 +333,16 @@ function ProgressContent() {
         setLoadingStats(false);
       }
     },
-    [userId]
+    [userId, liturgicalTodayStr, userTimezone]
   );
 
   const fetchPaymentHistory = useCallback(
     async (isBackground = false) => {
-      if (!userId) return;
-      if (!isBackground) {
+      if (!userId) {
+        setLoadingPayments(false);
+        return;
+      }
+      if (!isBackground && progressCache.paymentHistory.length === 0) {
         setLoadingPayments(true);
       }
       try {
@@ -256,88 +365,30 @@ function ProgressContent() {
     [userId]
   );
 
-  useEffect(() => {
-    if (!userId) return;
-    const hasCachedPayments = progressCache.userId === userId && progressCache.paymentHistory.length > 0;
-    const isPaymentsFresh = hasCachedPayments && Date.now() - progressCache.paymentsTimestamp < 30000;
-
-    if (!isPaymentsFresh) {
-      queueMicrotask(() => {
-        fetchPaymentHistory(Boolean(hasCachedPayments));
-      });
-    }
-  }, [userId, fetchPaymentHistory]);
-
-  const handlePaymentModalSuccess = useCallback(async () => {
-    await Promise.all([fetchStats(false), fetchPaymentHistory(false)]);
-  }, [fetchStats, fetchPaymentHistory]);
-
-  useEffect(() => {
-    if (!userId) return;
-    const hasCachedStats = progressCache.userId === userId && progressCache.stats;
-    const isStatsFresh = hasCachedStats && Date.now() - progressCache.statsTimestamp < 30000;
-
-    if (!isStatsFresh) {
-      queueMicrotask(() => {
-        fetchStats(Boolean(hasCachedStats));
-      });
-    }
-  }, [userId, fetchStats]);
-
-  // 2. Fetch Monthly History (Dual-Tier: LocalStorage offline/guest fallback + MongoDB Atlas when authenticated)
+  // Fetch Monthly History ONLY when needed (History tab or guest mode local records)
   const fetchMonthHistory = useCallback(
     async (signal?: AbortSignal) => {
-      // Step A: Load cached records from localStorage first (0ms instantaneous offline UI)
       try {
         const storedHistory = getStoredHistoryRecords();
         if (storedHistory && Object.keys(storedHistory).length > 0) {
-          let earliestDate: string | undefined = undefined;
-          for (const [dateStr, record] of Object.entries(storedHistory)) {
-            if (!record?.prayers) continue;
-            const hasTrackedPrayer = PRAYER_IDS.some((p) => {
-              const s = record.prayers[p]?.status;
-              return (
-                s === 'PRAYED_ON_TIME' ||
-                s === 'PRAYED' ||
-                s === 'PRAYED_LATE' ||
-                s === 'MADE_UP' ||
-                s === 'MISSED'
-              );
-            });
-            if (hasTrackedPrayer) {
-              if (!earliestDate || dateStr < earliestDate) {
-                earliestDate = dateStr;
-              }
-            }
-          }
-
-          if (earliestDate) {
-            setEarliestTrackingDate(earliestDate);
-            if (earliestDate < liturgicalTodayStr) {
-              catchupMultiDayGap(earliestDate, liturgicalTodayStr);
-            }
-          }
-
-          const refreshedHistory = getStoredHistoryRecords();
-          setRecordsByDate((prev) => ({ ...prev, ...refreshedHistory }));
+          setRecordsByDate(storedHistory);
         }
 
-        // Also check if daily store has prayers for active liturgical date and mirror if missing
-        const rawDaily = window.localStorage.getItem('salahtrack_daily_prayers');
-        if (rawDaily) {
+        const rawDaily = window.localStorage.getItem(STORAGE_KEY_DAILY_PRAYERS);
+        const rawLastDate = window.localStorage.getItem('salahtrack_last_active_date');
+        const lastDate = rawLastDate ? JSON.parse(rawLastDate) : null;
+        if (rawDaily && lastDate === liturgicalTodayStr) {
           const dailyPrayers: PrayerItem[] = JSON.parse(rawDaily);
           if (Array.isArray(dailyPrayers) && dailyPrayers.length > 0) {
-            mirrorDailyPrayersToHistory(liturgicalTodayStr, dailyPrayers);
-            const updated = getStoredHistoryRecords();
-            setRecordsByDate((prev) => ({ ...prev, ...updated }));
+            const updated = mirrorDailyPrayersToHistory(liturgicalTodayStr, dailyPrayers);
+            setRecordsByDate(updated);
           }
         }
       } catch {
         // ignore parse errors
       }
 
-      // Step B: If authenticated, fetch server truth for the selected month
-      if (!userId) return;
+      if (!userId || activeTab !== 'history') return;
 
       setLoadingHistory(true);
       try {
@@ -345,32 +396,36 @@ function ProgressContent() {
         const startOfMonthStr = `${viewYear}-${monthStr}-01`;
         const lastDay = new Date(viewYear, viewMonth + 1, 0).getDate();
         const endOfMonthStr = `${viewYear}-${monthStr}-${String(lastDay).padStart(2, '0')}`;
+        const tzParam = userTimezone ? `&timezone=${encodeURIComponent(userTimezone)}` : '';
 
         const res = await fetch(
-          `/api/prayers/history?startDate=${startOfMonthStr}&endDate=${endOfMonthStr}`,
+          `/api/prayers/history?startDate=${startOfMonthStr}&endDate=${endOfMonthStr}${tzParam}`,
           signal ? { signal } : undefined
         );
 
         if (res.ok) {
           const json = await res.json();
-          if (json.success && json.data) {
-            if (json.data.earliestTrackingDate) {
-              setEarliestTrackingDate(json.data.earliestTrackingDate);
+          if (json.success && Array.isArray(json.data?.records)) {
+            const mappedRecords: Record<string, PrayerHistoryRecord> = {};
+            for (const rec of json.data.records) {
+              if (rec.date) {
+                mappedRecords[rec.date] = rec;
+              }
             }
-            if (Array.isArray(json.data.records)) {
-              const mappedRecords: Record<string, PrayerHistoryRecord> = {};
-              for (const rec of json.data.records) {
-                if (rec.date) {
-                  mappedRecords[rec.date] = rec;
+
+            setRecordsByDate((prev) => {
+              // Remove stale local records within the fetched month that no longer exist on server,
+              // while preserving records from other months.
+              const cleaned: Record<string, PrayerHistoryRecord> = {};
+              for (const [dKey, rec] of Object.entries(prev)) {
+                if (dKey < startOfMonthStr || dKey > endOfMonthStr) {
+                  cleaned[dKey] = rec;
                 }
               }
-
-              setRecordsByDate((prev) => {
-                const updated = { ...prev, ...mappedRecords };
-                saveStoredHistoryRecords(updated);
-                return updated;
-              });
-            }
+              const updated = { ...cleaned, ...mappedRecords };
+              saveStoredHistoryRecords(updated);
+              return updated;
+            });
           }
         }
       } catch (err: unknown) {
@@ -381,374 +436,495 @@ function ProgressContent() {
         setLoadingHistory(false);
       }
     },
-    [userId, viewYear, viewMonth, liturgicalTodayStr]
+    [userId, activeTab, viewYear, viewMonth, liturgicalTodayStr, userTimezone]
   );
 
+  // Trigger stats fetch on mount / invalidation
+  useEffect(() => {
+    let ignore = false;
+    queueMicrotask(() => {
+      if (ignore) return;
+      if (!userId) {
+        setLoadingStats(false);
+        return;
+      }
+      const hasCachedStats = Boolean(progressCache.userId === userId && progressCache.stats);
+      const isStatsFresh =
+        hasCachedStats && Date.now() - progressCache.statsTimestamp < 30000;
+
+      if (!isStatsFresh) {
+        void fetchStats(hasCachedStats);
+      }
+    });
+    return () => {
+      ignore = true;
+    };
+  }, [userId, fetchStats]);
+
+  // Lazy-load payment history ONLY when user opens Qaza tab
+  useEffect(() => {
+    if (!userId || activeTab !== 'qaza') return;
+    let ignore = false;
+    queueMicrotask(() => {
+      if (ignore) return;
+      const hasCachedPayments =
+        progressCache.userId === userId && progressCache.paymentHistory.length > 0;
+      const isPaymentsFresh =
+        hasCachedPayments && Date.now() - progressCache.paymentsTimestamp < 30000;
+
+      if (!isPaymentsFresh) {
+        void fetchPaymentHistory(hasCachedPayments);
+      }
+    });
+    return () => {
+      ignore = true;
+    };
+  }, [userId, activeTab, fetchPaymentHistory]);
+
+  // Fetch month history on History tab or month navigation
   useEffect(() => {
     const abortController = new AbortController();
     let ignore = false;
-    async function loadHistory() {
+    queueMicrotask(() => {
       if (!ignore) {
-        await fetchMonthHistory(abortController.signal);
+        void fetchMonthHistory(abortController.signal);
       }
-    }
-    loadHistory();
+    });
     return () => {
       ignore = true;
       abortController.abort();
     };
   }, [fetchMonthHistory]);
 
-  // 3. Coordinated Server Rollover Synchronization
-  const runRolloverSync = useCallback(async () => {
-    if (!userId) return;
-    try {
-      const res = await fetch('/api/prayers/rollover', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ toDate: liturgicalTodayStr }),
-      });
-      if (res.ok) {
-        // Clear cached stats timestamp so fresh database debt is retrieved
-        progressCache.statsTimestamp = 0;
-        await Promise.all([fetchStats(true), fetchMonthHistory()]);
+  // Single unified throttled tab focus / visibility revalidation
+  useEffect(() => {
+    const handleRevalidate = () => {
+      if (typeof document === 'undefined' || document.visibilityState !== 'visible') return;
+      const nowMs = Date.now();
+      if (nowMs - lastFocusRefreshRef.current < 15000) return;
+      lastFocusRefreshRef.current = nowMs;
+
+      setNow(new Date());
+      if (!userId) return;
+
+      if (nowMs - progressCache.statsTimestamp >= 30000) {
+        void fetchStats(true);
       }
-    } catch (err) {
-      console.warn('Rollover sync error:', err);
-    }
-  }, [userId, liturgicalTodayStr, fetchStats, fetchMonthHistory]);
-
-  // Synchronize server rollover on load when user is authenticated
-  useEffect(() => {
-    if (!userId) return;
-    queueMicrotask(() => {
-      runRolloverSync();
-    });
-  }, [userId, runRolloverSync]);
-
-  // Tab focus revalidation: silently refresh stale stats, run rollover sync, and refresh payments
-  useEffect(() => {
-    const handleFocusRevalidate = () => {
-      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
-        if (userId) {
-          const isStatsStale = Date.now() - progressCache.statsTimestamp >= 30000;
-          if (isStatsStale) {
-            fetchStats(true);
-          }
-          runRolloverSync();
-          fetchPaymentHistory(true);
-        } else {
-          fetchMonthHistory();
-        }
+      if (activeTab === 'history') {
+        void fetchMonthHistory();
+      }
+      if (activeTab === 'qaza' && nowMs - progressCache.paymentsTimestamp >= 30000) {
+        void fetchPaymentHistory(true);
       }
     };
 
-    window.addEventListener('focus', handleFocusRevalidate);
-    document.addEventListener('visibilitychange', handleFocusRevalidate);
-
+    window.addEventListener('focus', handleRevalidate);
+    document.addEventListener('visibilitychange', handleRevalidate);
     return () => {
-      window.removeEventListener('focus', handleFocusRevalidate);
-      document.removeEventListener('visibilitychange', handleFocusRevalidate);
+      window.removeEventListener('focus', handleRevalidate);
+      document.removeEventListener('visibilitychange', handleRevalidate);
     };
-  }, [userId, fetchStats, runRolloverSync, fetchPaymentHistory, fetchMonthHistory]);
+  }, [userId, activeTab, fetchStats, fetchMonthHistory, fetchPaymentHistory]);
 
-  // Reactive synchronization with HomeDashboard and other tabs via local-storage-update
+  // Reactive synchronization with HomeDashboard & cross-tab storage edits
   useEffect(() => {
     function handleStorageUpdate() {
       try {
         const stored = getStoredHistoryRecords();
-        if (stored && Object.keys(stored).length > 0) {
-          setRecordsByDate((prev) => ({ ...prev, ...stored }));
-        }
+        recordsByDateRef.current = stored;
+        setRecordsByDate(stored);
       } catch {
         // ignore
       }
     }
-
-    if (typeof window !== 'undefined') {
-      window.addEventListener('local-storage-update', handleStorageUpdate);
-      return () => window.removeEventListener('local-storage-update', handleStorageUpdate);
+    function handleCrossTabStorage(e: StorageEvent) {
+      if (
+        e.key === null ||
+        e.key === 'salahtrack_history_records' ||
+        e.key === 'salahtrack_daily_prayers' ||
+        e.key === 'salahtrack_qaza_count' ||
+        e.key === 'salahtrack_streak' ||
+        e.key === 'salahtrack_accountability_cache' ||
+        e.key === 'salahtrack_settled_donations'
+      ) {
+        progressCache.statsTimestamp = 0;
+        progressCache.paymentsTimestamp = 0;
+        handleStorageUpdate();
+        if (userId) {
+          void fetchStats(true);
+        }
+      }
     }
-  }, []);
+    function handleOnline() {
+      if (!userId) return;
+      void flushPendingPrayerMutations(userTimezone).then((syncedCount) => {
+        if (syncedCount > 0) {
+          invalidateAllPrayerCaches();
+          void fetchStats(true);
+          if (activeTab === 'history') {
+            void fetchMonthHistory();
+          }
+        }
+      });
+    }
+    window.addEventListener('local-storage-update', handleStorageUpdate);
+    window.addEventListener('storage', handleCrossTabStorage);
+    window.addEventListener('online', handleOnline);
+    return () => {
+      window.removeEventListener('local-storage-update', handleStorageUpdate);
+      window.removeEventListener('storage', handleCrossTabStorage);
+      window.removeEventListener('online', handleOnline);
+    };
+  }, [userId, userTimezone, activeTab, fetchStats, fetchMonthHistory]);
 
-  // Handle month view change from calendar controls
+  const handlePaymentModalSuccess = useCallback(async () => {
+    invalidateAllPrayerCaches();
+    await Promise.all([fetchStats(true), fetchPaymentHistory(true)]);
+  }, [fetchStats, fetchPaymentHistory]);
+
   const handleChangeMonth = useCallback((year: number, month: number) => {
     setViewYear(year);
     setViewMonth(month);
   }, []);
 
-  // Handle date selection with future date check
   const handleSelectDate = useCallback((date: string) => {
     setSelectedDate(date);
+    setMutationError(null);
   }, []);
 
-  // Historical Prayer Correction mutation (Dual-Tier optimistic update + API sync)
+  // Historical Prayer Correction mutation with concurrency sequencing, rollback on 4xx, and offline queue fallback
   const handleHistoricalCorrection = useCallback(
     async (recordDate: string, prayerId: PrayerId, newStatus: PrayerStatus) => {
       if (recordDate > calendarTodayStr) {
-        alert(t.progress.futureDateError);
+        setMutationError(t.progress.futureDateError);
         return;
       }
 
+      setMutationError(null);
       const key = `${recordDate}-${prayerId}`;
+      const nextSeq = (mutationSeqRefs.current.get(key) || 0) + 1;
+      mutationSeqRefs.current.set(key, nextSeq);
       setUpdatingPrayerKey(key);
 
-      const normalizedStatus: PrayerStatus = newStatus === 'PRAYED' ? 'PRAYED_ON_TIME' : newStatus;
+      const normalizedStatus: PrayerStatus =
+        newStatus === 'PRAYED' ? 'PRAYED_ON_TIME' : newStatus;
 
-      // 1. Optimistic update in recordsByDate state
-      setRecordsByDate((prev) => {
-        const existing = prev[recordDate] || {
-          date: recordDate,
+      const prevRecords = recordsByDateRef.current;
+      const previousRecordSnapshot = prevRecords[recordDate];
+      const existing = prevRecords[recordDate] || {
+        date: recordDate,
+        prayers: {
+          fajr: { status: 'PENDING' },
+          dhuhr: { status: 'PENDING' },
+          asr: { status: 'PENDING' },
+          maghrib: { status: 'PENDING' },
+          isha: { status: 'PENDING' },
+        },
+        finesAccrued: 0,
+      };
+
+      const prevEntry = existing.prayers?.[prayerId] || { status: 'PENDING' };
+      const nowIso = new Date().toISOString();
+
+      const updatedEntry = {
+        ...prevEntry,
+        status: normalizedStatus,
+        prayedAt:
+          normalizedStatus === 'PRAYED_ON_TIME' || normalizedStatus === 'PRAYED_LATE'
+            ? nowIso
+            : undefined,
+        missedAt: normalizedStatus === 'MISSED' ? prevEntry.missedAt || nowIso : undefined,
+        madeUpAt: normalizedStatus === 'MADE_UP' ? nowIso : undefined,
+      };
+
+      const updatedRecords: Record<string, PrayerHistoryRecord> = {
+        ...prevRecords,
+        [recordDate]: {
+          ...existing,
           prayers: {
-            fajr: { status: 'PENDING' },
-            dhuhr: { status: 'PENDING' },
-            asr: { status: 'PENDING' },
-            maghrib: { status: 'PENDING' },
-            isha: { status: 'PENDING' },
+            ...existing.prayers,
+            [prayerId]: updatedEntry,
           },
-          finesAccrued: 0,
-        };
+        },
+      };
 
-        const updated: Record<string, PrayerHistoryRecord> = {
-          ...prev,
-          [recordDate]: {
-            ...existing,
-            prayers: {
-              ...existing.prayers,
-              [prayerId]: {
-                ...existing.prayers?.[prayerId],
-                status: normalizedStatus,
-                prayedAt:
-                  normalizedStatus === 'PRAYED_ON_TIME' || normalizedStatus === 'PRAYED_LATE'
-                    ? new Date().toISOString()
-                    : undefined,
-              },
-            },
-          },
-        };
+      // 1. Optimistic update + sync localStorage derived metrics
+      recordsByDateRef.current = updatedRecords;
+      setRecordsByDate(updatedRecords);
+      saveStoredHistoryRecords(updatedRecords);
+      syncDerivedMetricsToStorage(updatedRecords, liturgicalTodayStr);
 
-        // Cache update to LocalStorage
-        saveStoredHistoryRecords(updated);
-
-        return updated;
-      });
-
-      // 2. If editing today's active liturgical date, synchronize with HomeDashboard's salahtrack_daily_prayers
+      // 2. Sync today's daily store if editing active liturgical day
       if (recordDate === liturgicalTodayStr) {
         try {
-          const rawDaily = window.localStorage.getItem('salahtrack_daily_prayers');
-          if (rawDaily) {
-            const parsedDaily: PrayerItem[] = JSON.parse(rawDaily);
-            if (Array.isArray(parsedDaily)) {
-              const updatedDaily = parsedDaily.map((item) =>
-                item.id === prayerId ? { ...item, status: normalizedStatus } : item
-              );
-              saveDailyPrayersSync(recordDate, updatedDaily);
-            }
+          const rawDaily = window.localStorage.getItem(STORAGE_KEY_DAILY_PRAYERS);
+          const parsedDaily: PrayerItem[] = rawDaily ? JSON.parse(rawDaily) : [];
+          if (Array.isArray(parsedDaily) && parsedDaily.length > 0) {
+            const updatedDaily = parsedDaily.map((item) =>
+              item.id === prayerId ? { ...item, status: normalizedStatus } : item
+            );
+            saveDailyPrayersSync(recordDate, updatedDaily);
           }
-        } catch (err) {
-          console.error('Failed to sync today prayers with daily store:', err);
+        } catch {
+          // ignore
         }
       }
 
-      // 3. Persist to MongoDB Atlas if authenticated
-      if (user) {
+      if (!user) {
+        invalidateAllPrayerCaches();
+        setUpdatingPrayerKey(null);
+        return;
+      }
+
+      const prevController = mutationAbortRefs.current.get(key);
+      if (prevController) prevController.abort();
+      const controller = new AbortController();
+      mutationAbortRefs.current.set(key, controller);
+
+      try {
+        const res = await fetch('/api/prayers', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            date: recordDate,
+            prayerId,
+            status: normalizedStatus,
+            timezone: userTimezone,
+          }),
+          signal: controller.signal,
+        });
+
+        if (mutationSeqRefs.current.get(key) !== nextSeq) return;
+
+        if (res.ok) {
+          removePendingPrayerMutation(recordDate, prayerId);
+          invalidateAllPrayerCaches();
+          const json = await res.json().catch(() => null);
+          if (json?.data?.prayers) {
+            const serverSynced = { ...recordsByDateRef.current, [recordDate]: json.data };
+            recordsByDateRef.current = serverSynced;
+            setRecordsByDate(serverSynced);
+            saveStoredHistoryRecords(serverSynced);
+            syncDerivedMetricsToStorage(serverSynced, liturgicalTodayStr);
+          }
+          await fetchStats(true);
+        } else {
+          const errJson = await res.json().catch(() => null);
+          if (res.status >= 400 && res.status < 500 && res.status !== 429) {
+            // Revert optimistic update on explicit server rejection (e.g. PAID_PRAYER_LOCKED)
+            setMutationError(errJson?.error || t.common.error);
+            const reverted = { ...recordsByDateRef.current };
+            if (previousRecordSnapshot) reverted[recordDate] = previousRecordSnapshot;
+            else delete reverted[recordDate];
+            recordsByDateRef.current = reverted;
+            setRecordsByDate(reverted);
+            saveStoredHistoryRecords(reverted);
+            syncDerivedMetricsToStorage(reverted, liturgicalTodayStr);
+            invalidateAllPrayerCaches();
+          } else {
+            enqueuePendingPrayerMutation({
+              date: recordDate,
+              prayerId,
+              status: normalizedStatus,
+              timezone: userTimezone,
+            });
+          }
+        }
+      } catch (err: unknown) {
+        if (err instanceof Error && err.name === 'AbortError') return;
+        enqueuePendingPrayerMutation({
+          date: recordDate,
+          prayerId,
+          status: normalizedStatus,
+          timezone: userTimezone,
+        });
+      } finally {
+        if (mutationSeqRefs.current.get(key) === nextSeq) {
+          mutationAbortRefs.current.delete(key);
+          setUpdatingPrayerKey(null);
+        }
+      }
+    },
+    [calendarTodayStr, liturgicalTodayStr, t.progress.futureDateError, t.common.error, user, userTimezone, fetchStats]
+  );
+
+  // One-click Day Reset for historical dates (resets all non-paid prayers on date to PENDING)
+  const handleResetDay = useCallback(
+    async (recordDate: string) => {
+      if (recordDate > calendarTodayStr) return;
+      setMutationError(null);
+      const lockKey = `${recordDate}-ALL`;
+      setUpdatingPrayerKey(lockKey);
+
+      const previousRecordsSnapshot = { ...recordsByDateRef.current };
+      const existing = previousRecordsSnapshot[recordDate];
+      const batchPayload: Partial<Record<PrayerId, PrayerStatus>> = {};
+      for (const p of PRAYER_IDS) {
+        if (!existing?.prayers?.[p]?.isPaid) {
+          batchPayload[p] = 'PENDING';
+        }
+      }
+
+      const updatedLocal = resetDateInStoredHistory(recordDate, platformStartDate);
+      recordsByDateRef.current = updatedLocal;
+      setRecordsByDate(updatedLocal);
+      syncDerivedMetricsToStorage(updatedLocal, liturgicalTodayStr);
+
+      if (recordDate === liturgicalTodayStr) {
+        try {
+          const rawDaily = window.localStorage.getItem(STORAGE_KEY_DAILY_PRAYERS);
+          const parsedDaily: PrayerItem[] = rawDaily ? JSON.parse(rawDaily) : [];
+          if (Array.isArray(parsedDaily) && parsedDaily.length > 0) {
+            const updatedDaily = parsedDaily.map((item) =>
+              batchPayload[item.id] ? { ...item, status: 'PENDING' as PrayerStatus } : item
+            );
+            saveDailyPrayersSync(recordDate, updatedDaily);
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      if (!user) {
+        invalidateAllPrayerCaches();
+        setUpdatingPrayerKey(null);
+        return;
+      }
+
+      if (Object.keys(batchPayload).length > 0) {
         try {
           const res = await fetch('/api/prayers', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               date: recordDate,
-              prayerId,
-              status: normalizedStatus,
+              prayers: batchPayload,
+              timezone: userTimezone,
             }),
           });
-
           if (res.ok) {
-            await fetchStats();
+            removePendingPrayerMutation(recordDate);
+            for (const pId of Object.keys(batchPayload) as PrayerId[]) {
+              removePendingPrayerMutation(recordDate, pId);
+            }
+            invalidateAllPrayerCaches();
+            await fetchStats(true);
           } else {
-            console.warn('Historical edit persistence warning: server did not confirm 200');
+            const errJson = await res.json().catch(() => null);
+            if (res.status >= 400 && res.status < 500 && res.status !== 429) {
+              setMutationError(errJson?.error || t.common.error);
+              recordsByDateRef.current = previousRecordsSnapshot;
+              setRecordsByDate(previousRecordsSnapshot);
+              saveStoredHistoryRecords(previousRecordsSnapshot);
+              syncDerivedMetricsToStorage(previousRecordsSnapshot, liturgicalTodayStr);
+              invalidateAllPrayerCaches();
+            } else {
+              enqueuePendingPrayerMutation({
+                date: recordDate,
+                prayers: batchPayload,
+                timezone: userTimezone,
+              });
+            }
           }
-        } catch (err) {
-          console.error('Error updating historical record to server:', err);
-        } finally {
-          setUpdatingPrayerKey(null);
+        } catch {
+          enqueuePendingPrayerMutation({
+            date: recordDate,
+            prayers: batchPayload,
+            timezone: userTimezone,
+          });
         }
-      } else {
-        setUpdatingPrayerKey(null);
       }
+
+      setUpdatingPrayerKey(null);
     },
-    [calendarTodayStr, liturgicalTodayStr, t.progress.futureDateError, user, fetchStats]
+    [calendarTodayStr, liturgicalTodayStr, platformStartDate, user, userTimezone, fetchStats, t.common.error]
   );
 
-  // Derive or use earliest tracking date from recorded history
-  const effectiveEarliestDate = useMemo(() => {
-    if (earliestTrackingDate) return earliestTrackingDate;
+  // Local fallback ledger & calculations (0ms instant display for guests and pre-hydration)
+  const localLedger = useMemo(() => {
+    return calculateAccountabilityLedger(recordsByDate, liturgicalTodayStr);
+  }, [recordsByDate, liturgicalTodayStr]);
 
-    let earliest: string | undefined = undefined;
-    for (const [dateStr, record] of Object.entries(recordsByDate)) {
-      if (!record?.prayers) continue;
-      const hasTrackedPrayer = PRAYER_IDS.some((p) => {
-        const s = record.prayers[p]?.status;
-        return (
-          s === 'PRAYED_ON_TIME' ||
-          s === 'PRAYED' ||
-          s === 'PRAYED_LATE' ||
-          s === 'MADE_UP' ||
-          s === 'MISSED'
-        );
-      });
-      if (hasTrackedPrayer) {
-        if (!earliest || dateStr < earliest) {
-          earliest = dateStr;
-        }
-      }
-    }
-    return earliest;
-  }, [earliestTrackingDate, recordsByDate]);
-
-  // Construct effectiveRecordsByDate:
-  // For any date between earliestTrackingDate and liturgicalTodayStr (earliestTrackingDate <= curDate < liturgicalTodayStr):
-  // If recordsByDate[curDate] is missing or has prayers with status === 'PENDING':
-  // Project missing day or pending prayers as status: 'MISSED' with finesAccrued calculated.
-  // Pre-tracking dates < earliestTrackingDate remain strictly untouched!
-  const effectiveRecordsByDate = useMemo(() => {
-    const result: Record<string, PrayerHistoryRecord> = { ...recordsByDate };
-
-    if (effectiveEarliestDate && effectiveEarliestDate < liturgicalTodayStr) {
-      const [fromY, fromM, fromD] = effectiveEarliestDate.split('-').map(Number);
-      const [toY, toM, toD] = liturgicalTodayStr.split('-').map(Number);
-
-      if (!isNaN(fromY) && !isNaN(fromM) && !isNaN(fromD) && !isNaN(toY) && !isNaN(toM) && !isNaN(toD)) {
-        let currentUtc = Date.UTC(fromY, fromM - 1, fromD);
-        const endUtc = Date.UTC(toY, toM - 1, toD);
-
-        while (currentUtc < endUtc) {
-          const d = new Date(currentUtc);
-          const y = d.getUTCFullYear();
-          const m = String(d.getUTCMonth() + 1).padStart(2, '0');
-          const day = String(d.getUTCDate()).padStart(2, '0');
-          const curDate = `${y}-${m}-${day}`;
-
-          const existingRecord = result[curDate];
-
-          if (!existingRecord) {
-            const prayers: Record<PrayerId, SinglePrayerEntry> = {
-              fajr: { status: 'MISSED' },
-              dhuhr: { status: 'MISSED' },
-              asr: { status: 'MISSED' },
-              maghrib: { status: 'MISSED' },
-              isha: { status: 'MISSED' },
-            };
-            result[curDate] = {
-              date: curDate,
-              prayers,
-              finesAccrued: calculateAccountabilityFines(curDate, prayers, liturgicalTodayStr),
-            };
-          } else {
-            let hasPending = false;
-            const updatedPrayers: Record<PrayerId, SinglePrayerEntry> = { ...existingRecord.prayers };
-            for (const pid of PRAYER_IDS) {
-              const entry = updatedPrayers[pid];
-              if (!entry || entry.status === 'PENDING') {
-                hasPending = true;
-                updatedPrayers[pid] = {
-                  ...entry,
-                  status: 'MISSED',
-                };
-              }
-            }
-
-            if (hasPending) {
-              result[curDate] = {
-                ...existingRecord,
-                prayers: updatedPrayers,
-                finesAccrued: calculateAccountabilityFines(curDate, updatedPrayers, liturgicalTodayStr),
-              };
-            }
-          }
-
-          currentUtc += 24 * 60 * 60 * 1000;
-        }
-      }
-    }
-
-    return result;
-  }, [recordsByDate, effectiveEarliestDate, liturgicalTodayStr]);
-
-  // Analytical breakdown of MISSED prayers from effective history
-  const historyMissedByPrayer = useMemo(() => {
-    const counts: Record<PrayerId, number> = { fajr: 0, dhuhr: 0, asr: 0, maghrib: 0, isha: 0 };
-    for (const record of Object.values(effectiveRecordsByDate)) {
-      if (!record.prayers) continue;
-      for (const p of PRAYER_IDS) {
-        if (record.prayers[p]?.status === 'MISSED') {
-          counts[p] += 1;
-        }
-      }
-    }
-    return counts;
-  }, [effectiveRecordsByDate]);
-
-  // Sorted list of historical records (descending date)
-  const sortedHistoryRecords = useMemo(() => {
-    return Object.values(effectiveRecordsByDate).sort((a, b) => b.date.localeCompare(a.date));
-  }, [effectiveRecordsByDate]);
-
-  // Analytical stats breakdown computed across historical records
-  const prayerBreakdown = useMemo(() => {
-    const counts: Record<PrayerId, { onTime: number; missed: number; total: number }> = {
+  const localOverviewStats = useMemo(() => {
+    const breakdown: Record<PrayerId, { onTime: number; missed: number; total: number }> = {
       fajr: { onTime: 0, missed: 0, total: 0 },
       dhuhr: { onTime: 0, missed: 0, total: 0 },
       asr: { onTime: 0, missed: 0, total: 0 },
       maghrib: { onTime: 0, missed: 0, total: 0 },
       isha: { onTime: 0, missed: 0, total: 0 },
     };
+    const missedByPrayer: Record<PrayerId, number> = {
+      fajr: 0,
+      dhuhr: 0,
+      asr: 0,
+      maghrib: 0,
+      isha: 0,
+    };
+    let onTime30 = 0;
+    let madeUp30 = 0;
+    let missed30 = 0;
+    let weeklyCompleted = 0;
 
-    for (const record of sortedHistoryRecords) {
-      if (!record.prayers) continue;
+    const [y, m, d] = liturgicalTodayStr.split('-').map(Number);
+    const todayUtc = Date.UTC(y, m - 1, d);
+    const sevenDaysAgo = new Date(todayUtc - 6 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const thirtyDaysAgo = new Date(todayUtc - 29 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+    for (const rec of Object.values(recordsByDate)) {
+      if (!rec.prayers) continue;
+      const in30 = rec.date >= thirtyDaysAgo && rec.date <= liturgicalTodayStr;
+      const in7 = rec.date >= sevenDaysAgo && rec.date <= liturgicalTodayStr;
       for (const p of PRAYER_IDS) {
-        const item = record.prayers[p];
-        if (!item) continue;
-        counts[p].total += 1;
-        if (item.status === 'PRAYED_ON_TIME' || item.status === 'PRAYED' || item.status === 'PRAYED_LATE') {
-          counts[p].onTime += 1;
-        } else if (item.status === 'MISSED') {
-          counts[p].missed += 1;
+        const st = rec.prayers[p]?.status;
+        if (st === 'MISSED') {
+          missedByPrayer[p] += 1;
+        }
+        if (in30) {
+          if (st === 'PRAYED_ON_TIME' || st === 'PRAYED' || st === 'PRAYED_LATE') {
+            breakdown[p].onTime += 1;
+            breakdown[p].total += 1;
+            onTime30 += 1;
+            if (in7) weeklyCompleted += 1;
+          } else if (st === 'MISSED') {
+            breakdown[p].missed += 1;
+            breakdown[p].total += 1;
+            missed30 += 1;
+          } else if (st === 'MADE_UP') {
+            breakdown[p].total += 1;
+            madeUp30 += 1;
+          }
         }
       }
     }
-    return counts;
-  }, [sortedHistoryRecords]);
+    return {
+      breakdown,
+      missedByPrayer,
+      onTime30,
+      madeUp30,
+      missed30,
+      weeklyPct: Math.round((weeklyCompleted / 35) * 100),
+    };
+  }, [recordsByDate, liturgicalTodayStr]);
 
-  // Accountability calculations: single source of truth calculation for instant 0ms offline/pre-fetch UI,
-  // reconciled with server stats once fetched. Prevents arbitrary default multiplication bug.
-  const localLedger = useMemo(() => {
-    return calculateAccountabilityLedger(effectiveRecordsByDate);
-  }, [effectiveRecordsByDate]);
+  const effectiveBreakdown = stats?.prayerBreakdown || localOverviewStats.breakdown;
+  const effectiveMissedByPrayer = stats?.missedByPrayer || localOverviewStats.missedByPrayer;
 
-  const isStatsLoading = Boolean(user && !stats);
+  const isStatsLoading = Boolean(user && loadingStats && !stats);
 
   const fineItems = useMemo(() => {
-    if (stats?.accountability?.breakdown && stats.accountability.breakdown.length > 0) {
-      return stats.accountability.breakdown;
-    }
-    return isStatsLoading ? [] : localLedger.items;
-  }, [stats?.accountability?.breakdown, isStatsLoading, localLedger.items]);
+    if (stats?.accountability?.breakdown) return stats.accountability.breakdown;
+    return localLedger.items;
+  }, [stats?.accountability?.breakdown, localLedger.items]);
 
   const accountabilityTotal =
-    (stats?.accountability?.totalFinancialDebt !== undefined && stats.accountability.totalFinancialDebt > 0)
-      ? stats.accountability.totalFinancialDebt
-      : (stats?.accountability?.totalAmount !== undefined && stats.accountability.totalAmount > 0)
-      ? stats.accountability.totalAmount
-      : (localLedger.totalAmount || (stats?.accountability?.totalFinancialDebt ?? stats?.accountability?.totalAmount ?? 0));
+    stats?.accountability?.totalFinancialDebt ??
+    stats?.accountability?.totalAmount ??
+    localLedger.totalAmount;
 
   const pendingQazaCount =
-    (stats?.accountability?.pendingQazaCount !== undefined && stats.accountability.pendingQazaCount > 0)
-      ? stats.accountability.pendingQazaCount
-      : (stats?.accountability?.totalMissed !== undefined && stats.accountability.totalMissed > 0)
-      ? stats.accountability.totalMissed
-      : ((localLedger.pendingQazaCount ?? localLedger.missedCount) || (stats?.accountability?.pendingQazaCount ?? stats?.accountability?.totalMissed ?? 0));
+    stats?.accountability?.pendingQazaCount ??
+    stats?.accountability?.totalMissed ??
+    (localLedger.pendingQazaCount ?? localLedger.missedCount);
 
   const accountabilityOverdue =
     stats?.accountability?.totalOverdue ??
@@ -762,42 +938,31 @@ function ProgressContent() {
     return fineItems.reduce((sum, it) => sum + (it.overdueAmount || 0), 0);
   }, [fineItems]);
 
-  // Total Qaza count for projection calculator and status
-  const totalQazaCount = useMemo(() => {
-    return pendingQazaCount || localQaza || 0;
-  }, [pendingQazaCount, localQaza]);
+  const totalQazaCount = pendingQazaCount || localQaza || 0;
+  const displayedFineItems = showAllFines ? fineItems : fineItems.slice(0, 10);
 
   return (
-    <div className="space-y-5 sm:space-y-6">
-      {/* Header */}
-      <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2.5">
-            <span className="p-2 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400">
-              <TrendingUp className="w-5 h-5" />
-            </span>
-            <span>{t.progress.title}</span>
-          </h1>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1.5">
-            {t.progress.subtitle}
-          </p>
-        </div>
+    <div className="space-y-4 sm:space-y-6 pb-8">
+      <PageHeader
+        icon={TrendingUp}
+        title={t.progress.title}
+        subtitle={t.progress.subtitle}
+        actions={
+          !user ? (
+            <Link
+              href="/login"
+              className="min-h-[40px] py-2 px-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-2 shadow-xs transition-colors cursor-pointer"
+            >
+              <LogIn className="w-4 h-4" />
+              <span>{t.nav.login}</span>
+            </Link>
+          ) : undefined
+        }
+      />
 
-        {!user && (
-          <Link
-            href="/login"
-            className="self-start sm:self-auto py-2 px-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-2 shadow-xs transition-colors cursor-pointer"
-          >
-            <LogIn className="w-4 h-4" />
-            <span>{t.nav.login}</span>
-          </Link>
-        )}
-      </header>
-
-      {/* Guest Mode Notice */}
       {!user && (
-        <div className="p-4 sm:p-4.5 rounded-2xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200/70 dark:border-amber-900/40 text-amber-800 dark:text-amber-300 text-xs flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5">
+        <div className="p-3.5 rounded-2xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200/70 dark:border-amber-900/40 text-amber-800 dark:text-amber-300 text-xs flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
             <AlertCircle className="w-4 h-4 shrink-0 text-amber-600 dark:text-amber-400" />
             <span>{t.progress.signInPrompt}</span>
           </div>
@@ -810,10 +975,10 @@ function ProgressContent() {
         </div>
       )}
 
-      {/* Segmented Navigation Tabs */}
+      {/* Segmented Navigation Tabs: History (default) -> Overview -> Qaza */}
       <div className="border-b border-slate-200 dark:border-slate-800">
         <nav
-          className="flex space-x-2 sm:space-x-4 overflow-x-auto no-scrollbar"
+          className="grid grid-cols-3 sm:flex sm:space-x-3"
           aria-label={t.progress.title}
           role="tablist"
         >
@@ -822,14 +987,14 @@ function ProgressContent() {
             role="tab"
             aria-selected={activeTab === 'history'}
             onClick={() => handleTabChange('history')}
-            className={`min-h-[44px] py-2.5 px-3.5 border-b-2 text-xs sm:text-sm font-semibold whitespace-nowrap transition-colors flex items-center gap-2 cursor-pointer ${
+            className={`min-h-[44px] py-2 px-1 sm:px-3 border-b-2 text-[11px] sm:text-sm font-semibold leading-tight text-center transition-colors flex flex-col sm:flex-row items-center justify-center sm:justify-start gap-1 sm:gap-1.5 cursor-pointer ${
               activeTab === 'history'
                 ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
                 : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
             }`}
           >
-            <HistoryIcon className="w-4 h-4" />
-            <span>{t.progress.tabs.history}</span>
+            <HistoryIcon className="w-4 h-4 shrink-0" />
+            <span className="sm:whitespace-nowrap">{t.progress.tabs.history}</span>
           </button>
 
           <button
@@ -837,14 +1002,14 @@ function ProgressContent() {
             role="tab"
             aria-selected={activeTab === 'overview'}
             onClick={() => handleTabChange('overview')}
-            className={`min-h-[44px] py-2.5 px-3.5 border-b-2 text-xs sm:text-sm font-semibold whitespace-nowrap transition-colors flex items-center gap-2 cursor-pointer ${
+            className={`min-h-[44px] py-2 px-1 sm:px-3 border-b-2 text-[11px] sm:text-sm font-semibold leading-tight text-center transition-colors flex flex-col sm:flex-row items-center justify-center sm:justify-start gap-1 sm:gap-1.5 cursor-pointer ${
               activeTab === 'overview'
                 ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
                 : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
             }`}
           >
-            <TrendingUp className="w-4 h-4" />
-            <span>{t.progress.tabs.overview}</span>
+            <TrendingUp className="w-4 h-4 shrink-0" />
+            <span className="sm:whitespace-nowrap">{t.progress.tabs.overview}</span>
           </button>
 
           <button
@@ -852,610 +1017,426 @@ function ProgressContent() {
             role="tab"
             aria-selected={activeTab === 'qaza'}
             onClick={() => handleTabChange('qaza')}
-            className={`min-h-[44px] py-2.5 px-3.5 border-b-2 text-xs sm:text-sm font-semibold whitespace-nowrap transition-colors flex items-center gap-2 cursor-pointer ${
+            className={`min-h-[44px] py-2 px-1 sm:px-3 border-b-2 text-[11px] sm:text-sm font-semibold leading-tight text-center transition-colors flex flex-col sm:flex-row items-center justify-center sm:justify-start gap-1 sm:gap-1.5 cursor-pointer ${
               activeTab === 'qaza'
                 ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
                 : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
             }`}
           >
-            <Scale className="w-4 h-4" />
-            <span>{t.progress.tabs.qaza}</span>
+            <Scale className="w-4 h-4 shrink-0" />
+            <span className="sm:whitespace-nowrap">{t.progress.tabs.qaza}</span>
           </button>
         </nav>
       </div>
 
-      {/* ==================== TAB 1: INTERACTIVE HISTORY & MONTHLY CALENDAR ==================== */}
-      {activeTab === 'history' && (
-        <div className="space-y-6">
-          {/* Historical notice */}
-          <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-800 flex items-center justify-between text-xs text-slate-600 dark:text-slate-400">
-            <div className="flex items-center gap-2">
-              <Info className="w-4 h-4 text-emerald-600 shrink-0" />
-              <span>{t.progress.historicalEditNotice}</span>
-            </div>
-          </div>
-
-          {/* Interactive Monthly Calendar & Selected Day Inspector */}
-          <MonthlyHistoryCalendar
-            selectedDate={selectedDate}
-            onSelectDate={handleSelectDate}
-            records={effectiveRecordsByDate}
-            onUpdatePrayerStatus={handleHistoricalCorrection}
-            updatingPrayerKey={updatingPrayerKey}
-            viewYear={viewYear}
-            viewMonth={viewMonth}
-            onChangeMonth={handleChangeMonth}
-            isLoading={loadingHistory}
-            earliestTrackingDate={earliestTrackingDate}
-          />
-        </div>
-      )}
-
-      {/* ==================== TAB 2: OVERVIEW ==================== */}
+      {/* ==================== TAB 1: OVERVIEW (Streamlined, Mobile-First) ==================== */}
       {activeTab === 'overview' && (
-        loadingStats && !stats ? (
-          <div className="py-12 flex justify-center text-slate-400">
-            <Loader2 className="w-8 h-8 animate-spin text-emerald-600" />
-          </div>
-        ) : (
-          <div className="space-y-5 sm:space-y-6">
-            {/* Executive KPI Stats Cards */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
-              {/* Completion */}
-              <div className="p-4.5 sm:p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs">
-                <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 block mb-1">
-                  {t.progress.summary.completionRate}
+        <div className="space-y-4">
+          {/* Compact 2x2 KPI Stats Grid */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 xs:gap-2.5 sm:gap-3.5">
+            {/* Completion */}
+            <div className="p-3 sm:p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xs">
+              <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 block">
+                {t.progress.summary.completionRate}
+              </span>
+              <div className="flex items-baseline gap-1.5 mt-1">
+                <span className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-slate-100">
+                  {stats ? `${stats.weekly.percentage}%` : `${localOverviewStats.weeklyPct}%`}
                 </span>
-                <div className="flex items-baseline gap-2">
-                  <span className="text-2xl font-bold text-slate-900 dark:text-slate-100">
-                    {stats ? `${stats.weekly.percentage}%` : '0%'}
-                  </span>
-                  <span className="text-[11px] text-slate-400">{t.progress.periods.d7}</span>
-                </div>
-                <div className="w-full bg-slate-100 dark:bg-slate-800 h-1.5 rounded-full mt-2.5 overflow-hidden">
-                  <div
-                    className="bg-emerald-600 h-full rounded-full transition-all duration-500"
-                    style={{ width: `${stats ? stats.weekly.percentage : 0}%` }}
-                  />
-                </div>
+                <span className="text-[10px] text-slate-400">{t.progress.periods.d7}</span>
               </div>
+              <div className="w-full bg-slate-100 dark:bg-slate-800 h-1.5 rounded-full mt-2 overflow-hidden">
+                <div
+                  className="bg-emerald-600 h-full rounded-full transition-all duration-500"
+                  style={{ width: `${stats ? stats.weekly.percentage : localOverviewStats.weeklyPct}%` }}
+                />
+              </div>
+            </div>
 
-              {/* Streak */}
-              <div className="p-4.5 sm:p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs">
-                <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 block mb-1">
-                  {t.progress.summary.currentStreak}
+            {/* Streak */}
+            <div className="p-3 sm:p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xs">
+              <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 block">
+                {t.progress.summary.currentStreak}
+              </span>
+              <div className="flex items-center gap-1.5 mt-1">
+                <Flame className="w-4 h-4 text-amber-500 fill-amber-500 shrink-0" />
+                <span className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-slate-100">
+                  {stats?.streaks.current || 0}
                 </span>
-                <div className="flex items-center gap-1.5">
-                  <Flame className="w-5 h-5 text-amber-500 fill-amber-500" />
-                  <span className="text-2xl font-bold text-slate-900 dark:text-slate-100">
-                    {stats?.streaks.current || 0}
-                  </span>
-                  <span className="text-xs text-slate-400 font-medium">{t.dashboard.streakDays}</span>
-                </div>
-                <span className="text-[10px] text-slate-400 mt-2 block">
-                  {t.progress.summary.bestStreak}: {stats?.streaks.best || 0}
+                <span className="text-[11px] text-slate-400 font-medium truncate">
+                  {t.dashboard.streakDays}
                 </span>
               </div>
+              <span className="text-[10px] text-slate-400 mt-1.5 block">
+                {t.progress.summary.bestStreak}: {stats?.streaks.best || 0}
+              </span>
+            </div>
 
-              {/* On-Time Rate */}
-              <div className="p-4.5 sm:p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs">
-                <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 block mb-1">
-                  {t.progress.summary.onTimeRate}
+            {/* 30-Day On-Time */}
+            <div className="p-3 sm:p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xs">
+              <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 block">
+                {t.progress.summary.onTimeRate}
+              </span>
+              <div className="flex items-baseline gap-1 mt-1">
+                <span className="text-xl sm:text-2xl font-bold text-emerald-600 dark:text-emerald-400">
+                  {stats
+                    ? (stats.counts30d.onTime || 0) + (stats.counts30d.late || 0)
+                    : localOverviewStats.onTime30}
                 </span>
-                <div className="flex items-baseline gap-2">
-                  <span className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">
-                    {(stats?.counts30d.onTime || 0) + (stats?.counts30d.late || 0)}
-                  </span>
-                  <span className="text-xs text-slate-400 font-medium">/ 150</span>
-                </div>
-                <span className="text-[10px] text-slate-400 mt-2 block">{t.progress.indicator30d}</span>
+                <span className="text-[11px] text-slate-400 font-medium">/ 150</span>
               </div>
+              <span className="text-[10px] text-slate-400 mt-1.5 block">{t.progress.indicator30d}</span>
+            </div>
 
-              {/* Accountability Outstanding Balance */}
-              <div className="p-4.5 sm:p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs">
-                <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 block mb-1">
+            {/* Accountability Balance */}
+            <div className="p-3 sm:p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xs flex flex-col justify-between">
+              <div>
+                <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 block leading-tight">
                   {t.accountability.title}
                 </span>
-                <div className="flex items-baseline gap-1.5">
+                <div className="flex items-baseline gap-1 mt-1">
                   {isStatsLoading ? (
-                    <div className="h-7 w-20 bg-slate-200 dark:bg-slate-700 animate-pulse rounded" />
+                    <div className="h-6 w-16 bg-slate-200 dark:bg-slate-700 animate-pulse rounded" />
                   ) : (
                     <>
-                      <span className="text-xl font-bold text-rose-600 dark:text-rose-400">
+                      <span className="text-base xs:text-lg sm:text-xl font-bold text-rose-600 dark:text-rose-400 tabular-nums break-words">
                         {accountabilityTotal.toLocaleString()}
                       </span>
                       <span className="text-[10px] text-slate-400">{t.common.currency}</span>
                     </>
                   )}
                 </div>
-                <button
-                  type="button"
-                  onClick={() => handleTabChange('qaza')}
-                  className="text-[11px] font-semibold text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 mt-2 flex items-center gap-1 cursor-pointer"
-                >
-                  <span>{t.progress.detailedBreakdown}</span>
-                  <ChevronRight className="w-3 h-3" />
-                </button>
-              </div>
-            </div>
-
-            {/* Consolidated Analytics Section */}
-            <div id="analytics-section" className="space-y-5 sm:space-y-6 pt-2 scroll-mt-6">
-              {/* Consistency by Prayer */}
-              <div className="rounded-2xl border border-slate-200 bg-white p-4.5 sm:p-6 dark:border-slate-800 dark:bg-slate-900 shadow-xs space-y-5">
-                <div className="flex items-center gap-2.5">
-                  <BarChart3 className="w-5 h-5 text-emerald-600" />
-                  <div>
-                    <h2 className="text-base font-bold text-slate-900 dark:text-slate-100">
-                      {t.progress.consistencyTitle}
-                    </h2>
-                    <p className="text-xs text-slate-500 dark:text-slate-400">
-                      {t.progress.consistencySubtitle}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="space-y-4 pt-2">
-                  {PRAYER_IDS.map((p) => {
-                    const item = prayerBreakdown[p];
-                    const pct = item.total > 0 ? Math.round((item.onTime / item.total) * 100) : 0;
-                    return (
-                      <div key={p} className="space-y-1.5">
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="font-semibold text-slate-700 dark:text-slate-300 capitalize">
-                            {t.prayers[p]}
-                          </span>
-                          <span className="font-bold text-slate-900 dark:text-slate-100">
-                            {pct}% ({item.onTime}/{item.total})
-                          </span>
-                        </div>
-                        <div className="w-full bg-slate-100 dark:bg-slate-800 h-2 rounded-full overflow-hidden">
-                          <div
-                            className="bg-emerald-500 h-full rounded-full transition-all duration-500"
-                            style={{ width: `${pct}%` }}
-                          />
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* 30-Day Metric Breakdown Cards */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div className="p-4 sm:p-5 rounded-2xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-100 dark:border-emerald-900/40">
-                  <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 block mb-1">
-                    {t.statuses.PRAYED}
-                  </span>
-                  <span className="text-2xl font-bold text-emerald-800 dark:text-emerald-200">
-                    {(stats?.counts30d.onTime || 0) + (stats?.counts30d.late || 0)}
-                  </span>
-                </div>
-                <div className="p-4 sm:p-5 rounded-2xl bg-sky-50/50 dark:bg-sky-950/20 border border-sky-100 dark:border-sky-900/40">
-                  <span className="text-xs font-semibold text-sky-700 dark:text-sky-400 block mb-1">
-                    {t.statuses.MADE_UP}
-                  </span>
-                  <span className="text-2xl font-bold text-sky-800 dark:text-sky-200">
-                    {stats?.counts30d.madeUp || 0}
-                  </span>
-                </div>
-                <div className="p-4 sm:p-5 rounded-2xl bg-rose-50/50 dark:bg-rose-950/20 border border-rose-100 dark:border-rose-900/40">
-                  <span className="text-xs font-semibold text-rose-700 dark:text-rose-400 block mb-1">
-                    {t.statuses.MISSED}
-                  </span>
-                  <span className="text-2xl font-bold text-rose-800 dark:text-rose-200">
-                    {stats?.counts30d.missed || 0}
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* Quick Insights Banner */}
-            <div className="p-4.5 sm:p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-gradient-to-r from-emerald-500/10 via-teal-500/5 to-transparent flex items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0">
-                  <Award className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                    {t.progress.insights.title}
-                  </h3>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                    {t.progress.insights.streakEncouragement}
-                  </p>
-                </div>
               </div>
               <button
                 type="button"
-                onClick={() => handleTabChange('history')}
-                className="min-h-[44px] py-2 px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-semibold hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors shrink-0 cursor-pointer"
+                onClick={() => handleTabChange('qaza')}
+                className="text-[11px] font-semibold text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 mt-1.5 flex items-center gap-0.5 cursor-pointer"
               >
-                {t.progress.tabs.history}
+                <span className="truncate">{t.progress.detailedBreakdown}</span>
+                <ChevronRight className="w-3 h-3 shrink-0" />
               </button>
             </div>
+          </div>
 
-            {/* Recent History Preview */}
-            <div className="rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 shadow-xs p-4.5 sm:p-6 space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2.5">
-                  <HistoryIcon className="w-5 h-5 text-emerald-600" />
-                  <h2 className="text-base font-bold text-slate-900 dark:text-slate-100">
-                    {t.progress.recentHistoryTitle}
-                  </h2>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => handleTabChange('history')}
-                  className="text-xs font-semibold text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 flex items-center gap-1 cursor-pointer"
-                >
-                  <span>{t.progress.viewAll}</span>
-                  <ChevronRight className="w-3.5 h-3.5" />
-                </button>
-              </div>
-
-              {sortedHistoryRecords.length === 0 ? (
-                <p className="text-xs text-slate-400 py-4 text-center">
-                  {t.history.noRecords}
-                </p>
-              ) : (
-                <div className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {sortedHistoryRecords.slice(0, 5).map((record) => (
-                    <div key={record.date} className="py-3 flex items-center justify-between gap-4">
-                      <div>
-                        <p className="text-xs font-semibold text-slate-900 dark:text-slate-100">
-                          {record.date}
-                        </p>
-                        <p className="text-[11px] text-slate-400">
-                          {Object.values(record.prayers || {}).filter(
-                            (p) => p.status === 'PRAYED' || p.status === 'PRAYED_ON_TIME'
-                          ).length} / 5 {t.progress.prayersCompletedRecord}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        {PRAYER_IDS.map((p) => {
-                          const status = record.prayers?.[p]?.status || 'PENDING';
-                          return (
-                            <div
-                              key={p}
-                              title={`${p}: ${status}`}
-                              className={`w-2.5 h-2.5 rounded-full ${
-                                status === 'PRAYED_ON_TIME' || status === 'PRAYED' || status === 'PRAYED_LATE'
-                                  ? 'bg-emerald-500'
-                                  : status === 'MADE_UP'
-                                  ? 'bg-sky-500'
-                                  : status === 'MISSED'
-                                  ? 'bg-rose-500'
-                                  : 'bg-slate-300 dark:bg-slate-700'
-                              }`}
-                            />
-                          );
-                        })}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
+          {/* Compact 30-Day Status Pill Strip */}
+          <div className="grid grid-cols-3 gap-1.5 xs:gap-2 sm:gap-3">
+            <div className="p-2 xs:p-2.5 sm:p-3.5 rounded-2xl bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-100 dark:border-emerald-900/40 min-w-0">
+              <span className="text-[10px] xs:text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 block truncate">
+                {t.statuses.PRAYED}
+              </span>
+              <span className="text-base xs:text-lg sm:text-xl font-bold text-emerald-800 dark:text-emerald-200">
+                {stats
+                  ? (stats.counts30d.onTime || 0) + (stats.counts30d.late || 0)
+                  : localOverviewStats.onTime30}
+              </span>
+            </div>
+            <div className="p-2 xs:p-2.5 sm:p-3.5 rounded-2xl bg-sky-50/60 dark:bg-sky-950/20 border border-sky-100 dark:border-sky-900/40 min-w-0">
+              <span className="text-[10px] xs:text-[11px] font-semibold text-sky-700 dark:text-sky-400 block truncate">
+                {t.statuses.MADE_UP}
+              </span>
+              <span className="text-base xs:text-lg sm:text-xl font-bold text-sky-800 dark:text-sky-200">
+                {stats ? stats.counts30d.madeUp || 0 : localOverviewStats.madeUp30}
+              </span>
+            </div>
+            <div className="p-2 xs:p-2.5 sm:p-3.5 rounded-2xl bg-rose-50/60 dark:bg-rose-950/20 border border-rose-100 dark:border-rose-900/40 min-w-0">
+              <span className="text-[10px] xs:text-[11px] font-semibold text-rose-700 dark:text-rose-400 block truncate">
+                {t.statuses.MISSED}
+              </span>
+              <span className="text-base xs:text-lg sm:text-xl font-bold text-rose-800 dark:text-rose-200">
+                {stats ? stats.counts30d.missed || 0 : localOverviewStats.missed30}
+              </span>
             </div>
           </div>
-        )
-      )}
 
-
-      {/* ==================== TAB 3: QAZA & ACCOUNTABILITY ==================== */}
-      {activeTab === 'qaza' && (
-        <div className="space-y-8">
-          {/* ======================================================== */}
-          {/* SECTION A: SPIRITUAL OBLIGATION (QAZA PRAYERS)           */}
-          {/* ======================================================== */}
-          <section className="space-y-4" aria-labelledby="spiritual-section-title">
-            {/* Section Header */}
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-slate-200 dark:border-slate-800 pb-3">
-              <div className="flex items-center gap-2.5">
-                <span className="p-2 rounded-xl bg-sky-50 dark:bg-sky-950/60 text-sky-600 dark:text-sky-400">
-                  <RotateCcw className="w-5 h-5" />
-                </span>
-                <div>
-                  <h2 id="spiritual-section-title" className="text-lg font-bold text-slate-900 dark:text-slate-100">
-                    {t.accountability.spiritualTitle}
-                  </h2>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">
-                    {t.accountability.spiritualDesc}
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* Prominent Educational Notice on Spiritual Makeup */}
-            <div className="p-4 rounded-2xl bg-sky-50/70 dark:bg-sky-950/40 border border-sky-200/70 dark:border-sky-800/60 text-sky-950 dark:text-sky-200 flex items-start gap-3 text-xs leading-relaxed">
-              <Info className="w-5 h-5 text-sky-600 dark:text-sky-400 shrink-0 mt-0.5" />
-              <div className="space-y-1">
-                <span className="font-bold block text-sky-900 dark:text-sky-100">
-                  {t.accountability.qazaRuleNotice}
-                </span>
-                <p className="text-[11px] text-sky-800/80 dark:text-sky-300/80">
-                  {t.accountability.baseRateNote}. {t.accountability.overdueNote}
-                </p>
-              </div>
-            </div>
-
-            {/* Spiritual KPI Banner Card */}
-            <div className="rounded-2xl bg-gradient-to-br from-sky-950 via-slate-900 to-indigo-950 text-white p-4 sm:p-6 shadow-sm border border-sky-900/40 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          {/* Consistency by Prayer */}
+          <div className="rounded-2xl border border-slate-200 bg-white p-3.5 sm:p-5 dark:border-slate-800 dark:bg-slate-900 shadow-2xs space-y-3.5">
+            <div className="flex items-center gap-2">
+              <BarChart3 className="w-4 h-4 text-emerald-600 shrink-0" />
               <div>
-                <span className="text-xs font-semibold uppercase tracking-wider text-sky-400">
-                  {t.accountability.spiritualPendingCount}
-                </span>
-                <div className="flex items-baseline gap-2 mt-1">
-                  {isStatsLoading ? (
-                    <div className="h-9 w-24 bg-white/20 rounded-md animate-pulse" />
-                  ) : (
-                    <>
-                      <span className="text-3xl sm:text-4xl font-black text-white">
-                        {pendingQazaCount}
-                      </span>
-                      <span className="text-xs text-sky-200">
-                        {t.accountability.prayersCount}
-                      </span>
-                    </>
-                  )}
-                </div>
-                <p className="text-xs text-slate-300 mt-2">
-                  {t.progress.missedPrayersCount.replace('{count}', String(pendingQazaCount))}
-                </p>
-              </div>
-
-              {/* Quick payoff insight */}
-              <div className="p-3.5 rounded-xl bg-white/10 border border-white/10 text-xs text-slate-200 max-w-sm">
-                <span className="font-semibold text-white block mb-1 flex items-center gap-1.5">
-                  <Sparkles className="w-4 h-4 text-sky-400 shrink-0" />
-                  <span>{t.progress.calculatorTitle}</span>
-                </span>
-                <p className="text-[11px] text-slate-300">
-                  {t.progress.dailyOneExtra}: <span className="font-bold text-sky-300">{Math.ceil((totalQazaCount || 1) / 1)} {t.progress.daysToComplete}</span>
+                <h2 className="text-sm sm:text-base font-bold text-slate-900 dark:text-slate-100">
+                  {t.progress.consistencyTitle}
+                </h2>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                  {t.progress.consistencySubtitle}
                 </p>
               </div>
             </div>
 
-            {/* Actual Missed Prayers by Prayer (Derived strictly from prayer ledger) */}
-            <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
+            <div className="space-y-3">
               {PRAYER_IDS.map((p) => {
-                const count = historyMissedByPrayer[p] || 0;
-                const isAllCaughtUp = count === 0;
-
+                const item = effectiveBreakdown[p];
+                const pct = item.total > 0 ? Math.round((item.onTime / item.total) * 100) : 0;
                 return (
-                  <div
-                    key={p}
-                    className={`rounded-2xl border p-4 shadow-xs text-center space-y-2.5 transition-all ${
-                      isAllCaughtUp
-                        ? 'border-emerald-200/80 bg-emerald-50/30 dark:border-emerald-900/50 dark:bg-emerald-950/15'
-                        : 'border-rose-200/80 bg-rose-50/30 dark:border-rose-900/50 dark:bg-rose-950/15'
-                    }`}
-                  >
-                    <span className="text-xs font-bold text-slate-700 dark:text-slate-300 capitalize block">
-                      {t.prayers[p]}
-                    </span>
-
-                    {isStatsLoading ? (
-                      <div className="h-8 w-12 bg-slate-200 dark:bg-slate-700 rounded-md animate-pulse mx-auto" />
-                    ) : (
-                      <p className={`text-2xl font-extrabold ${isAllCaughtUp ? 'text-emerald-700 dark:text-emerald-400' : 'text-rose-700 dark:text-rose-400'}`}>
-                        {count}
-                      </p>
-                    )}
-
-                    <span
-                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                        isAllCaughtUp
-                          ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300'
-                          : 'bg-rose-100 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300'
-                      }`}
-                    >
-                      {isAllCaughtUp ? (
-                        <>
-                          <Check className="w-3 h-3 text-emerald-600" />
-                          <span>{t.dashboard.allCaughtUp}</span>
-                        </>
-                      ) : (
-                        <span>{t.accountability.statusMissedNeedsMakeup}</span>
-                      )}
-                    </span>
+                  <div key={p} className="space-y-1">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-semibold text-slate-700 dark:text-slate-300 capitalize">
+                        {t.prayers[p]}
+                      </span>
+                      <span className="font-bold text-slate-900 dark:text-slate-100 tabular-nums">
+                        {pct}% <span className="text-slate-400 font-normal">({item.onTime}/{item.total})</span>
+                      </span>
+                    </div>
+                    <div className="w-full bg-slate-100 dark:bg-slate-800 h-1.5 rounded-full overflow-hidden">
+                      <div
+                        className="bg-emerald-500 h-full rounded-full transition-all duration-500"
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
                   </div>
                 );
               })}
             </div>
+          </div>
+        </div>
+      )}
 
-            {/* Payoff Projection Calculator */}
-            <div className="rounded-2xl border border-slate-200 bg-white p-4.5 sm:p-6 dark:border-slate-800 dark:bg-slate-900 shadow-xs space-y-4">
-              <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-                <Sparkles className="w-4 h-4 text-sky-600 dark:text-sky-400" />
-                <span>{t.progress.calculatorTitle}</span>
-              </h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="p-4 rounded-xl border border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40">
-                  <span className="text-xs text-slate-400 block mb-1">
-                    {t.progress.dailyOneExtra}
+      {/* ==================== TAB 2: INTERACTIVE HISTORY & MONTHLY CALENDAR ==================== */}
+      {activeTab === 'history' && (
+        <div className="space-y-4">
+          <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-800 flex items-center justify-between text-xs text-slate-600 dark:text-slate-400">
+            <div className="flex items-center gap-2">
+              <Info className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>{t.progress.historicalEditNotice}</span>
+            </div>
+          </div>
+
+          {mutationError && (
+            <div
+              role="alert"
+              className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs flex items-center gap-2"
+            >
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{mutationError}</span>
+            </div>
+          )}
+
+          <MonthlyHistoryCalendar
+            selectedDate={selectedDate}
+            onSelectDate={handleSelectDate}
+            records={recordsByDate}
+            onUpdatePrayerStatus={handleHistoricalCorrection}
+            onResetDay={handleResetDay}
+            updatingPrayerKey={updatingPrayerKey}
+            viewYear={viewYear}
+            viewMonth={viewMonth}
+            onChangeMonth={handleChangeMonth}
+            isLoading={loadingHistory}
+            platformStartDate={platformStartDate}
+            timezone={userTimezone}
+            calendarTodayOverride={calendarTodayStr}
+            liturgicalTodayOverride={liturgicalTodayStr}
+          />
+        </div>
+      )}
+
+      {/* ==================== TAB 3: QAZA & ACCOUNTABILITY (Compact Mobile-First) ==================== */}
+      {activeTab === 'qaza' && (
+        <div className="space-y-5">
+          {/* SECTION A: SPIRITUAL QAZA SUMMARY */}
+          <section className="space-y-3" aria-labelledby="spiritual-section-title">
+            <div className="flex items-center gap-2.5">
+              <span className="p-1.5 rounded-xl bg-sky-50 dark:bg-sky-950/60 text-sky-600 dark:text-sky-400">
+                <RotateCcw className="w-4 h-4" />
+              </span>
+              <div>
+                <h2 id="spiritual-section-title" className="text-base font-bold text-slate-900 dark:text-slate-100">
+                  {t.accountability.spiritualTitle}
+                </h2>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                  {t.accountability.spiritualDesc}
+                </p>
+              </div>
+            </div>
+
+            {/* Unified Compact Qaza Hero + Payoff Projection Card */}
+            <div className="rounded-2xl bg-gradient-to-br from-sky-950 via-slate-900 to-indigo-950 text-white p-4 sm:p-5 shadow-sm border border-sky-900/40 space-y-3">
+              <div className="flex flex-col xs:flex-row xs:items-center justify-between gap-2 xs:gap-3">
+                <div>
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-sky-300">
+                    {t.accountability.spiritualPendingCount}
                   </span>
-                  <p className="text-lg font-bold text-sky-600 dark:text-sky-400">
-                    {Math.ceil((totalQazaCount || 1) / 1)} {t.progress.daysToComplete}
-                  </p>
+                  <div className="flex items-baseline gap-2 mt-0.5">
+                    {isStatsLoading ? (
+                      <div className="h-8 w-20 bg-white/20 rounded animate-pulse" />
+                    ) : (
+                      <>
+                        <span className="text-3xl font-black text-white tabular-nums">
+                          {pendingQazaCount}
+                        </span>
+                        <span className="text-xs text-sky-200">{t.accountability.prayersCount}</span>
+                      </>
+                    )}
+                  </div>
                 </div>
-                <div className="p-4 rounded-xl border border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40">
-                  <span className="text-xs text-slate-400 block mb-1">
-                    {t.progress.dailyFiveExtra}
-                  </span>
-                  <p className="text-lg font-bold text-sky-600 dark:text-sky-400">
-                    {Math.ceil((totalQazaCount || 1) / 5)} {t.progress.daysToComplete}
-                  </p>
-                </div>
+
+                {pendingQazaCount > 0 && (
+                  <div className="xs:text-right text-[11px] text-slate-300 space-y-0.5">
+                    <div className="flex items-center xs:justify-end gap-1 text-sky-300 font-semibold">
+                      <Sparkles className="w-3.5 h-3.5 shrink-0" />
+                      <span>{t.progress.calculatorTitle}</span>
+                    </div>
+                    <p>
+                      {t.progress.onePerDayShort}:{' '}
+                      <span className="font-bold text-white">
+                        {totalQazaCount} {t.progress.daysShort}
+                      </span>{' '}
+                      • {t.progress.fivePerDayShort}:{' '}
+                      <span className="font-bold text-white">
+                        {Math.ceil(totalQazaCount / 5)} {t.progress.daysShort}
+                      </span>
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* Compact 5-Prayer Qaza Grid (2-col on mobile, 5-col on sm+) */}
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 pt-2 border-t border-white/10">
+                {PRAYER_IDS.map((p) => {
+                  const count = effectiveMissedByPrayer[p] || 0;
+                  const isClear = count === 0;
+                  return (
+                    <div
+                      key={p}
+                      className={`rounded-xl px-2.5 py-2 flex sm:flex-col items-center justify-between sm:justify-center gap-1 text-center border ${
+                        isClear
+                          ? 'bg-emerald-500/10 border-emerald-400/25 text-emerald-200'
+                          : 'bg-rose-500/15 border-rose-400/30 text-rose-100'
+                      }`}
+                    >
+                      <span className="text-[11px] font-semibold capitalize truncate">
+                        {t.prayers[p]}
+                      </span>
+                      <span
+                        className={`text-sm sm:text-base font-black tabular-nums ${
+                          isClear ? 'text-emerald-300' : 'text-rose-300'
+                        }`}
+                      >
+                        {count}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           </section>
 
-          {/* ======================================================== */}
-          {/* SECTION B: FINANCIAL ACCOUNTABILITY (FINES & SADAQAH)    */}
-          {/* ======================================================== */}
-          <section className="space-y-4 pt-6 border-t border-slate-200 dark:border-slate-800" aria-labelledby="financial-section-title">
-            {/* Section Header */}
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-slate-200 dark:border-slate-800 pb-3">
-              <div className="flex items-center gap-2.5">
-                <span className="p-2 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400">
-                  <Coins className="w-5 h-5" />
+          {/* SECTION B: FINANCIAL ACCOUNTABILITY */}
+          <section className="space-y-3 pt-3 border-t border-slate-200 dark:border-slate-800" aria-labelledby="financial-section-title">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5">
+              <div className="flex items-start gap-2.5 min-w-0">
+                <span className="p-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5">
+                  <Coins className="w-4 h-4" />
                 </span>
-                <div>
-                  <h2 id="financial-section-title" className="text-lg font-bold text-slate-900 dark:text-slate-100">
+                <div className="min-w-0">
+                  <h2 id="financial-section-title" className="text-base font-bold text-slate-900 dark:text-slate-100 leading-snug">
                     {t.accountability.financialTitle}
                   </h2>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">
-                    {t.accountability.financialDesc}
+                  <p className="text-xs text-slate-500 dark:text-slate-400 leading-snug mt-0.5">
+                    {t.accountability.sadaqahNotice}
                   </p>
                 </div>
               </div>
 
-              {/* Donate Sadaqah CTA */}
               <button
                 type="button"
                 onClick={() => setIsPayModalOpen(true)}
                 disabled={fineItems.length === 0 || accountabilityTotal === 0}
-                className="min-h-[44px] px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white text-xs font-bold flex items-center justify-center gap-2 cursor-pointer shadow-xs transition-all disabled:opacity-50 disabled:cursor-not-allowed self-start sm:self-auto"
-                title={t.accountability.donateSadaqah}
+                className="min-h-[40px] px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-all disabled:opacity-50 disabled:cursor-not-allowed shrink-0 self-start sm:self-auto"
               >
                 <HeartHandshake className="w-4 h-4" />
                 <span>{t.accountability.donateSadaqah}</span>
               </button>
             </div>
 
-            {/* Prominent Educational Notice on Sadaqah != Qaza */}
-            <div className="p-4 rounded-2xl bg-amber-50/80 dark:bg-amber-950/40 border border-amber-200/80 dark:border-amber-900/60 text-amber-950 dark:text-amber-200 flex items-start gap-3 text-xs leading-relaxed">
-              <AlertCircle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-              <div className="space-y-1">
-                <p className="font-bold text-amber-900 dark:text-amber-100">
-                  {t.accountability.sadaqahNotice}
-                </p>
-                <p className="text-[11px] text-amber-800/80 dark:text-amber-300/80">
-                  {t.accountability.disclaimer}
-                </p>
-              </div>
-            </div>
-
-            {/* Financial KPI Summary Cards (4-Grid) */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-              {/* Card 1: Total Financial Debt */}
-              <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-slate-900 to-slate-800 text-white border border-slate-700 shadow-xs flex flex-col justify-between">
+            {/* Unified Compact Financial Summary Card */}
+            <div className="rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xs overflow-hidden">
+              <div className="p-4 sm:p-5 bg-gradient-to-br from-slate-900 to-slate-800 text-white flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <span className="text-xs font-semibold uppercase tracking-wider text-emerald-400">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-emerald-400">
                     {t.accountability.totalFinancialDebt}
                   </span>
-                  <div className="mt-1">
-                    {isStatsLoading ? (
-                      <div className="h-8 w-28 bg-white/20 animate-pulse rounded" />
-                    ) : (
-                      <p className="text-2xl font-black text-white">
-                        {formatCurrency(accountabilityTotal, lang)}
-                      </p>
-                    )}
-                  </div>
+                  {isStatsLoading ? (
+                    <div className="h-7 w-28 bg-white/20 animate-pulse rounded mt-1" />
+                  ) : (
+                    <p className="text-2xl font-black text-white mt-0.5 tabular-nums">
+                      {formatCurrency(accountabilityTotal, lang)}
+                    </p>
+                  )}
                 </div>
-                <div className="mt-3 pt-2.5 border-t border-slate-700/60 flex items-center justify-between text-[11px] text-slate-300">
-                  <span>{fineItems.length} {t.accountability.prayersCount}</span>
-                  <span className="text-amber-400 font-semibold">
-                    {t.progress.overduePrayersCount.replace('{count}', String(accountabilityOverdue))}
-                  </span>
+                <div className="text-right text-[11px] text-slate-300">
+                  <p>{fineItems.length} {t.accountability.prayersCount}</p>
+                  {accountabilityOverdue > 0 && (
+                    <p className="text-amber-400 font-semibold">
+                      {t.progress.overduePrayersCount.replace('{count}', String(accountabilityOverdue))}
+                    </p>
+                  )}
                 </div>
               </div>
 
-              {/* Card 2: Base Fines Subtotal */}
-              <div className="p-4 sm:p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col justify-between">
-                <div>
-                  <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+              <div className="grid grid-cols-1 xs:grid-cols-3 divide-y xs:divide-y-0 xs:divide-x divide-slate-100 dark:divide-slate-800 xs:text-center">
+                <div className="p-2.5 sm:p-3 flex xs:block items-center justify-between gap-2 min-w-0">
+                  <span className="text-[10px] text-slate-400 block truncate">
                     {t.accountability.baseFinesSubtotal}
                   </span>
-                  <div className="mt-1">
-                    {isStatsLoading ? (
-                      <div className="h-8 w-24 bg-slate-200 dark:bg-slate-700 animate-pulse rounded" />
-                    ) : (
-                      <p className="text-2xl font-bold text-slate-900 dark:text-slate-100">
-                        {formatCurrency(totalBaseFines, lang)}
-                      </p>
-                    )}
-                  </div>
+                  <span className="text-xs sm:text-sm font-bold text-slate-900 dark:text-slate-100 tabular-nums shrink-0">
+                    {formatCurrency(totalBaseFines, lang)}
+                  </span>
                 </div>
-                <p className="text-[11px] text-slate-400 mt-3 pt-2.5 border-t border-slate-100 dark:border-slate-800">
-                  15 000 UZS / {t.accountability.statusMissedNeedsMakeup}
-                </p>
-              </div>
-
-              {/* Card 3: Overdue Penalties Subtotal */}
-              <div className="p-4 sm:p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col justify-between">
-                <div>
-                  <span className="text-xs font-semibold uppercase tracking-wider text-amber-500">
+                <div className="p-2.5 sm:p-3 flex xs:block items-center justify-between gap-2 min-w-0">
+                  <span className="text-[10px] text-amber-500 block truncate">
                     {t.accountability.overduePenaltiesSubtotal}
                   </span>
-                  <div className="mt-1">
-                    {isStatsLoading ? (
-                      <div className="h-8 w-24 bg-slate-200 dark:bg-slate-700 animate-pulse rounded" />
-                    ) : (
-                      <p className="text-2xl font-bold text-amber-600 dark:text-amber-400">
-                        {formatCurrency(totalOverduePenalties, lang)}
-                      </p>
-                    )}
-                  </div>
+                  <span className="text-xs sm:text-sm font-bold text-amber-600 dark:text-amber-400 tabular-nums shrink-0">
+                    {formatCurrency(totalOverduePenalties, lang)}
+                  </span>
                 </div>
-                <p className="text-[11px] text-slate-400 mt-3 pt-2.5 border-t border-slate-100 dark:border-slate-800">
-                  +15 000 UZS ({accountabilityOverdue > 0 ? t.progress.overduePrayersCount.replace('{count}', String(accountabilityOverdue)) : '0'})
-                </p>
-              </div>
-
-              {/* Card 4: Settled Sadaqah */}
-              <div className="p-4 sm:p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col justify-between">
-                <div>
-                  <span className="text-xs font-semibold uppercase tracking-wider text-emerald-500">
+                <div className="p-2.5 sm:p-3 flex xs:block items-center justify-between gap-2 min-w-0">
+                  <span className="text-[10px] text-emerald-500 block truncate">
                     {t.progress.settledAmount}
                   </span>
-                  <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">
+                  <span className="text-xs sm:text-sm font-bold text-emerald-600 dark:text-emerald-400 tabular-nums shrink-0">
                     {formatCurrency(stats?.accountability?.totalPaidAmount ?? (settledDonations || 0), lang)}
-                  </p>
+                  </span>
                 </div>
-                <p className="text-[11px] text-slate-400 mt-3 pt-2.5 border-t border-slate-100 dark:border-slate-800">
-                  {paymentHistory.length} {t.accountability.paymentHistory.toLowerCase()}
-                </p>
               </div>
             </div>
 
-            {/* Detailed Fine Breakdown Table / Cards */}
-            <div className="rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 shadow-xs p-4.5 sm:p-6 space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
-                <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-                  <span>{t.progress.accountabilityBreakdown}</span>
-                </h3>
-                <span className="text-xs text-slate-400">
-                  {t.accountability.overdueNote}
-                </span>
-              </div>
+            {/* Compact Disclaimer */}
+            <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-snug px-1">
+              {t.progress.finesPolicyNotice} {t.accountability.disclaimer}
+            </p>
+
+            {/* Compact Detailed Fine Breakdown */}
+            <div className="rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 shadow-2xs p-3.5 sm:p-5 space-y-3">
+              <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                {t.progress.accountabilityBreakdown}
+              </h3>
 
               {fineItems.length === 0 ? (
-                <div className="p-8 text-center rounded-xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-100 dark:border-emerald-900/40 text-emerald-800 dark:text-emerald-300 text-xs">
-                  <CheckCircle2 className="w-6 h-6 text-emerald-600 mx-auto mb-2" />
+                <div className="p-6 text-center rounded-xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-100 dark:border-emerald-900/40 text-emerald-800 dark:text-emerald-300 text-xs">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-600 mx-auto mb-1.5" />
                   <p className="font-semibold">{t.progress.noFines}</p>
                 </div>
               ) : (
                 <div className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {fineItems.map((item, idx) => {
+                  {displayedFineItems.map((item, idx) => {
                     const isMadeUp = item.status === 'MADE_UP';
                     return (
                       <div
                         key={`${item.date}-${item.prayerId}-${idx}`}
-                        className="py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3"
+                        className="py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5"
                       >
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-2 flex-wrap">
+                        <div className="space-y-1 min-w-0">
+                          <div className="flex items-center gap-1.5 flex-wrap">
                             <span className="font-bold text-xs text-slate-900 dark:text-slate-100">
                               {item.date}
                             </span>
-                            <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 capitalize">
+                            <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 capitalize">
                               {t.prayers[item.prayerId]}
                             </span>
                             {isMadeUp ? (
-                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-sky-50 dark:bg-sky-950/80 text-sky-800 dark:text-sky-300 border border-sky-200 dark:border-sky-800 flex items-center gap-1">
-                                <Check className="w-3 h-3 text-sky-600 dark:text-sky-400" />
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-sky-50 dark:bg-sky-950/80 text-sky-800 dark:text-sky-300 border border-sky-200 dark:border-sky-800 inline-flex items-center gap-1">
+                                <Check className="w-3 h-3" />
                                 <span>{t.accountability.statusMadeUpSpiritualDone}</span>
                               </span>
                             ) : (
@@ -1464,91 +1445,85 @@ function ProgressContent() {
                               </span>
                             )}
                             {!isMadeUp && item.isOverdue && (
-                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
+                              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-300">
                                 {t.progress.overdueBadge.replace('{days}', String(item.daysPassed))}
                               </span>
                             )}
                           </div>
-
-                          {/* Itemized Calculation */}
-                          <div className="flex items-center gap-2 flex-wrap text-[11px] text-slate-500 dark:text-slate-400">
-                            <span>{formatCurrency(item.baseAmount, lang)} ({t.accountability.baseDebtLabel})</span>
+                          <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                            {formatCurrency(item.baseAmount, lang)}
                             {item.overdueAmount > 0 && (
-                              <>
-                                <span>+</span>
-                                <span className="text-amber-600 dark:text-amber-400 font-semibold">
-                                  {formatCurrency(item.overdueAmount, lang)} ({t.accountability.overduePenaltyLabel})
-                                </span>
-                              </>
+                              <span className="text-amber-600 dark:text-amber-400 font-semibold">
+                                {' '}+ {formatCurrency(item.overdueAmount, lang)}
+                              </span>
                             )}
                           </div>
-
-                          {/* Transparent overdue explanation */}
-                          {!isMadeUp && item.isOverdue && (
-                            <p className="text-[10px] text-amber-700 dark:text-amber-400 flex items-center gap-1 mt-0.5">
-                              <AlertCircle className="w-3 h-3 shrink-0" />
-                              <span>{t.accountability.overdueWhyReason}</span>
-                            </p>
-                          )}
                         </div>
 
-                        <div className="flex items-center justify-between sm:justify-end gap-3 w-full sm:w-auto">
-                          <div className="text-right">
-                            <span className={`text-base font-black ${isMadeUp ? 'text-sky-600 dark:text-sky-400' : 'text-rose-600 dark:text-rose-400'}`}>
-                              {formatCurrency(item.totalAmount, lang)}
-                            </span>
-                            <span className="block text-[10px] text-slate-400">
-                              {t.accountability.totalOutstandingLabel}
-                            </span>
-                          </div>
+                        <div className="flex items-center justify-between sm:justify-end gap-2.5 shrink-0">
+                          <span
+                            className={`text-sm font-black tabular-nums ${
+                              isMadeUp ? 'text-sky-600 dark:text-sky-400' : 'text-rose-600 dark:text-rose-400'
+                            }`}
+                          >
+                            {formatCurrency(item.totalAmount, lang)}
+                          </span>
 
-                          {!isMadeUp ? (
+                          {!isMadeUp && (
                             <button
                               type="button"
                               onClick={() => handleHistoricalCorrection(item.date, item.prayerId, 'MADE_UP')}
-                              className="min-h-[44px] px-3.5 py-2 rounded-xl bg-sky-50 dark:bg-sky-950/60 hover:bg-sky-100 dark:hover:bg-sky-900 text-sky-800 dark:text-sky-300 border border-sky-200/80 dark:border-sky-800/60 text-xs font-semibold cursor-pointer transition-colors duration-150 flex items-center gap-1.5 focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 focus-visible:outline-none shadow-xs active:scale-95"
-                              title={t.accountability.markAsMadeUp}
+                              className="min-h-[36px] px-3 py-1.5 rounded-xl bg-sky-50 dark:bg-sky-950/60 hover:bg-sky-100 dark:hover:bg-sky-900 text-sky-800 dark:text-sky-300 border border-sky-200/80 dark:border-sky-800/60 text-xs font-semibold cursor-pointer transition-colors flex items-center gap-1"
                             >
-                              <RotateCcw className="w-3.5 h-3.5 shrink-0" />
+                              <RotateCcw className="w-3 h-3 shrink-0" />
                               <span>{t.accountability.markAsMadeUp}</span>
                             </button>
-                          ) : (
-                            <span className="min-h-[44px] px-3.5 py-2 rounded-xl bg-sky-50/50 dark:bg-sky-950/40 text-sky-700 dark:text-sky-300 text-xs font-semibold flex items-center gap-1.5 border border-sky-200/50 dark:border-sky-800/50">
-                              <Check className="w-3.5 h-3.5 shrink-0 text-sky-600 dark:text-sky-400" />
-                              <span>{t.accountability.statusMadeUpSpiritualDone}</span>
-                            </span>
                           )}
                         </div>
                       </div>
                     );
                   })}
+
+                  {fineItems.length > 10 && (
+                    <div className="pt-3 flex justify-center">
+                      <button
+                        type="button"
+                        onClick={() => setShowAllFines((prev) => !prev)}
+                        className="min-h-[38px] px-4 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
+                      >
+                        {showAllFines
+                          ? t.progress.showLess
+                          : t.progress.showAllCount.replace('{count}', String(fineItems.length))}
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
 
             {/* Payment History Section */}
-            <div className="rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 shadow-xs p-4.5 sm:p-6 space-y-4">
+            <div className="rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 shadow-2xs p-3.5 sm:p-5 space-y-3">
               <div className="flex items-center justify-between">
-                <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-                  <span>{t.accountability.paymentHistory}</span>
+                <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                  {t.accountability.paymentHistory}
                 </h3>
                 {paymentHistory.length > 0 && (
-                  <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-800/60">
+                  <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-800/60">
                     {paymentHistory.length}
                   </span>
                 )}
               </div>
 
               {loadingPayments ? (
-                <div className="py-8 flex justify-center text-slate-400">
-                  <Loader2 className="w-6 h-6 animate-spin text-emerald-600" />
+                <div className="py-6 flex justify-center text-slate-400">
+                  <Loader2 className="w-5 h-5 animate-spin text-emerald-600" />
                 </div>
               ) : paymentHistory.length === 0 ? (
-                <div className="p-8 text-center rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800 text-slate-500 dark:text-slate-400 text-xs">
+                <div className="p-5 text-center rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800 text-slate-500 dark:text-slate-400 text-xs">
                   <p>{t.accountability.noPaymentsYet}</p>
                 </div>
               ) : (
-                <div className="space-y-2.5">
+                <div className="space-y-2">
                   {paymentHistory.map((receipt) => {
                     const isExpanded = expandedReceiptIds.has(receipt.id);
                     const receiptDate = new Date(receipt.createdAt);
@@ -1568,21 +1543,20 @@ function ProgressContent() {
                     return (
                       <div
                         key={receipt.id}
-                        className="rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-850/60 overflow-hidden transition-all shadow-2xs"
+                        className="rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 overflow-hidden"
                       >
-                        {/* Primary Collapsed Row: ONLY date, amount & chevron */}
                         <button
                           type="button"
                           onClick={() => toggleExpandReceipt(receipt.id)}
-                          className="w-full p-3.5 sm:p-4 flex items-center justify-between text-left cursor-pointer hover:bg-slate-100/60 dark:hover:bg-slate-800/50 transition-colors"
+                          className="w-full p-3 flex items-center justify-between text-left cursor-pointer hover:bg-slate-100/60 dark:hover:bg-slate-800/50 transition-colors"
                           aria-expanded={isExpanded}
                         >
                           <div className="flex items-center gap-2.5">
                             <span className="p-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 shrink-0">
-                              <Coins className="w-4 h-4" />
+                              <Coins className="w-3.5 h-3.5" />
                             </span>
                             <div>
-                              <span className="text-xs sm:text-sm font-semibold text-slate-900 dark:text-slate-100 block">
+                              <span className="text-xs font-semibold text-slate-900 dark:text-slate-100 block">
                                 {formattedDate}
                               </span>
                               <span className="text-[11px] text-slate-400">
@@ -1591,8 +1565,8 @@ function ProgressContent() {
                             </div>
                           </div>
 
-                          <div className="flex items-center gap-3">
-                            <span className="text-sm sm:text-base font-extrabold text-emerald-600 dark:text-emerald-400">
+                          <div className="flex items-center gap-2.5">
+                            <span className="text-sm font-extrabold text-emerald-600 dark:text-emerald-400">
                               {formatCurrency(receipt.totalAmount, lang)}
                             </span>
                             <ChevronDown
@@ -1603,9 +1577,8 @@ function ProgressContent() {
                           </div>
                         </button>
 
-                        {/* Expandable Itemized Details */}
                         {isExpanded && (
-                          <div className="p-3.5 sm:p-4 border-t border-slate-200/70 dark:border-slate-800 space-y-3 bg-white/60 dark:bg-slate-900/40">
+                          <div className="p-3 border-t border-slate-200/70 dark:border-slate-800 space-y-2 bg-white/60 dark:bg-slate-900/40">
                             <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400 pb-1 border-b border-slate-100 dark:border-slate-800">
                               <span>{t.accountability.receiptId}: #{receipt.id.slice(-6).toUpperCase()}</span>
                               <span>{t.dashboard.receiptDetails}</span>
@@ -1633,11 +1606,6 @@ function ProgressContent() {
                                     >
                                       {t.statuses[it.status] || it.status}
                                     </span>
-                                    {it.isOverdue && (
-                                      <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300">
-                                        Overdue
-                                      </span>
-                                    )}
                                   </div>
                                   <span className="font-bold text-slate-800 dark:text-slate-200">
                                     {formatCurrency(it.amount, lang)}
@@ -1663,13 +1631,14 @@ function ProgressContent() {
         </div>
       )}
 
-      {/* Pay Qaza Settlement Modal */}
-      <PayQazaModal
-        isOpen={isPayModalOpen}
-        onClose={() => setIsPayModalOpen(false)}
-        onSuccess={handlePaymentModalSuccess}
-        initialItems={fineItems}
-      />
+      {isPayModalOpen && (
+        <PayQazaModal
+          isOpen={isPayModalOpen}
+          onClose={() => setIsPayModalOpen(false)}
+          onSuccess={handlePaymentModalSuccess}
+          initialItems={fineItems}
+        />
+      )}
     </div>
   );
 }

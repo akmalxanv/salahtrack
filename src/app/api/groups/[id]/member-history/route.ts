@@ -5,6 +5,8 @@ import { Group } from '../../../../../models/Group.ts';
 import { PrayerRecord } from '../../../../../models/Prayer.ts';
 import { authenticateRequest } from '../../../../../lib/auth/index.ts';
 import { consumeRateLimit, createRateLimitKey } from '../../../../../lib/auth/rate-limit.ts';
+import { getCalendarDate, sanitizeTimezone } from '../../../../../lib/prayer-cycle.ts';
+import { isValidCalendarDate } from '../../../prayers/route.ts';
 import type { PrayerId, PrayerStatus } from '../../../../../types/prayer.ts';
 
 const PRAYER_KEYS: PrayerId[] = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
@@ -126,16 +128,39 @@ export async function GET(request: NextRequest, props: RouteContext) {
     const startDateParam = searchParams.get('startDate');
     const endDateParam = searchParams.get('endDate');
 
+    if (startDateParam !== null && !isValidCalendarDate(startDateParam)) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Invalid startDate. Expected valid YYYY-MM-DD calendar date',
+          code: 'INVALID_DATE',
+        },
+        { status: 400 }
+      );
+    }
+
+    if (endDateParam !== null && !isValidCalendarDate(endDateParam)) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Invalid endDate. Expected valid YYYY-MM-DD calendar date',
+          code: 'INVALID_DATE',
+        },
+        { status: 400 }
+      );
+    }
+
+    const timezone = sanitizeTimezone(searchParams.get('timezone') || auth.user.preferences?.timezone);
     const now = new Date();
-    const todayStr = now.toISOString().split('T')[0];
+    const todayStr = getCalendarDate(now, timezone);
     const currentMonthPrefix = todayStr.slice(0, 7);
 
     let startDate: string;
     let endDate: string;
 
-    if (startDateParam && /^\d{4}-\d{2}-\d{2}$/.test(startDateParam)) {
+    if (startDateParam) {
       startDate = startDateParam;
-      if (endDateParam && /^\d{4}-\d{2}-\d{2}$/.test(endDateParam)) {
+      if (endDateParam) {
         endDate = endDateParam;
       } else {
         const [y, m] = startDate.slice(0, 7).split('-').map(Number);
@@ -144,7 +169,7 @@ export async function GET(request: NextRequest, props: RouteContext) {
       }
     } else {
       startDate = `${currentMonthPrefix}-01`;
-      if (endDateParam && /^\d{4}-\d{2}-\d{2}$/.test(endDateParam)) {
+      if (endDateParam) {
         endDate = endDateParam;
       } else {
         const [y, m] = currentMonthPrefix.split('-').map(Number);
@@ -163,7 +188,7 @@ export async function GET(request: NextRequest, props: RouteContext) {
     // Enforce maximum allowable date span to prevent query exhaustion
     const startMs = new Date(startDate).getTime();
     const endMs = new Date(endDate).getTime();
-    if (endMs - startMs > MAX_DATE_RANGE_MS) {
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs - startMs > MAX_DATE_RANGE_MS) {
       return NextResponse.json(
         {
           success: false,

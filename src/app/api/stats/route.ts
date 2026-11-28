@@ -4,7 +4,7 @@ import { PrayerRecord } from '../../../models/Prayer.ts';
 import { QazaPayment } from '../../../models/QazaPayment.ts';
 import { authenticateRequest } from '../../../lib/auth/index.ts';
 import { calculateStreakFromHistory } from '../../../lib/streak.ts';
-import { getLiturgicalDate } from '../../../lib/prayer-cycle.ts';
+import { getLiturgicalDate, sanitizeFajrTime, sanitizeTimezone } from '../../../lib/prayer-cycle.ts';
 import {
   calculateAuthoritativeDebt,
   BASE_PLEDGE_AMOUNT,
@@ -33,10 +33,12 @@ export async function GET(request: NextRequest) {
 
     const { searchParams } = new URL(request.url);
     const clientToday = searchParams.get('today');
-    const timezone = searchParams.get('timezone') || undefined;
+    const isSummary = searchParams.get('summary') === 'true';
+    const fajrTime = sanitizeFajrTime(searchParams.get('fajrTime'));
+    const timezone = sanitizeTimezone(searchParams.get('timezone') || auth.user.preferences?.timezone);
     const todayRegex = /^\d{4}-\d{2}-\d{2}$/;
     const maxAllowedDate = new Date(Date.now() + 14 * 60 * 60 * 1000).toISOString().split('T')[0];
-    let todayStr = getLiturgicalDate(new Date(), undefined, timezone);
+    let todayStr = getLiturgicalDate(new Date(), fajrTime, timezone);
 
     if (clientToday && todayRegex.test(clientToday)) {
       const [y, m, d] = clientToday.split('-').map(Number);
@@ -65,9 +67,14 @@ export async function GET(request: NextRequest) {
       ? (selectedPrayerQuery as { sort: (order: unknown) => unknown }).sort({ date: -1 })
       : selectedPrayerQuery;
 
+    const selectPaymentAmount = (q: unknown) =>
+      typeof (q as { select?: (fields: string) => unknown })?.select === 'function'
+        ? (q as { select: (fields: string) => unknown }).select('totalAmount')
+        : q;
+
     const [allUserRecords, userPayments] = await Promise.all([
       execLean<Array<{ date: string; prayers: Record<PrayerId, { status: PrayerStatus }> }>>(sortedPrayerQuery),
-      execLean<Array<{ totalAmount?: number }>>(QazaPayment.find({ userId: auth.user.id })),
+      execLean<Array<{ totalAmount?: number }>>(selectPaymentAmount(QazaPayment.find({ userId: auth.user.id }))),
     ]);
 
     // In-memory slicing for 7-day and 30-day metrics (eliminates redundant collection scan)
@@ -125,14 +132,42 @@ export async function GET(request: NextRequest) {
       monthlyCompleted += recordCompleted;
     }
 
-    // 3. Streak Calculation
+    // 3. Streak Calculation + All-time Missed By Prayer + 30d Per-Prayer Breakdown
     const recordMap = new Map<string, number>();
+    const missedByPrayer: Record<PrayerId, number> = {
+      fajr: 0,
+      dhuhr: 0,
+      asr: 0,
+      maghrib: 0,
+      isha: 0,
+    };
+    const prayerBreakdown: Record<PrayerId, { onTime: number; missed: number; total: number }> = {
+      fajr: { onTime: 0, missed: 0, total: 0 },
+      dhuhr: { onTime: 0, missed: 0, total: 0 },
+      asr: { onTime: 0, missed: 0, total: 0 },
+      maghrib: { onTime: 0, missed: 0, total: 0 },
+      isha: { onTime: 0, missed: 0, total: 0 },
+    };
+
     for (const rec of allUserRecords) {
       let comp = 0;
+      const isRecent = rec.date >= thirtyDaysAgo && rec.date <= todayStr;
       for (const key of PRAYER_KEYS) {
         const st = rec.prayers[key]?.status;
         if (st === 'PRAYED_ON_TIME' || st === 'PRAYED' || st === 'PRAYED_LATE') {
           comp++;
+          if (isRecent) {
+            prayerBreakdown[key].onTime++;
+            prayerBreakdown[key].total++;
+          }
+        } else if (st === 'MISSED') {
+          missedByPrayer[key]++;
+          if (isRecent) {
+            prayerBreakdown[key].missed++;
+            prayerBreakdown[key].total++;
+          }
+        } else if (st === 'MADE_UP' && isRecent) {
+          prayerBreakdown[key].total++;
         }
       }
       // A day qualifies for streak only when all five daily prayers are completed (comp === 5)
@@ -154,6 +189,7 @@ export async function GET(request: NextRequest) {
       {
         success: true,
         data: {
+          platformStartDate: auth.user.platformStartDate,
           today: {
             completed: todayCompleted,
             totalPossible: 5,
@@ -179,6 +215,8 @@ export async function GET(request: NextRequest) {
             missed: totalMissed30d,
             madeUp: totalMadeUp30d,
           },
+          missedByPrayer,
+          prayerBreakdown,
           streaks: {
             current: streakData.current,
             best: streakData.best,
@@ -201,7 +239,7 @@ export async function GET(request: NextRequest) {
             baseRatePerPrayer: BASE_PLEDGE_AMOUNT,
             overdueRatePerPrayer: OVERDUE_PENALTY_AMOUNT,
             gracePeriodDays: GRACE_PERIOD_DAYS,
-            breakdown: debtResult.items,
+            ...(isSummary ? {} : { breakdown: debtResult.items }),
           },
         },
       },

@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import dynamic from 'next/dynamic';
 import {
   Compass,
   MapPin,
@@ -14,6 +15,7 @@ import {
   Radio,
 } from 'lucide-react';
 import { useLanguage } from '@/context/LanguageContext';
+import PageHeader from '@/components/PageHeader';
 import {
   calculateQiblaBearing,
   calculateDistanceToKaaba,
@@ -28,11 +30,18 @@ import { useDeviceOrientation } from '@/hooks/useDeviceOrientation';
 import { AstrolabeDial } from '@/components/qibla/AstrolabeDial';
 import { SpiritLevel } from '@/components/qibla/SpiritLevel';
 import { TurnGuidanceCard } from '@/components/qibla/TurnGuidanceCard';
-import { CityPickerModal } from '@/components/qibla/CityPickerModal';
-import { CalibrationModal } from '@/components/qibla/CalibrationModal';
 import type { CityPreset } from '@/types/qibla';
 import { saveLocation } from '@/lib/location';
 import { findCityByCoordinates } from '@/lib/cities';
+
+const CityPickerModal = dynamic(
+  () => import('@/components/qibla/CityPickerModal').then((m) => m.CityPickerModal),
+  { ssr: false }
+);
+const CalibrationModal = dynamic(
+  () => import('@/components/qibla/CalibrationModal').then((m) => m.CalibrationModal),
+  { ssr: false }
+);
 
 export default function QiblaPage() {
   const { t, lang } = useLanguage();
@@ -248,43 +257,34 @@ export default function QiblaPage() {
   }, [t.qibla.invalidCoordinates]);
 
   return (
-    <div className="space-y-6 max-w-4xl mx-auto pb-12">
-      {/* Header with Title and Control Triggers */}
-      <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-2 border-b border-slate-200/80 dark:border-slate-800/80">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2.5">
-            <Compass className="w-7 h-7 text-emerald-600 dark:text-emerald-400" />
-            <span>{t.qibla.title}</span>
-          </h1>
-          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-            {t.qibla.subtitle}
-          </p>
-        </div>
+    <div className="space-y-5 sm:space-y-6 pb-8">
+      <PageHeader
+        icon={Compass}
+        title={t.qibla.title}
+        subtitle={t.qibla.subtitle}
+        actions={
+          <>
+            <button
+              type="button"
+              onClick={() => setIsCityPickerOpen(true)}
+              className="min-h-[40px] inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-950/50 dark:text-emerald-300 dark:hover:bg-emerald-900/50 border border-emerald-200 dark:border-emerald-800 transition-colors shadow-xs cursor-pointer"
+            >
+              <MapPin className="w-3.5 h-3.5 shrink-0" />
+              <span className="truncate max-w-[140px] sm:max-w-[180px]">{locationName}</span>
+            </button>
 
-        {/* Action Triggers: City Selector & Calibration */}
-        <div className="flex items-center gap-2 flex-wrap">
-          {/* City Selector Button */}
-          <button
-            type="button"
-            onClick={() => setIsCityPickerOpen(true)}
-            className="inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-950/50 dark:text-emerald-300 dark:hover:bg-emerald-900/50 border border-emerald-200 dark:border-emerald-800 transition-colors shadow-xs cursor-pointer"
-          >
-            <MapPin className="w-3.5 h-3.5 shrink-0" />
-            <span className="truncate max-w-[140px] sm:max-w-[180px]">{locationName}</span>
-          </button>
-
-          {/* Calibration Button */}
-          <button
-            type="button"
-            onClick={() => setIsCalibrationOpen(true)}
-            className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 transition-colors shadow-xs cursor-pointer"
-            aria-label={t.qibla.calibrateButton}
-          >
-            <RotateCw className="w-3.5 h-3.5" />
-            <span className="hidden xs:inline">{t.qibla.calibrateButton}</span>
-          </button>
-        </div>
-      </header>
+            <button
+              type="button"
+              onClick={() => setIsCalibrationOpen(true)}
+              className="min-h-[40px] inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 transition-colors shadow-xs cursor-pointer"
+              aria-label={t.qibla.calibrateButton}
+            >
+              <RotateCw className="w-3.5 h-3.5" />
+              <span className="hidden xs:inline">{t.qibla.calibrateButton}</span>
+            </button>
+          </>
+        }
+      />
 
       {/* Geolocation Notice / Fallback Banner if applicable */}
       {geoError && (

@@ -9,18 +9,220 @@
  */
 
 import type { PrayerId, PrayerItem, PrayerStatus, PrayerHistoryRecord } from '@/types/prayer';
-import { calculateAccountabilityFines } from './accountability.ts';
+import { calculateAccountabilityFines, calculateAccountabilityLedger } from './accountability.ts';
+import { calculateStreakFromHistory } from './streak.ts';
 import { parseDateComponents, formatDateString } from './calendar.ts';
+import { PLATFORM_LAUNCH_DATE, DEFAULT_TIMEZONE } from './prayer-cycle.ts';
+import { getBrowserTimezone } from './location.ts';
 
 export const STORAGE_KEY_DAILY_PRAYERS = 'salahtrack_daily_prayers';
 export const STORAGE_KEY_HISTORY_RECORDS = 'salahtrack_history_records';
 export const STORAGE_KEY_LAST_ACTIVE_DATE = 'salahtrack_last_active_date';
 export const STORAGE_KEY_QAZA_COUNT = 'salahtrack_qaza_count';
 export const STORAGE_KEY_STREAK = 'salahtrack_streak';
+export const STORAGE_KEY_ACCOUNTABILITY_CACHE = 'salahtrack_accountability_cache';
+export const STORAGE_KEY_SETTLED_DONATIONS = 'salahtrack_settled_donations';
+export const STORAGE_KEY_PLATFORM_START_DATE = 'salahtrack_platform_start_date';
+export const STORAGE_KEY_ACTIVE_USER_ID = 'salahtrack_active_user_id';
+export const STORAGE_KEY_PENDING_SYNC_QUEUE = 'salahtrack_pending_sync_queue';
 
 export const ALL_PRAYER_IDS: PrayerId[] = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
 
 export const MAX_COOKIE_BYTE_LENGTH = 2048;
+
+export function resolveEffectiveStartDate(minStartDate?: string): string {
+  if (
+    typeof minStartDate === 'string' &&
+    /^\d{4}-\d{2}-\d{2}$/.test(minStartDate) &&
+    minStartDate > PLATFORM_LAUNCH_DATE
+  ) {
+    return minStartDate;
+  }
+  return PLATFORM_LAUNCH_DATE;
+}
+
+/**
+ * Returns or initializes the persistent start date for guest mode.
+ * Never sets a date earlier than PLATFORM_LAUNCH_DATE and preserves any existing
+ * legitimate records already present in localStorage.
+ */
+export function getOrInitGuestStartDate(activeDate: string): string {
+  if (typeof window === 'undefined') return PLATFORM_LAUNCH_DATE;
+  try {
+    const stored = window.localStorage.getItem(STORAGE_KEY_PLATFORM_START_DATE);
+    if (stored && /^\d{4}-\d{2}-\d{2}$/.test(stored)) {
+      return resolveEffectiveStartDate(stored);
+    }
+
+    const records = getStoredHistoryRecords();
+    const existingDates = Object.keys(records)
+      .filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d) && d >= PLATFORM_LAUNCH_DATE)
+      .sort();
+
+    let candidate = activeDate && /^\d{4}-\d{2}-\d{2}$/.test(activeDate) ? activeDate : PLATFORM_LAUNCH_DATE;
+    if (existingDates.length > 0 && existingDates[0] < candidate) {
+      candidate = existingDates[0];
+    }
+    const effective = resolveEffectiveStartDate(candidate);
+    window.localStorage.setItem(STORAGE_KEY_PLATFORM_START_DATE, effective);
+    return effective;
+  } catch {
+    return PLATFORM_LAUNCH_DATE;
+  }
+}
+
+/**
+ * Isolates cached localStorage prayer data across account switches and logouts.
+ * Prevents User A's cached prayer/streak/accountability data from bleeding into User B's session.
+ */
+export function syncActiveUserContext(nextUserId: string | null): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    const prevUserId = window.localStorage.getItem(STORAGE_KEY_ACTIVE_USER_ID);
+    const normalizedNext = nextUserId || '';
+
+    // Clear user-scoped prayer caches when logging out, switching accounts,
+    // or transitioning from Guest mode into an authenticated user session.
+    const isLoggingOut = Boolean(prevUserId && !normalizedNext);
+    const isSwitchingAccounts = Boolean(prevUserId && normalizedNext && prevUserId !== normalizedNext);
+    const isLoggingInFromGuest = Boolean(!prevUserId && normalizedNext);
+    const shouldClear = isLoggingOut || isSwitchingAccounts || isLoggingInFromGuest;
+
+    if (shouldClear) {
+      window.localStorage.removeItem(STORAGE_KEY_DAILY_PRAYERS);
+      window.localStorage.removeItem(STORAGE_KEY_HISTORY_RECORDS);
+      window.localStorage.removeItem(STORAGE_KEY_LAST_ACTIVE_DATE);
+      window.localStorage.removeItem(STORAGE_KEY_QAZA_COUNT);
+      window.localStorage.removeItem(STORAGE_KEY_STREAK);
+      window.localStorage.removeItem(STORAGE_KEY_ACCOUNTABILITY_CACHE);
+      window.localStorage.removeItem(STORAGE_KEY_SETTLED_DONATIONS);
+      window.localStorage.removeItem(STORAGE_KEY_PLATFORM_START_DATE);
+      window.localStorage.removeItem(STORAGE_KEY_PENDING_SYNC_QUEUE);
+      setClientCookie(STORAGE_KEY_DAILY_PRAYERS, '', 0);
+      setClientCookie(STORAGE_KEY_LAST_ACTIVE_DATE, '', 0);
+      setClientCookie(STORAGE_KEY_QAZA_COUNT, '', 0);
+      setClientCookie(STORAGE_KEY_STREAK, '', 0);
+      dispatchStorageUpdate();
+    }
+
+    if (normalizedNext) {
+      window.localStorage.setItem(STORAGE_KEY_ACTIVE_USER_ID, normalizedNext);
+    } else {
+      window.localStorage.removeItem(STORAGE_KEY_ACTIVE_USER_ID);
+    }
+    return shouldClear;
+  } catch {
+    return false;
+  }
+}
+
+export interface PendingPrayerMutation {
+  date: string;
+  prayerId?: PrayerId;
+  status?: PrayerStatus;
+  prayers?: Partial<Record<PrayerId, PrayerStatus>>;
+  timezone?: string;
+  queuedAt: number;
+}
+
+export function enqueuePendingPrayerMutation(mutation: Omit<PendingPrayerMutation, 'queuedAt'>): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY_PENDING_SYNC_QUEUE);
+    const list: PendingPrayerMutation[] = raw ? JSON.parse(raw) : [];
+    const safeList = Array.isArray(list) ? list : [];
+
+    const filtered = safeList.filter((item) => {
+      if (item.date !== mutation.date) return true;
+      if (mutation.prayers) {
+        // A batch update/reset supersedes prior batch entries and matching prayerIds on the same date
+        if (item.prayers) return false;
+        if (item.prayerId && item.prayerId in mutation.prayers) return false;
+        return true;
+      }
+      // Single prayer mutation supersedes prior single mutations for the same (date, prayerId)
+      return item.prayerId !== mutation.prayerId;
+    });
+
+    filtered.push({ ...mutation, queuedAt: Date.now() });
+    window.localStorage.setItem(STORAGE_KEY_PENDING_SYNC_QUEUE, JSON.stringify(filtered.slice(-100)));
+  } catch {
+    // ignore
+  }
+}
+
+export function getPendingPrayerMutations(): PendingPrayerMutation[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY_PENDING_SYNC_QUEUE);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+export function removePendingPrayerMutation(date: string, prayerId?: PrayerId): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const current = getPendingPrayerMutations();
+    const next = current.filter((m) => {
+      if (m.date !== date) return true;
+      if (prayerId) {
+        return m.prayerId !== prayerId;
+      }
+      // When prayerId is omitted, clear batch entries for this date
+      return !m.prayers;
+    });
+    if (next.length === 0) {
+      window.localStorage.removeItem(STORAGE_KEY_PENDING_SYNC_QUEUE);
+    } else {
+      window.localStorage.setItem(STORAGE_KEY_PENDING_SYNC_QUEUE, JSON.stringify(next));
+    }
+  } catch {
+    // ignore
+  }
+}
+
+export async function flushPendingPrayerMutations(fallbackTimezone?: string): Promise<number> {
+  const queue = getPendingPrayerMutations();
+  if (queue.length === 0) return 0;
+  let synced = 0;
+  for (const item of queue) {
+    try {
+      const resolvedTimezone = item.timezone || fallbackTimezone || getBrowserTimezone() || DEFAULT_TIMEZONE;
+      const payload = item.prayers
+        ? {
+            date: item.date,
+            prayers: item.prayers,
+            timezone: resolvedTimezone,
+          }
+        : {
+            date: item.date,
+            prayerId: item.prayerId,
+            status: item.status,
+            timezone: resolvedTimezone,
+          };
+
+      const res = await fetch('/api/prayers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (res.ok || (res.status >= 400 && res.status < 500 && res.status !== 429)) {
+        removePendingPrayerMutation(item.date, item.prayers ? undefined : item.prayerId);
+        if (res.ok) synced++;
+      } else {
+        // Server error or rate-limit: keep unsynced items intact and retry later
+        break;
+      }
+    } catch {
+      // Still offline; keep unsynced items intact and retry on next online event
+      break;
+    }
+  }
+  return synced;
+}
 
 /**
  * Safely sets an HTTP-accessible client cookie for SSR hydration matching.
@@ -134,17 +336,24 @@ export function mirrorDailyPrayersToHistory(
       const currentEntry = updatedPrayers[prayer.id] || { status: 'PENDING' };
 
       const isCompleted = normalizedStatus === 'PRAYED_ON_TIME' || normalizedStatus === 'PRAYED_LATE';
-      const prayedAt = isCompleted
-        ? currentEntry.prayedAt || prayer.updatedAt || nowIso
-        : currentEntry.prayedAt;
+      const isPending = normalizedStatus === 'PENDING';
+      const prayedAt = isPending
+        ? undefined
+        : isCompleted
+          ? currentEntry.prayedAt || prayer.updatedAt || nowIso
+          : currentEntry.prayedAt;
 
-      const missedAt = normalizedStatus === 'MISSED'
-        ? currentEntry.missedAt || prayer.updatedAt || nowIso
-        : currentEntry.missedAt;
+      const missedAt = isPending
+        ? undefined
+        : normalizedStatus === 'MISSED'
+          ? currentEntry.missedAt || prayer.updatedAt || nowIso
+          : currentEntry.missedAt;
 
-      const madeUpAt = normalizedStatus === 'MADE_UP'
-        ? currentEntry.madeUpAt || prayer.updatedAt || nowIso
-        : currentEntry.madeUpAt;
+      const madeUpAt = isPending
+        ? undefined
+        : normalizedStatus === 'MADE_UP'
+          ? currentEntry.madeUpAt || prayer.updatedAt || nowIso
+          : currentEntry.madeUpAt;
 
       updatedPrayers[prayer.id] = {
         ...currentEntry,
@@ -249,14 +458,22 @@ export function loadPrayersForLiturgicalDate(
 /**
  * Archives a completed liturgical day into salahtrack_history_records.
  * Ensures all 5 prayers exist. Any prayer with status 'PENDING' is converted to 'MISSED'
- * with missedAt timestamp. Recalculates finesAccrued for the completed day.
+ * with missedAt timestamp ONLY when completedDate >= effectiveStartDate (never predating
+ * platform launch or user activation date).
+ * Recalculates finesAccrued for the completed day.
  * Returns { uncompletedCount } representing total uncompleted prayers (converted to MISSED or already MISSED).
  */
 export function archiveLiturgicalDay(
   completedDate: string,
-  prayers: PrayerItem[]
+  prayers: PrayerItem[],
+  minStartDate: string = PLATFORM_LAUNCH_DATE
 ): { uncompletedCount: number } {
   if (typeof window === 'undefined' || !completedDate) {
+    return { uncompletedCount: 0 };
+  }
+
+  const effectiveStartDate = resolveEffectiveStartDate(minStartDate);
+  if (completedDate < effectiveStartDate) {
     return { uncompletedCount: 0 };
   }
 
@@ -327,12 +544,22 @@ export function archiveLiturgicalDay(
 
 /**
  * Catches up multi-day gaps between fromDate and toDate (exclusive).
- * For each intermediate calendar date missing from history, creates a record
- * with all 5 prayers set to status: 'MISSED' and finesAccrued: 75000.
+ * For each intermediate calendar date missing from history (strictly on or after effectiveStartDate),
+ * creates a record with all 5 prayers set to status: 'MISSED' and finesAccrued: 75000.
+ * Never creates missed/Qaza records for dates before minStartDate or PLATFORM_LAUNCH_DATE.
  * Returns total missed prayers created across all intermediate days.
  */
-export function catchupMultiDayGap(fromDate: string, toDate: string): number {
+export function catchupMultiDayGap(
+  fromDate: string,
+  toDate: string,
+  minStartDate: string = PLATFORM_LAUNCH_DATE
+): number {
   if (typeof window === 'undefined' || !fromDate || !toDate || fromDate >= toDate) {
+    return 0;
+  }
+
+  const effectiveStartDate = resolveEffectiveStartDate(minStartDate);
+  if (toDate <= effectiveStartDate) {
     return 0;
   }
 
@@ -345,8 +572,21 @@ export function catchupMultiDayGap(fromDate: string, toDate: string): number {
     const { year: fromY, month: fromM, day: fromD } = parseDateComponents(fromDate);
     let currentUtc = Date.UTC(fromY, fromM - 1, fromD) + 24 * 60 * 60 * 1000;
 
+    // Clamp start to effectiveStartDate so pre-activation days are never processed
+    const { year: startY, month: startM, day: startD } = parseDateComponents(effectiveStartDate);
+    const minStartUtc = Date.UTC(startY, startM - 1, startD);
+    if (currentUtc < minStartUtc) {
+      currentUtc = minStartUtc;
+    }
+
     const { year: toY, month: toM, day: toD } = parseDateComponents(toDate);
     const endUtc = Date.UTC(toY, toM - 1, toD);
+
+    // Safety cap at 365 days to guard against corrupted localStorage dates
+    const maxStartUtc = endUtc - 365 * 24 * 60 * 60 * 1000;
+    if (currentUtc < maxStartUtc) {
+      currentUtc = maxStartUtc;
+    }
 
     const nowIso = new Date().toISOString();
 
@@ -354,7 +594,7 @@ export function catchupMultiDayGap(fromDate: string, toDate: string): number {
       const d = new Date(currentUtc);
       const dateStr = formatDateString(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate());
 
-      if (!records[dateStr]) {
+      if (dateStr >= effectiveStartDate && !records[dateStr]) {
         records[dateStr] = {
           date: dateStr,
           prayers: {
@@ -382,5 +622,113 @@ export function catchupMultiDayGap(fromDate: string, toDate: string): number {
   } catch (err) {
     console.error('Failed to catch up multi-day gap:', err);
     return 0;
+  }
+}
+
+/**
+ * Recomputes and persists qaza count, streak, and accountability cache from stored history records.
+ */
+export function syncDerivedMetricsToStorage(
+  records: Record<string, PrayerHistoryRecord>,
+  referenceDateStr: string
+): void {
+  if (typeof window === 'undefined' || !referenceDateStr) return;
+  try {
+    const ledger = calculateAccountabilityLedger(records, referenceDateStr);
+    const qazaCount = ledger.pendingQazaCount ?? ledger.missedCount;
+    const acct = {
+      totalAmount: ledger.totalAmount,
+      pendingQazaCount: qazaCount,
+    };
+
+    const recordMap = new Map<string, number>();
+    for (const [dateKey, rec] of Object.entries(records)) {
+      if (!rec?.prayers) continue;
+      let completed = 0;
+      for (const pId of ALL_PRAYER_IDS) {
+        const st = rec.prayers[pId]?.status;
+        if (st === 'PRAYED_ON_TIME' || st === 'PRAYED' || st === 'PRAYED_LATE') {
+          completed++;
+        }
+      }
+      recordMap.set(dateKey, completed === 5 ? 5 : 0);
+    }
+    const streakData = calculateStreakFromHistory(recordMap, referenceDateStr);
+
+    const qazaStr = JSON.stringify(qazaCount);
+    const streakStr = JSON.stringify(streakData);
+    window.localStorage.setItem(STORAGE_KEY_QAZA_COUNT, qazaStr);
+    window.localStorage.setItem(STORAGE_KEY_STREAK, streakStr);
+    window.localStorage.setItem(STORAGE_KEY_ACCOUNTABILITY_CACHE, JSON.stringify(acct));
+    setClientCookie(STORAGE_KEY_QAZA_COUNT, qazaStr);
+    setClientCookie(STORAGE_KEY_STREAK, streakStr);
+    dispatchStorageUpdate();
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * Resets all non-paid prayers for a specific date back to PENDING in localStorage.
+ * If resetting a pre-start date results in all 5 prayers being PENDING without notes or payments,
+ * prunes the date key completely so zero ghost indicators remain on pre-start calendar dates.
+ */
+export function resetDateInStoredHistory(
+  targetDate: string,
+  minStartDate?: string
+): Record<string, PrayerHistoryRecord> {
+  if (typeof window === 'undefined' || !targetDate) return {};
+  try {
+    const records = getStoredHistoryRecords();
+    const existing = records[targetDate];
+    if (!existing || !existing.prayers) return records;
+
+    const updatedPrayers = { ...existing.prayers };
+    for (const pId of ALL_PRAYER_IDS) {
+      const entry = updatedPrayers[pId];
+      if (!entry?.isPaid) {
+        updatedPrayers[pId] = {
+          status: 'PENDING',
+          isPaid: false,
+          paidAmount: 0,
+        };
+      }
+    }
+
+    let effectiveStart = PLATFORM_LAUNCH_DATE;
+    if (minStartDate) {
+      effectiveStart = resolveEffectiveStartDate(minStartDate);
+    } else {
+      const storedStart = window.localStorage.getItem(STORAGE_KEY_PLATFORM_START_DATE);
+      if (storedStart) {
+        effectiveStart = resolveEffectiveStartDate(storedStart);
+      }
+    }
+
+    const allResetAndClean = ALL_PRAYER_IDS.every((pId) => {
+      const entry = updatedPrayers[pId];
+      return (
+        (!entry || entry.status === 'PENDING') &&
+        !entry?.isPaid &&
+        !entry?.notes &&
+        !(entry?.paidAmount && entry.paidAmount > 0)
+      );
+    });
+
+    if (targetDate < effectiveStart && allResetAndClean) {
+      delete records[targetDate];
+    } else {
+      records[targetDate] = {
+        ...existing,
+        prayers: updatedPrayers,
+        finesAccrued: calculateAccountabilityFines(targetDate, updatedPrayers),
+        updatedAt: new Date().toISOString(),
+      };
+    }
+
+    saveStoredHistoryRecords(records);
+    return records;
+  } catch {
+    return {};
   }
 }

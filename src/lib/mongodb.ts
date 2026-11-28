@@ -17,20 +17,24 @@ declare global {
   var mongooseCache: MongooseCache | undefined;
 }
 
-const cached: MongooseCache = global.mongooseCache || { conn: null, promise: null };
-
-if (!global.mongooseCache) {
-  global.mongooseCache = cached;
+function getCache(): MongooseCache {
+  if (!global.mongooseCache) {
+    global.mongooseCache = { conn: null, promise: null };
+  }
+  return global.mongooseCache;
 }
+
+// Initialize the global cache on module load so callers/tests inspecting global.mongooseCache see it immediately
+getCache();
 
 /**
  * Singleton database connection helper for MongoDB Atlas.
  * Caches the connection across serverless invocations and hot-reloads.
  */
 export async function connectDB(): Promise<typeof mongoose> {
-  const currentCache = global.mongooseCache || cached;
-  if (currentCache.conn) {
-    return currentCache.conn;
+  const cache = getCache();
+  if (cache.conn) {
+    return cache.conn;
   }
 
   const uri = process.env.MONGODB_URI;
@@ -39,32 +43,41 @@ export async function connectDB(): Promise<typeof mongoose> {
     throw new Error('Please define the MONGODB_URI environment variable inside .env.local');
   }
 
-  if (!cached.promise) {
-    const opts = {
+  if (!cache.promise) {
+    const dbName = process.env.MONGODB_DB_NAME?.trim();
+    const opts: mongoose.ConnectOptions = {
       bufferCommands: false,
       serverSelectionTimeoutMS: 5000,
+      connectTimeoutMS: 5000,
+      socketTimeoutMS: 20000,
+      maxPoolSize: 10,
+      ...(dbName ? { dbName } : {}),
     };
 
-    cached.promise = mongoose.connect(uri, opts).then((mongooseInstance) => {
+    cache.promise = mongoose.connect(uri, opts).then((mongooseInstance) => {
       return mongooseInstance;
     });
   }
 
   try {
-    cached.conn = await cached.promise;
+    cache.conn = await cache.promise;
   } catch (error) {
-    cached.promise = null;
-    cached.conn = null;
+    cache.promise = null;
+    cache.conn = null;
     const err = error as Error & { code?: string | number };
+    const safeMessage =
+      typeof err?.message === 'string'
+        ? err.message.replace(/\/\/([^:]+):([^@]+)@/g, '//***:***@')
+        : 'Unknown connection error';
     console.error('[MongoDB Connection Error]:', {
-      name: err.name || 'Error',
-      message: err.message,
-      code: err.code,
+      name: err?.name || 'Error',
+      message: safeMessage,
+      code: err?.code,
     });
     throw error;
   }
 
-  return cached.conn;
+  return cache.conn;
 }
 
 /**

@@ -25,6 +25,7 @@ import {
   saveStoredHistoryRecords,
   dispatchStorageUpdate,
 } from '@/lib/storage-sync';
+import { invalidateAllPrayerCaches } from '@/lib/prayer-sync-bus';
 
 export type { PayableQazaItem };
 
@@ -278,6 +279,7 @@ export default function PayQazaModal({
       }
 
       // Notify other components & tabs
+      invalidateAllPrayerCaches();
       dispatchStorageUpdate();
 
       setSuccessMessage(t.accountability.paymentSuccess);

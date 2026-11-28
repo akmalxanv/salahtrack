@@ -1,18 +1,46 @@
 'use client';
 
-import React, { createContext, useContext, useCallback, useSyncExternalStore, useEffect } from 'react';
+import React, {
+  createContext,
+  useContext,
+  useCallback,
+  useSyncExternalStore,
+  useEffect,
+  useState,
+} from 'react';
 import {
-  translations,
+  TranslationContent,
   TranslationKey,
   Language,
   STORAGE_KEY,
   FALLBACK_STORAGE_KEY,
   isValidLanguage,
   getStoredLanguage,
-  getTranslations,
-} from '@/locales/translations';
+} from '@/locales/types';
+import { uz } from '@/locales/uz';
 
 export { STORAGE_KEY, FALLBACK_STORAGE_KEY, isValidLanguage, getStoredLanguage };
+
+const localeCache: Partial<Record<Language, TranslationContent>> = {
+  uz,
+};
+
+async function loadLocaleDictionary(targetLang: Language): Promise<TranslationContent> {
+  const cached = localeCache[targetLang];
+  if (cached) return cached;
+
+  if (targetLang === 'ru') {
+    const mod = await import('@/locales/ru');
+    localeCache.ru = mod.ru;
+    return mod.ru;
+  }
+  if (targetLang === 'en') {
+    const mod = await import('@/locales/en');
+    localeCache.en = mod.en;
+    return mod.en;
+  }
+  return uz;
+}
 
 /**
  * Safely writes language selection to both primary and fallback cookies
@@ -62,16 +90,26 @@ function subscribe(callback: () => void) {
 const LanguageContext = createContext<LanguageContextType>({
   lang: 'uz',
   setLang: () => {},
-  t: translations.uz,
+  t: uz,
 });
 
 export const LanguageProvider = ({
   children,
   initialLang = 'uz',
+  initialDict,
 }: {
   children: React.ReactNode;
   initialLang?: Language;
+  initialDict?: TranslationContent;
 }) => {
+  const [dicts, setDicts] = useState<Partial<Record<Language, TranslationContent>>>(() => {
+    if (initialDict && isValidLanguage(initialLang)) {
+      localeCache[initialLang] = initialDict;
+      return { uz, [initialLang]: initialDict };
+    }
+    return { uz };
+  });
+
   const getSnapshot = useCallback((): Language => {
     const saved = getStoredLanguage();
     if (saved && isValidLanguage(saved)) {
@@ -85,6 +123,19 @@ export const LanguageProvider = ({
   }, [initialLang]);
 
   const lang = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+
+  // Dynamically load non-default dictionary when active locale is not yet in state
+  useEffect(() => {
+    if (dicts[lang]) return;
+    let active = true;
+    void loadLocaleDictionary(lang).then((loaded) => {
+      if (!active) return;
+      setDicts((prev) => (prev[lang] === loaded ? prev : { ...prev, [lang]: loaded }));
+    });
+    return () => {
+      active = false;
+    };
+  }, [lang, dicts]);
 
   // Sync cookie so server can pre-render matching language on future reloads
   useEffect(() => {
@@ -110,6 +161,9 @@ export const LanguageProvider = ({
       return;
     }
     try {
+      void loadLocaleDictionary(newLang).then((loaded) => {
+        setDicts((prev) => (prev[newLang] === loaded ? prev : { ...prev, [newLang]: loaded }));
+      });
       writeLanguageStorage(newLang);
       writeLanguageCookies(newLang);
       window.dispatchEvent(new Event('language-change'));
@@ -118,7 +172,9 @@ export const LanguageProvider = ({
     }
   }, []);
 
-  const t: TranslationKey = getTranslations(lang);
+  const fallbackDict =
+    (isValidLanguage(initialLang) ? dicts[initialLang] : undefined) || uz;
+  const t: TranslationKey = dicts[lang] || localeCache[lang] || fallbackDict;
 
   return (
     <LanguageContext.Provider value={{ lang, setLang, t }}>

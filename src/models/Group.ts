@@ -77,8 +77,8 @@ const GroupSchema = new Schema<IGroup>(
   }
 );
 
-// Index to query all groups where a given user is a member
-GroupSchema.index({ 'members.userId': 1 });
+// Compound multikey index for querying a user's circles sorted by creation date (GET /api/groups)
+GroupSchema.index({ 'members.userId': 1, createdAt: -1 });
 
 // A Telegram chat can be bound to at most one SalahTrack group
 GroupSchema.index(

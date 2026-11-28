@@ -19,11 +19,11 @@ import {
   UserPlus,
 } from 'lucide-react';
 import Link from 'next/link';
+import dynamic from 'next/dynamic';
 import { useLocalStorage, useIsMounted } from '@/hooks/useLocalStorage';
 import { useLanguage } from '@/context/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
 import LanguageSelector from '@/components/LanguageSelector';
-import PayQazaModal from '@/components/qaza/PayQazaModal';
 import { PrayerItem, PrayerStatus, PrayerId, StreakData, DEFAULT_STREAK } from '@/types/prayer';
 import { calculateAccountabilityLedger } from '@/lib/accountability';
 import { calculateStreakTransition, evaluateRolloverStreak } from '@/lib/streak';
@@ -40,9 +40,12 @@ import { findCityByCoordinates } from '@/lib/cities';
 import { formatLocalizedDate, formatLocalizedHijriDate, formatCurrency } from '@/lib/formatters';
 import {
   getLiturgicalDate,
+  getZonedDateParts,
   resolvePrayerCycle,
   DEFAULT_FAJR_TIME,
   DEFAULT_ISHA_TIME,
+  DEFAULT_TIMEZONE,
+  PLATFORM_LAUNCH_DATE,
 } from '@/lib/prayer-cycle';
 import {
   saveDailyPrayersSync,
@@ -52,7 +55,17 @@ import {
   mirrorDailyPrayersToHistory,
   getStoredHistoryRecords,
   dispatchStorageUpdate,
+  getOrInitGuestStartDate,
+  enqueuePendingPrayerMutation,
+  removePendingPrayerMutation,
+  flushPendingPrayerMutations,
+  getPendingPrayerMutations,
 } from '@/lib/storage-sync';
+import { invalidateAllPrayerCaches } from '@/lib/prayer-sync-bus';
+
+const PayQazaModal = dynamic(() => import('@/components/qaza/PayQazaModal'), {
+  ssr: false,
+});
 
 export const DEFAULT_PRAYERS: PrayerItem[] = [
   { id: 'fajr', name: 'Fajr', time: '04:47', endTime: '06:19', status: 'PENDING' },
@@ -121,15 +134,11 @@ interface NextPrayerInfo {
   totalSecondsRemaining: number;
 }
 
-function parseTimeToDate(timeStr: string, baseDate: Date, addDays = 0): Date {
-  const [h, m] = timeStr.split(':').map(Number);
-  const d = new Date(baseDate);
-  d.setDate(d.getDate() + addDays);
-  d.setHours(h, m, 0, 0);
-  return d;
-}
-
-function calculateNextPrayerCountdown(prayers: PrayerItem[], now: Date): NextPrayerInfo {
+function calculateNextPrayerCountdown(
+  prayers: PrayerItem[],
+  now: Date,
+  timezone: string = DEFAULT_TIMEZONE
+): NextPrayerInfo {
   if (!prayers || prayers.length === 0) {
     return {
       prayerId: 'fajr',
@@ -143,15 +152,18 @@ function calculateNextPrayerCountdown(prayers: PrayerItem[], now: Date): NextPra
     };
   }
 
-  // Check each prayer today
+  const { hour, minute, second } = getZonedDateParts(now, timezone);
+  const currentTotalSecs = hour * 3600 + minute * 60 + second;
+
+  // Check each prayer today in target timezone
   for (const p of prayers) {
-    const pDate = parseTimeToDate(p.time, now, 0);
-    const diffMs = pDate.getTime() - now.getTime();
-    if (diffMs > 0) {
-      const totalSecs = Math.floor(diffMs / 1000);
-      const hours = Math.floor(totalSecs / 3600);
-      const mins = Math.floor((totalSecs % 3600) / 60);
-      const secs = totalSecs % 60;
+    const [ph, pm] = p.time.split(':').map(Number);
+    const prayerTotalSecs = (isNaN(ph) ? 0 : ph) * 3600 + (isNaN(pm) ? 0 : pm) * 60;
+    const diffSecs = prayerTotalSecs - currentTotalSecs;
+    if (diffSecs > 0) {
+      const hours = Math.floor(diffSecs / 3600);
+      const mins = Math.floor((diffSecs % 3600) / 60);
+      const secs = diffSecs % 60;
       return {
         prayerId: p.id,
         prayerName: p.name,
@@ -160,15 +172,15 @@ function calculateNextPrayerCountdown(prayers: PrayerItem[], now: Date): NextPra
         mins,
         secs,
         isTomorrow: false,
-        totalSecondsRemaining: totalSecs,
+        totalSecondsRemaining: diffSecs,
       };
     }
   }
 
   // All 5 passed for today -> Next is tomorrow's Fajr
-  const tomorrowFajrDate = parseTimeToDate(prayers[0].time, now, 1);
-  const diffMs = tomorrowFajrDate.getTime() - now.getTime();
-  const totalSecs = Math.max(0, Math.floor(diffMs / 1000));
+  const [fh, fm] = prayers[0].time.split(':').map(Number);
+  const fajrTotalSecs = (isNaN(fh) ? 4 : fh) * 3600 + (isNaN(fm) ? 47 : fm) * 60;
+  const totalSecs = Math.max(0, 86400 - currentTotalSecs + fajrTotalSecs);
   const hours = Math.floor(totalSecs / 3600);
   const mins = Math.floor((totalSecs % 3600) / 60);
   const secs = totalSecs % 60;
@@ -202,7 +214,7 @@ const prayerTimesCache = new Map<string, PrayerTimesCacheEntry>();
 const prayerTimesInFlight = new Map<string, Promise<CachedPrayerTimesResponse | null>>();
 const PRAYER_TIMES_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour memory TTL
 
-function getInitialLocationName(userCity?: string): string {
+function getInitialLocationName(userCity?: string, fallbackCity = ''): string {
   if (userCity) {
     const sanitized = sanitizeLocationName(userCity);
     if (sanitized) return sanitized;
@@ -226,7 +238,7 @@ function getInitialLocationName(userCity?: string): string {
       // Storage access blocked or unavailable
     }
   }
-  return 'Tashkent';
+  return fallbackCity;
 }
 
 interface HomeDashboardProps {
@@ -285,6 +297,15 @@ export default function HomeDashboard({
     };
   });
 
+  const [hasLoadedServerStats, setHasLoadedServerStats] = useState<boolean>(() =>
+    Boolean(initialAccountability)
+  );
+  const [prevUserIdForStats, setPrevUserIdForStats] = useState<string | null>(user?.id ?? null);
+  if ((user?.id ?? null) !== prevUserIdForStats) {
+    setPrevUserIdForStats(user?.id ?? null);
+    setHasLoadedServerStats(Boolean(initialAccountability));
+  }
+
   useEffect(() => {
     if (initialAccountability) return;
     queueMicrotask(() => {
@@ -304,18 +325,12 @@ export default function HomeDashboard({
 
   const [historyVersion, setHistoryVersion] = useState(0);
 
-  useEffect(() => {
-    const handleStorageUpdate = () => {
-      setHistoryVersion((v) => v + 1);
-    };
-    window.addEventListener('local-storage-update', handleStorageUpdate);
-    return () => window.removeEventListener('local-storage-update', handleStorageUpdate);
-  }, []);
-
   const lastSyncedKeyRef = useRef<string>('');
   const lastSyncedStatusRef = useRef<'idle' | 'loading' | 'live' | 'error'>('idle');
   const statsDebounceRef = useRef<NodeJS.Timeout | null>(null);
   const prayerAbortControllersRef = useRef<Map<PrayerId, AbortController>>(new Map());
+  const prayerMutationSeqRef = useRef<Map<PrayerId, number>>(new Map());
+  const rolloverInFlightRef = useRef<boolean>(false);
   const prayersRef = useRef<PrayerItem[]>(prayers);
   const lastFocusRefreshRef = useRef<number>(0);
 
@@ -337,7 +352,7 @@ export default function HomeDashboard({
 
   // Location and Prayer API states - initialize deterministically for SSR match
   const [locationName, setLocationName] = useState<string>(() =>
-    user?.preferences?.city ? sanitizeLocationName(user.preferences.city) || 'Tashkent' : 'Tashkent'
+    user?.preferences?.city ? sanitizeLocationName(user.preferences.city) || t.dashboard.location : t.dashboard.location
   );
   const [apiStatus, setApiStatus] = useState<'loading' | 'live' | 'error'>('loading');
 
@@ -360,17 +375,17 @@ export default function HomeDashboard({
   // Synchronize location when component mounts or user preferences load
   useEffect(() => {
     queueMicrotask(() => {
-      const resolved = getInitialLocationName(user?.preferences?.city);
+      const resolved = getInitialLocationName(user?.preferences?.city, t.dashboard.location);
       if (resolved) {
         setLocationName(resolved);
       }
     });
-  }, [user?.preferences?.city]);
+  }, [user?.preferences?.city, t.dashboard.location]);
 
   // Dedicated listener for location changes
   useEffect(() => {
     const handleLocationUpdate = () => {
-      const resolved = getInitialLocationName(user?.preferences?.city);
+      const resolved = getInitialLocationName(user?.preferences?.city, t.dashboard.location);
       if (resolved) {
         setLocationName(resolved);
       }
@@ -382,7 +397,7 @@ export default function HomeDashboard({
       window.removeEventListener(LOCATION_UPDATE_EVENT, handleLocationUpdate);
       window.removeEventListener('storage', handleLocationUpdate);
     };
-  }, [user?.preferences?.city]);
+  }, [user?.preferences?.city, t.dashboard.location]);
   
   // Real-time ticking clock for live countdown and auto-advance
   // Initialized from initialTimeIso from SSR for byte-exact hydration
@@ -408,7 +423,22 @@ export default function HomeDashboard({
     return () => clearInterval(timer);
   }, []);
 
-  // Derive liturgical prayer cycle state dynamically
+  // Derive user timezone cleanly after mount (SSR matches server timezone safely)
+  const activeTimezone = useMemo(() => {
+    if (!isMounted || locationRevision < 0) {
+      return user?.preferences?.timezone || DEFAULT_TIMEZONE;
+    }
+    const stored = readStoredLocation();
+    return (
+      (stored?.updatedAt ? stored.timezone : undefined) ||
+      user?.preferences?.timezone ||
+      stored?.timezone ||
+      getBrowserTimezone() ||
+      DEFAULT_TIMEZONE
+    );
+  }, [isMounted, user?.preferences?.timezone, locationRevision]);
+
+  // Derive liturgical prayer cycle state dynamically in the user's local timezone
   const fajrTime = prayers.find((p) => p.id === 'fajr')?.time || DEFAULT_FAJR_TIME;
   const ishaTime = prayers.find((p) => p.id === 'isha')?.time || DEFAULT_ISHA_TIME;
 
@@ -426,130 +456,141 @@ export default function HomeDashboard({
       fajrTimeStr: fajrTime,
       ishaTimeStr: ishaTime,
       timings: prayerTimings,
+      timezone: activeTimezone,
     });
-  }, [now, fajrTime, ishaTime, prayerTimings]);
+  }, [now, fajrTime, ishaTime, prayerTimings, activeTimezone]);
 
   const activeLiturgicalDate = cycle.liturgicalDate;
 
-
-  // Seed history on initial mount so /progress and /calendar reflect the current liturgical state
+  // Cross-tab & same-tab storage listener
   useEffect(() => {
-    if (!isMounted) return;
-    mirrorDailyPrayersToHistory(activeLiturgicalDate, prayers);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isMounted, activeLiturgicalDate]);
-
-  // Day rollover logic: triggers strictly when active liturgical date advances at Fajr adhan
-  useEffect(() => {
-    if (!isMounted) return;
-
-    if (lastSavedDate && lastSavedDate !== activeLiturgicalDate) {
-      // 1. Archive the completed liturgical day into salahtrack_history_records
-      const { uncompletedCount } = archiveLiturgicalDay(lastSavedDate, prayers);
-
-      // 2. If gap > 1 day, catch up intermediate missing dates
-      const gapMissed = catchupMultiDayGap(lastSavedDate, activeLiturgicalDate);
-
-      // 3. Increment Qaza count by total missed prayers
-      const totalMissed = uncompletedCount + gapMissed;
-      if (totalMissed > 0) {
-        setQazaCount((prev) => prev + totalMissed);
-      }
-
-      // 4. Update consistency streak based on rollover evaluation
-      setStreak((prevStreak) => evaluateRolloverStreak(prevStreak, activeLiturgicalDate));
-
-      // 5. Load fresh prayers for activeLiturgicalDate (or default 5 PENDING)
-      const freshPrayers = loadPrayersForLiturgicalDate(activeLiturgicalDate, DEFAULT_PRAYERS);
-
-      // 6. Update state and save daily prayers sync
-      setPrayers(freshPrayers);
-      setLastSavedDate(activeLiturgicalDate);
-      saveDailyPrayersSync(activeLiturgicalDate, freshPrayers);
-
-      // 7. If user is authenticated, call POST /api/prayers/rollover in background
-      if (user) {
-        fetch('/api/prayers/rollover', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            fromDate: lastSavedDate,
-            toDate: activeLiturgicalDate,
-          }),
-        }).catch((err) => {
-          console.warn('Background rollover sync error:', err);
-        });
-      }
-
-      // 8. Trigger dispatchStorageUpdate so all tabs update
-      dispatchStorageUpdate();
-    }
-  }, [
-    isMounted,
-    user,
-    lastSavedDate,
-    activeLiturgicalDate,
-    prayers,
-    setPrayers,
-    setLastSavedDate,
-    setQazaCount,
-    setStreak,
-  ]);
-
-  // Initial cloud synchronization from MongoDB Atlas if authenticated
-  useEffect(() => {
-    if (!user || !isMounted) return;
-    // Prevent race condition: wait until rollover completes if dates differ
-    if (lastSavedDate !== activeLiturgicalDate) return;
-
-    let isCancelled = false;
-
-    async function syncCloudData() {
-      try {
-        // Reconcile server-side rollover for authenticated user across all devices/sessions
-        try {
-          await fetch('/api/prayers/rollover', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ toDate: activeLiturgicalDate }),
-          });
-        } catch {
-          // Non-blocking background network fallback
+    const handleStorageUpdate = () => {
+      setHistoryVersion((v) => v + 1);
+    };
+    const handleCrossTabStorage = (e: StorageEvent) => {
+      if (
+        e.key === null ||
+        e.key === 'salahtrack_history_records' ||
+        e.key === 'salahtrack_daily_prayers' ||
+        e.key === 'salahtrack_qaza_count' ||
+        e.key === 'salahtrack_streak' ||
+        e.key === 'salahtrack_accountability_cache' ||
+        e.key === 'salahtrack_last_active_date'
+      ) {
+        setHistoryVersion((v) => v + 1);
+        if (e.key === 'salahtrack_history_records' || e.key === null) {
+          const synced = loadPrayersForLiturgicalDate(activeLiturgicalDate, prayersRef.current);
+          prayersRef.current = synced;
+          setPrayers(synced);
         }
+        try {
+          const storedAcct = localStorage.getItem('salahtrack_accountability_cache');
+          if (storedAcct) {
+            const parsed = JSON.parse(storedAcct);
+            if (typeof parsed?.totalAmount === 'number' && typeof parsed?.pendingQazaCount === 'number') {
+              setServerAccountability(parsed);
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
+    };
+    window.addEventListener('local-storage-update', handleStorageUpdate);
+    window.addEventListener('storage', handleCrossTabStorage);
+    return () => {
+      window.removeEventListener('local-storage-update', handleStorageUpdate);
+      window.removeEventListener('storage', handleCrossTabStorage);
+    };
+  }, [activeLiturgicalDate, setPrayers]);
 
-        const res = await fetch(`/api/prayers?date=${activeLiturgicalDate}`);
-        if (!res.ok) return;
-        const json = await res.json();
-        if (isCancelled) return;
+  // Authoritative platform start / activation date for this user (prevents pre-start auto-Qaza)
+  const userStartDate = useMemo(() => {
+    if (user?.platformStartDate) return user.platformStartDate;
+    if (isMounted && !user) {
+      return getOrInitGuestStartDate(activeLiturgicalDate);
+    }
+    return PLATFORM_LAUNCH_DATE;
+  }, [user, isMounted, activeLiturgicalDate]);
 
-        if (json?.success && json?.data?.prayers && !json.data.isNewRecord) {
-          setPrayers((prev) => {
-            const updated = prev.map((item) => {
-              const serverPrayer = json.data.prayers[item.id];
-              if (serverPrayer && serverPrayer.status) {
-                return { ...item, status: serverPrayer.status };
+  // Seed history on mount ONLY when active date already matches lastSavedDate (never copy yesterday onto today)
+  useEffect(() => {
+    if (!isMounted) return;
+    if (!lastSavedDate || lastSavedDate === activeLiturgicalDate) {
+      mirrorDailyPrayersToHistory(activeLiturgicalDate, prayersRef.current);
+      if (!lastSavedDate) {
+        setLastSavedDate(activeLiturgicalDate);
+      }
+    }
+  }, [isMounted, activeLiturgicalDate, lastSavedDate, setLastSavedDate]);
+
+  // Helper to fetch cloud prayers + stats in parallel
+  const syncCloudData = useCallback(
+    async (targetDate: string, isCancelledCheck?: () => boolean) => {
+      if (!user) return;
+
+      // Flush any offline queued mutations first so server reflects latest local edits
+      await flushPendingPrayerMutations(activeTimezone);
+      if (isCancelledCheck?.()) return;
+
+      const currentFajrTime =
+        prayersRef.current.find((p) => p.id === 'fajr')?.time || DEFAULT_FAJR_TIME;
+      const tzQuery = activeTimezone ? `&timezone=${encodeURIComponent(activeTimezone)}` : '';
+      const fajrQuery = `&fajrTime=${encodeURIComponent(currentFajrTime)}`;
+
+      const pendingToday = new Set<PrayerId>();
+      for (const m of getPendingPrayerMutations()) {
+        if (m.date !== targetDate) continue;
+        if (m.prayerId) pendingToday.add(m.prayerId);
+        if (m.prayers) {
+          for (const k of Object.keys(m.prayers) as PrayerId[]) {
+            pendingToday.add(k);
+          }
+        }
+      }
+      for (const inFlightId of prayerAbortControllersRef.current.keys()) {
+        pendingToday.add(inFlightId);
+      }
+
+      const [prayersResult, statsResult] = await Promise.allSettled([
+        fetch(`/api/prayers?date=${targetDate}${tzQuery}${fajrQuery}`),
+        fetch(`/api/stats?today=${targetDate}${tzQuery}${fajrQuery}&summary=true`),
+      ]);
+
+      if (isCancelledCheck?.()) return;
+
+      if (prayersResult.status === 'fulfilled' && prayersResult.value.ok) {
+        try {
+          const json = await prayersResult.value.json();
+          if (!isCancelledCheck?.() && json?.success && json?.data?.prayers) {
+            const serverPrayers = json.data.prayers;
+            const currentPrayers = prayersRef.current;
+            let changed = false;
+            const updated = currentPrayers.map((item) => {
+              if (pendingToday.has(item.id)) return item;
+              const serverPrayer = serverPrayers[item.id];
+              const nextStatus: PrayerStatus = serverPrayer?.status || 'PENDING';
+              if (item.status !== nextStatus) {
+                changed = true;
+                return { ...item, status: nextStatus };
               }
               return item;
             });
-            saveDailyPrayersSync(activeLiturgicalDate, updated);
-            return updated;
-          });
+            if (changed || (json.data.isNewRecord && pendingToday.size === 0)) {
+              prayersRef.current = updated;
+              setPrayers(updated);
+              saveDailyPrayersSync(targetDate, updated);
+            }
+          }
+        } catch (err) {
+          console.warn('Could not parse initial prayers from cloud:', err);
         }
-      } catch (err) {
-        console.warn('Could not sync initial prayers from cloud:', err);
       }
 
-      try {
-        const statsRes = await fetch(`/api/stats?today=${activeLiturgicalDate}`);
-        if (!statsRes.ok) {
-          if (!isCancelled) {
-            setServerAccountability({ totalAmount: 0, pendingQazaCount: 0 });
-          }
-          return;
-        }
-        const statsJson = await statsRes.json();
-        if (!isCancelled) {
-          if (statsJson?.success) {
+      if (statsResult.status === 'fulfilled' && statsResult.value.ok) {
+        try {
+          const statsJson = await statsResult.value.json();
+          if (!isCancelledCheck?.() && statsJson?.success) {
             if (statsJson.data?.streaks) {
               setStreak(statsJson.data.streaks);
             }
@@ -570,48 +611,138 @@ export default function HomeDashboard({
               } catch {
                 // Storage access blocked or quota exceeded
               }
-            } else {
-              setServerAccountability({ totalAmount: 0, pendingQazaCount: 0 });
             }
-          } else {
-            setServerAccountability({ totalAmount: 0, pendingQazaCount: 0 });
           }
-        }
-      } catch (err) {
-        console.warn('Could not sync initial streak stats:', err);
-        if (!isCancelled) {
-          setServerAccountability({ totalAmount: 0, pendingQazaCount: 0 });
+        } catch (err) {
+          console.warn('Could not sync initial streak stats:', err);
         }
       }
-    }
+      if (!isCancelledCheck?.()) {
+        setHasLoadedServerStats(true);
+      }
+    },
+    [user, activeTimezone, setPrayers, setStreak]
+  );
 
-    syncCloudData();
+  // Day rollover logic: triggers strictly when active liturgical date advances past lastSavedDate
+  useEffect(() => {
+    if (!isMounted || rolloverInFlightRef.current) return;
+
+    if (lastSavedDate && lastSavedDate < activeLiturgicalDate) {
+      rolloverInFlightRef.current = true;
+      const prevDate = lastSavedDate;
+      const currentSnapshot = prayersRef.current;
+
+      // 1. Archive the completed liturgical day ONLY if prevDate >= userStartDate
+      const { uncompletedCount } = archiveLiturgicalDay(prevDate, currentSnapshot, userStartDate);
+
+      // 2. Catch up intermediate missing dates strictly on or after userStartDate
+      const gapMissed = catchupMultiDayGap(prevDate, activeLiturgicalDate, userStartDate);
+
+      // 3. Increment Qaza count by total missed prayers generated on/after userStartDate
+      const totalMissed = uncompletedCount + gapMissed;
+      if (totalMissed > 0) {
+        setQazaCount((prev) => prev + totalMissed);
+      }
+
+      // 4. Update consistency streak based on rollover evaluation
+      setStreak((prevStreak) => evaluateRolloverStreak(prevStreak, activeLiturgicalDate));
+
+      // 5. Load fresh prayers for activeLiturgicalDate while keeping today's synced timings
+      const freshBase = currentSnapshot.map((p) => ({ ...p, status: 'PENDING' as PrayerStatus }));
+      const freshPrayers = loadPrayersForLiturgicalDate(activeLiturgicalDate, freshBase);
+
+      // 6. Update state and save daily prayers sync cleanly
+      prayersRef.current = freshPrayers;
+      setPrayers(freshPrayers);
+      setLastSavedDate(activeLiturgicalDate);
+      saveDailyPrayersSync(activeLiturgicalDate, freshPrayers);
+      invalidateAllPrayerCaches();
+      dispatchStorageUpdate();
+
+      // 7. If authenticated, await server rollover FIRST, then refresh cloud data
+      if (user) {
+        void (async () => {
+          try {
+            const currentFajrTime =
+              currentSnapshot.find((p) => p.id === 'fajr')?.time || DEFAULT_FAJR_TIME;
+            await fetch(`/api/prayers/rollover?fajrTime=${encodeURIComponent(currentFajrTime)}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                fromDate: prevDate,
+                toDate: activeLiturgicalDate,
+                timezone: activeTimezone,
+                fajrTime: currentFajrTime,
+              }),
+            });
+            invalidateAllPrayerCaches();
+            await syncCloudData(activeLiturgicalDate);
+          } catch (err) {
+            console.warn('Background rollover sync error:', err);
+          } finally {
+            rolloverInFlightRef.current = false;
+          }
+        })();
+      } else {
+        rolloverInFlightRef.current = false;
+      }
+    } else if (lastSavedDate && lastSavedDate > activeLiturgicalDate) {
+      // Clock/timezone moved backwards across Fajr boundary: switch cleanly without generating missed records
+      const freshBase = prayersRef.current.map((p) => ({ ...p, status: 'PENDING' as PrayerStatus }));
+      const targetPrayers = loadPrayersForLiturgicalDate(activeLiturgicalDate, freshBase);
+      prayersRef.current = targetPrayers;
+      setPrayers(targetPrayers);
+      setLastSavedDate(activeLiturgicalDate);
+      saveDailyPrayersSync(activeLiturgicalDate, targetPrayers);
+    }
+  }, [
+    isMounted,
+    user,
+    lastSavedDate,
+    activeLiturgicalDate,
+    activeTimezone,
+    userStartDate,
+    setPrayers,
+    setLastSavedDate,
+    setQazaCount,
+    setStreak,
+    syncCloudData,
+  ]);
+
+  // Initial cloud synchronization from MongoDB Atlas + online/focus revalidation
+  useEffect(() => {
+    if (!user || !isMounted) return;
+    if (lastSavedDate !== activeLiturgicalDate || rolloverInFlightRef.current) return;
+
+    let isCancelled = false;
+    void syncCloudData(activeLiturgicalDate, () => isCancelled);
 
     const handleRevalidate = () => {
       if (typeof document === 'undefined' || document.visibilityState !== 'visible') return;
-
       const nowTime = Date.now();
-      if (nowTime - lastFocusRefreshRef.current < 15000) {
-        return; // Cooldown throttle (15s)
-      }
+      if (nowTime - lastFocusRefreshRef.current < 15000) return;
       lastFocusRefreshRef.current = nowTime;
 
-      // 1. Advance the live ticking clock (which re-evaluates prayer cycle & triggers rollover if date changed)
       setNow(new Date());
+      void syncCloudData(activeLiturgicalDate, () => isCancelled);
+    };
 
-      // 2. Silently sync cloud data if authenticated
-      syncCloudData();
+    const handleOnline = () => {
+      void syncCloudData(activeLiturgicalDate, () => isCancelled);
     };
 
     window.addEventListener('focus', handleRevalidate);
     document.addEventListener('visibilitychange', handleRevalidate);
+    window.addEventListener('online', handleOnline);
 
     return () => {
       isCancelled = true;
       window.removeEventListener('focus', handleRevalidate);
       document.removeEventListener('visibilitychange', handleRevalidate);
+      window.removeEventListener('online', handleOnline);
     };
-  }, [user, isMounted, lastSavedDate, activeLiturgicalDate, setPrayers, setStreak]);
+  }, [user, isMounted, lastSavedDate, activeLiturgicalDate, syncCloudData]);
 
   // Sighting offset for Hijri date display
   const [hijriAdjustment, setHijriAdjustment] = useState<number>(0);
@@ -949,65 +1080,57 @@ export default function HomeDashboard({
     return () => document.removeEventListener('visibilitychange', checkPosition);
   }, [isMounted, lang, user?.preferences?.latitude, user?.preferences?.longitude]);
 
-  // Live Next Prayer Countdown (calculated dynamically from current ticking time)
-  const nextPrayer = useMemo(() => calculateNextPrayerCountdown(prayers, now), [prayers, now]);
+  // Live Next Prayer Countdown (calculated dynamically from current ticking time in active timezone)
+  const nextPrayer = useMemo(
+    () => calculateNextPrayerCountdown(prayers, now, activeTimezone),
+    [prayers, now, activeTimezone]
+  );
   const nextPrayerItem = useMemo(
     () => prayers.find((p) => p.id === nextPrayer.prayerId),
     [prayers, nextPrayer.prayerId]
   );
 
-  // Status Change Handler with visual save state and backend sync
+  // Status Change Handler with visual save state, race protection, and backend sync
   const handleSetStatus = useCallback(
     async (id: PrayerId, status: PrayerStatus) => {
       const normalizedStatus: PrayerStatus = status === 'PRAYED' ? 'PRAYED_ON_TIME' : status;
       const targetDate = activeLiturgicalDate;
 
-      // Precise optimistic delta calculations:
-      // Qaza count (pending spiritual make-up):
-      // PENDING -> MISSED: +1 Qaza
-      // MISSED -> MADE_UP: -1 Qaza
-      // MADE_UP -> PRAYED_ON_TIME / PENDING: 0 Qaza change
-      // MISSED -> PRAYED_ON_TIME / PENDING: -1 Qaza
       const getQazaValue = (st: PrayerStatus) => (st === 'MISSED' ? 1 : 0);
-
-      // Financial debt:
-      // PENDING -> MISSED: +15,000 UZS debt
-      // MISSED -> MADE_UP: debt remains 15,000 UZS (capped at base, no overdue penalty) (fineDiff = 0)
-      // MADE_UP -> PRAYED_ON_TIME / PENDING: -15,000 UZS debt
-      // MISSED -> PRAYED_ON_TIME / PENDING: -15,000 UZS debt
       const getFineValue = (st: PrayerStatus) => (st === 'MISSED' || st === 'MADE_UP' ? 15000 : 0);
 
-      let qazaDiff = 0;
-      let fineDiff = 0;
+      const previousPrayersSnapshot = prayersRef.current;
+      const oldItem = previousPrayersSnapshot.find((p) => p.id === id);
+      const oldStatus: PrayerStatus = oldItem
+        ? oldItem.status === 'PRAYED'
+          ? 'PRAYED_ON_TIME'
+          : oldItem.status
+        : 'PENDING';
 
-      // 1. Functional state update for 0ms optimistic UI update (prevents stale closure)
-      setPrayers((prev) => {
-        const oldItem = prev.find((p) => p.id === id);
-        const oldStatus = oldItem ? (oldItem.status === 'PRAYED' ? 'PRAYED_ON_TIME' : oldItem.status) : 'PENDING';
+      const qazaDiff = getQazaValue(normalizedStatus) - getQazaValue(oldStatus);
+      const fineDiff = getFineValue(normalizedStatus) - getFineValue(oldStatus);
 
-        qazaDiff = getQazaValue(normalizedStatus) - getQazaValue(oldStatus);
-        fineDiff = getFineValue(normalizedStatus) - getFineValue(oldStatus);
+      const updatedPrayers = previousPrayersSnapshot.map((item) =>
+        item.id === id ? { ...item, status: normalizedStatus, updatedAt: new Date().toISOString() } : item
+      );
+      prayersRef.current = updatedPrayers;
 
-        const updatedPrayers = prev.map((item) =>
-          item.id === id ? { ...item, status: normalizedStatus, updatedAt: new Date().toISOString() } : item
-        );
-        prayersRef.current = updatedPrayers;
+      // 1. Clean pure React state update + side-effects outside updater (StrictMode safe)
+      setPrayers(updatedPrayers);
+      saveDailyPrayersSync(targetDate, updatedPrayers);
+      if (!user) {
+        invalidateAllPrayerCaches();
+      }
 
-        // 2. Synchronize to localStorage, cookie, and mirror to salahtrack_history_records[targetDate]
-        saveDailyPrayersSync(targetDate, updatedPrayers);
-
-        // 3. Optimistic streak transition calculation (strictly 5/5 completed prayers)
-        const isDayCompleted = updatedPrayers.filter(
+      const isDayCompleted =
+        updatedPrayers.filter(
           (p) => p.status === 'PRAYED' || p.status === 'PRAYED_ON_TIME' || p.status === 'PRAYED_LATE'
         ).length === 5;
-        setStreak((prevStreak) => calculateStreakTransition(prevStreak, targetDate, isDayCompleted));
-
-        return updatedPrayers;
-      });
+      setStreak((prevStreak) => calculateStreakTransition(prevStreak, targetDate, isDayCompleted));
 
       setActiveMenuPrayerId(null);
 
-      // 4. Optimistically adjust server accountability (if active)
+      // 2. Optimistically adjust accountability counts
       if (fineDiff !== 0 || qazaDiff !== 0) {
         setServerAccountability((prev) => ({
           totalAmount: Math.max(0, prev.totalAmount + fineDiff),
@@ -1018,7 +1141,10 @@ export default function HomeDashboard({
         setQazaCount((prev) => Math.max(0, prev + qazaDiff));
       }
 
-      // 5. Abort any previous in-flight request for this prayer id to prevent race conditions
+      // 3. Monotonic sequence + AbortController per prayer id
+      const nextSeq = (prayerMutationSeqRef.current.get(id) || 0) + 1;
+      prayerMutationSeqRef.current.set(id, nextSeq);
+
       const priorController = prayerAbortControllersRef.current.get(id);
       if (priorController) {
         priorController.abort();
@@ -1026,11 +1152,11 @@ export default function HomeDashboard({
       const abortController = new AbortController();
       prayerAbortControllersRef.current.set(id, abortController);
 
-      // 6. Set saving status feedback
       setSavingStatus((prev) => ({ ...prev, [id]: 'saving' }));
 
-      // 7. Background sync to MongoDB Atlas if authenticated
       if (user) {
+        const currentFajrTime =
+          updatedPrayers.find((p) => p.id === 'fajr')?.time || DEFAULT_FAJR_TIME;
         try {
           const res = await fetch('/api/prayers', {
             method: 'POST',
@@ -1039,69 +1165,109 @@ export default function HomeDashboard({
               date: targetDate,
               prayerId: id,
               status: normalizedStatus,
+              timezone: activeTimezone,
+              fajrTime: currentFajrTime,
             }),
             signal: abortController.signal,
           });
 
-          if (prayerAbortControllersRef.current.get(id) === abortController) {
-            prayerAbortControllersRef.current.delete(id);
+          if (prayerMutationSeqRef.current.get(id) !== nextSeq) {
+            return;
+          }
+          prayerAbortControllersRef.current.delete(id);
 
-            if (res.ok) {
-              setSavingStatus((prev) => ({ ...prev, [id]: 'saved' }));
-              setTimeout(() => {
-                setSavingStatus((prev) => ({ ...prev, [id]: 'idle' }));
-              }, 2000);
+          if (res.ok) {
+            removePendingPrayerMutation(targetDate, id);
+            invalidateAllPrayerCaches();
+            setSavingStatus((prev) => ({ ...prev, [id]: 'saved' }));
+            setTimeout(() => {
+              setSavingStatus((prev) => ({ ...prev, [id]: 'idle' }));
+            }, 2000);
 
-              // Debounced background sync stats to coalesce rapid multiple prayer updates into a single network call
-              if (statsDebounceRef.current) {
-                clearTimeout(statsDebounceRef.current);
-              }
-              statsDebounceRef.current = setTimeout(async () => {
-                try {
-                  const statsRes = await fetch(`/api/stats?today=${targetDate}`);
-                  if (statsRes.ok) {
-                    const statsJson = await statsRes.json();
-                    if (statsJson?.success) {
-                      if (statsJson.data?.streaks) {
-                        setStreak(statsJson.data.streaks);
-                      }
-                      if (statsJson.data?.accountability) {
-                        const acct = {
-                          totalAmount:
-                            statsJson.data.accountability.totalFinancialDebt ??
-                            statsJson.data.accountability.totalAmount ??
-                            0,
-                          pendingQazaCount:
-                            statsJson.data.accountability.pendingQazaCount ??
-                            statsJson.data.accountability.totalMissed ??
-                            0,
-                        };
-                        setServerAccountability(acct);
-                        try {
-                          localStorage.setItem('salahtrack_accountability_cache', JSON.stringify(acct));
-                        } catch {
-                          // Storage access blocked or quota exceeded
-                        }
+            if (statsDebounceRef.current) {
+              clearTimeout(statsDebounceRef.current);
+            }
+            statsDebounceRef.current = setTimeout(async () => {
+              try {
+                const tzQuery = activeTimezone ? `&timezone=${encodeURIComponent(activeTimezone)}` : '';
+                const fajrQuery = `&fajrTime=${encodeURIComponent(currentFajrTime)}`;
+                const statsRes = await fetch(
+                  `/api/stats?today=${targetDate}${tzQuery}${fajrQuery}&summary=true`
+                );
+                if (statsRes.ok) {
+                  const statsJson = await statsRes.json();
+                  if (statsJson?.success) {
+                    setHasLoadedServerStats(true);
+                    if (statsJson.data?.streaks) {
+                      setStreak(statsJson.data.streaks);
+                    }
+                    if (statsJson.data?.accountability) {
+                      const acct = {
+                        totalAmount:
+                          statsJson.data.accountability.totalFinancialDebt ??
+                          statsJson.data.accountability.totalAmount ??
+                          0,
+                        pendingQazaCount:
+                          statsJson.data.accountability.pendingQazaCount ??
+                          statsJson.data.accountability.totalMissed ??
+                          0,
+                      };
+                      setServerAccountability(acct);
+                      try {
+                        localStorage.setItem('salahtrack_accountability_cache', JSON.stringify(acct));
+                      } catch {
+                        // ignore
                       }
                     }
                   }
-                } catch (statsErr) {
-                  console.warn('Background stats sync error:', statsErr);
                 }
-              }, 600);
-            } else {
-              setSavingStatus((prev) => ({ ...prev, [id]: 'error' }));
-              setTimeout(() => {
-                setSavingStatus((prev) => ({ ...prev, [id]: 'idle' }));
-              }, 3000);
+              } catch (statsErr) {
+                console.warn('Background stats sync error:', statsErr);
+              }
+            }, 500);
+          } else if (res.status >= 400 && res.status < 500 && res.status !== 429) {
+            // Explicit server business rejection (e.g. PAID_PRAYER_LOCKED): revert optimistic state
+            prayersRef.current = previousPrayersSnapshot;
+            setPrayers(previousPrayersSnapshot);
+            saveDailyPrayersSync(targetDate, previousPrayersSnapshot);
+            if (fineDiff !== 0 || qazaDiff !== 0) {
+              setServerAccountability((prev) => ({
+                totalAmount: Math.max(0, prev.totalAmount - fineDiff),
+                pendingQazaCount: Math.max(0, prev.pendingQazaCount - qazaDiff),
+              }));
             }
+            if (qazaDiff !== 0) {
+              setQazaCount((prev) => Math.max(0, prev - qazaDiff));
+            }
+            invalidateAllPrayerCaches();
+            setSavingStatus((prev) => ({ ...prev, [id]: 'error' }));
+            setTimeout(() => {
+              setSavingStatus((prev) => ({ ...prev, [id]: 'idle' }));
+            }, 3000);
+          } else {
+            enqueuePendingPrayerMutation({
+              date: targetDate,
+              prayerId: id,
+              status: normalizedStatus,
+              timezone: activeTimezone,
+            });
+            setSavingStatus((prev) => ({ ...prev, [id]: 'error' }));
+            setTimeout(() => {
+              setSavingStatus((prev) => ({ ...prev, [id]: 'idle' }));
+            }, 3000);
           }
         } catch (err: unknown) {
           if (err instanceof Error && err.name === 'AbortError') {
             return;
           }
-          if (prayerAbortControllersRef.current.get(id) === abortController) {
+          if (prayerMutationSeqRef.current.get(id) === nextSeq) {
             prayerAbortControllersRef.current.delete(id);
+            enqueuePendingPrayerMutation({
+              date: targetDate,
+              prayerId: id,
+              status: normalizedStatus,
+              timezone: activeTimezone,
+            });
             console.warn('Background prayer sync error:', err);
             setSavingStatus((prev) => ({ ...prev, [id]: 'error' }));
             setTimeout(() => {
@@ -1110,14 +1276,13 @@ export default function HomeDashboard({
           }
         }
       } else {
-        // Guest mode local save
         setSavingStatus((prev) => ({ ...prev, [id]: 'saved' }));
         setTimeout(() => {
           setSavingStatus((prev) => ({ ...prev, [id]: 'idle' }));
         }, 1500);
       }
     },
-    [user, activeLiturgicalDate, setPrayers, setStreak, setQazaCount]
+    [user, activeLiturgicalDate, activeTimezone, setPrayers, setStreak, setQazaCount]
   );
 
   // Quick toggle: Tapping a prayer toggles between completed and pending
@@ -1152,7 +1317,7 @@ export default function HomeDashboard({
     };
   }, [isMounted, prayers, historyVersion, activeLiturgicalDate]);
 
-  const isStatsLoading = false;
+  const isStatsLoading = Boolean(user && !hasLoadedServerStats);
 
   const unpaidQazaCount = user
     ? serverAccountability.pendingQazaCount
@@ -1165,10 +1330,17 @@ export default function HomeDashboard({
   const handlePaymentSuccess = useCallback(async () => {
     if (user) {
       try {
-        const statsRes = await fetch(`/api/stats?today=${activeLiturgicalDate}`);
+        const currentFajrTime =
+          prayersRef.current.find((p) => p.id === 'fajr')?.time || DEFAULT_FAJR_TIME;
+        const tzQuery = activeTimezone ? `&timezone=${encodeURIComponent(activeTimezone)}` : '';
+        const fajrQuery = `&fajrTime=${encodeURIComponent(currentFajrTime)}`;
+        const statsRes = await fetch(
+          `/api/stats?today=${activeLiturgicalDate}${tzQuery}${fajrQuery}&summary=true`
+        );
         if (statsRes.ok) {
           const statsJson = await statsRes.json();
           if (statsJson?.success) {
+            setHasLoadedServerStats(true);
             if (statsJson.data?.streaks) {
               setStreak(statsJson.data.streaks);
             }
@@ -1196,7 +1368,7 @@ export default function HomeDashboard({
         console.warn('Failed to refresh stats after payment:', err);
       }
     }
-  }, [user, activeLiturgicalDate, setStreak]);
+  }, [user, activeLiturgicalDate, activeTimezone, setStreak]);
 
   // Daily Obligatory Prayer Performance metrics:
   // Strictly counts original-day performance: on-time or late.
@@ -1227,10 +1399,10 @@ export default function HomeDashboard({
   const ringOffset = ringCircumference - (completedCount / 5) * ringCircumference;
 
   return (
-    <div className="space-y-5 sm:space-y-6">
+    <div className="space-y-4 sm:space-y-6">
       {/* Prominent Guest Mode Banner */}
       {!user && (
-        <div className="relative overflow-hidden rounded-2xl border border-amber-300/80 dark:border-amber-700/60 bg-gradient-to-r from-amber-50 via-amber-50/80 to-amber-100/50 dark:from-amber-950/40 dark:via-amber-950/30 dark:to-amber-900/20 p-4.5 sm:p-5 shadow-xs">
+        <div className="relative overflow-hidden rounded-2xl border border-amber-300/80 dark:border-amber-700/60 bg-gradient-to-r from-amber-50 via-amber-50/80 to-amber-100/50 dark:from-amber-950/40 dark:via-amber-950/30 dark:to-amber-900/20 p-4 sm:p-5 shadow-xs">
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3.5">
             <div className="flex items-start gap-3">
               <div className="w-10 h-10 rounded-xl bg-amber-500/10 dark:bg-amber-500/20 border border-amber-500/30 text-amber-700 dark:text-amber-400 flex items-center justify-center shrink-0 mt-0.5">
@@ -1248,7 +1420,7 @@ export default function HomeDashboard({
               </div>
             </div>
 
-            <div className="flex items-center gap-2 self-start md:self-auto shrink-0 pl-13 md:pl-0">
+            <div className="flex flex-wrap items-center gap-2 self-start md:self-auto shrink-0 pl-0 sm:pl-13 md:pl-0">
               <Link
                 href="/login"
                 className="py-2 px-3.5 rounded-xl bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white text-xs font-semibold shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
@@ -1269,7 +1441,7 @@ export default function HomeDashboard({
       )}
 
       {/* Top Header Bar: Unified, Attractive, and Visually Balanced */}
-      <div className="p-4.5 sm:p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800/90 shadow-2xs">
+      <div className="p-4 sm:p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800/90 shadow-2xs">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           {/* Left: Gregorian & Hijri Date */}
           <div className="space-y-1">
@@ -1284,7 +1456,7 @@ export default function HomeDashboard({
 
             {/* Small, elegant Hijri Date secondary line directly below Gregorian date */}
             {hijriDate && (
-              <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 font-normal flex items-center gap-1.5 pl-7 mt-1">
+              <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 font-normal flex items-center gap-1.5 pl-7 mt-0.5">
                 <Moon className="w-3 h-3 text-emerald-600/70 dark:text-emerald-400/70 shrink-0" />
                 <span>{hijriDate}</span>
               </p>
@@ -1324,13 +1496,13 @@ export default function HomeDashboard({
       {/* ========================================================================= */}
       {/* 2-Column Responsive Header: Next Prayer Card & Daily Completion Progress */}
       {/* ========================================================================= */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-5">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* Card A: Next Prayer Card */}
-        <div className="rounded-2xl bg-gradient-to-br from-slate-900 via-slate-850 to-slate-800 text-white p-5 sm:p-6 shadow-sm border border-slate-700/80 flex flex-col justify-between">
+        <div className="rounded-2xl bg-gradient-to-br from-slate-900 via-slate-850 to-slate-800 text-white p-5 shadow-sm border border-slate-700/80 flex flex-col justify-between">
           <div>
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-2">
-                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-500/20 text-emerald-400">
+            <div className="flex items-center justify-between gap-2 flex-wrap mb-3">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-500/20 text-emerald-400 shrink-0">
                   <Timer className="w-4 h-4" />
                 </div>
                 <span className="text-xs font-semibold uppercase tracking-wider text-slate-300">
@@ -1339,28 +1511,28 @@ export default function HomeDashboard({
               </div>
 
               {/* Authoritative Single City Badge with Live Calculation Indicator */}
-              <div className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full bg-slate-800/90 text-slate-200 border border-slate-700/80 shadow-2xs">
+              <div className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full bg-slate-800/90 text-slate-200 border border-slate-700/80 shadow-2xs max-w-full">
                 <MapPin className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                <span>{locationName}</span>
+                <span className="truncate max-w-[140px] sm:max-w-none">{locationName}</span>
                 {apiStatus === 'live' && (
                   <span
-                    className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"
-                    title="Live calculation"
+                    className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0"
+                    title={t.dashboard.liveCalculation}
                   />
                 )}
                 {apiStatus === 'loading' && (
-                  <Loader2 className="w-3 h-3 text-slate-400 animate-spin" />
+                  <Loader2 className="w-3 h-3 text-slate-400 animate-spin shrink-0" />
                 )}
                 {apiStatus === 'error' && (
                   <span
-                    className="w-1.5 h-1.5 rounded-full bg-rose-400"
+                    className="w-1.5 h-1.5 rounded-full bg-rose-400 shrink-0"
                     title={t.dashboard.apiError}
                   />
                 )}
               </div>
             </div>
 
-            <div className="flex items-baseline justify-between mt-2">
+            <div className="flex items-baseline justify-between gap-2 flex-wrap mt-2">
               <div>
                 <p className="text-2xl font-black tracking-tight text-white">
                   {t.prayers[nextPrayer.prayerId]}
@@ -1402,7 +1574,7 @@ export default function HomeDashboard({
 
           {/* 5-Prayer Progression Schedule Bar at bottom of Card A */}
           <div className="mt-4 pt-3 border-t border-slate-700/60">
-            <div className="grid grid-cols-5 gap-1.5">
+            <div className="grid grid-cols-5 gap-1 sm:gap-1.5">
               {prayers.map((p) => {
                 const isCompleted = p.status === 'PRAYED' || p.status === 'PRAYED_ON_TIME' || p.status === 'PRAYED_LATE';
                 const isNext = p.id === nextPrayer.prayerId;
@@ -1417,7 +1589,7 @@ export default function HomeDashboard({
                           : 'bg-slate-700'
                       }`}
                     />
-                    <span className={`text-[10px] font-semibold block truncate ${
+                    <span className={`text-[9px] xs:text-[10px] font-semibold block truncate ${
                       isNext ? 'text-amber-300 font-bold' : isCompleted ? 'text-emerald-300' : 'text-slate-400'
                     }`}>
                       {t.prayers[p.id]}
@@ -1430,7 +1602,7 @@ export default function HomeDashboard({
         </div>
 
         {/* Card B: Daily Prayer Progress Card (with Visual Progress Ring) */}
-        <div className="rounded-2xl bg-white dark:bg-slate-900 p-5 sm:p-6 shadow-xs border border-slate-200 dark:border-slate-800 flex flex-col justify-between">
+        <div className="rounded-2xl bg-white dark:bg-slate-900 p-5 shadow-xs border border-slate-200 dark:border-slate-800 flex flex-col justify-between">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
               {t.dashboard.dailyProgressTitle}
@@ -1440,7 +1612,7 @@ export default function HomeDashboard({
             </span>
           </div>
 
-          <div className="my-3 flex items-center gap-4 sm:gap-6">
+          <div className="my-3 flex flex-col xs:flex-row items-center gap-3.5 sm:gap-6">
             {/* Visual Streamlined SVG Progress Ring */}
             <div className="relative w-20 h-20 sm:w-24 sm:h-24 shrink-0 flex items-center justify-center">
               <svg className="w-20 h-20 sm:w-24 sm:h-24 -rotate-90 transform" viewBox="0 0 96 96">
@@ -1485,7 +1657,7 @@ export default function HomeDashboard({
             </div>
 
             {/* Structured Visible Status Table */}
-            <div className="flex-1 rounded-2xl border border-slate-200/90 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 overflow-hidden divide-y divide-slate-200/80 dark:divide-slate-800/80 shadow-2xs">
+            <div className="w-full xs:flex-1 rounded-2xl border border-slate-200/90 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 overflow-hidden divide-y divide-slate-200/80 dark:divide-slate-800/80 shadow-2xs">
               {/* Row 1: Prayed & Pending */}
               <div className="grid grid-cols-2 divide-x divide-slate-200/80 dark:divide-slate-800/80">
                 {/* Prayed Cell */}
@@ -1570,7 +1742,7 @@ export default function HomeDashboard({
           </button>
         </div>
 
-        <div className="mt-4 flex items-baseline justify-between">
+        <div className="mt-4 flex flex-wrap items-baseline justify-between gap-3">
           <div>
             <div className="flex items-center gap-2">
               {isStatsLoading ? (
@@ -1581,7 +1753,7 @@ export default function HomeDashboard({
                 </span>
               )}
             </div>
-            <p className="text-xs text-emerald-100 font-medium mt-1">
+            <p className="text-xs text-emerald-100 font-medium mt-0.5">
               {t.accountability.spiritualPendingCount}
             </p>
           </div>
@@ -1593,7 +1765,7 @@ export default function HomeDashboard({
                 {formatCurrency(totalSadaqahOwed, lang)}
               </span>
             )}
-            <p className="text-xs text-emerald-100 font-medium mt-1">
+            <p className="text-xs text-emerald-100 font-medium mt-0.5">
               {t.accountability.totalFinancialDebt}
             </p>
           </div>
@@ -1604,18 +1776,18 @@ export default function HomeDashboard({
       {/* Today's Prayers List (Chronological with instant feedback & status menu)  */}
       {/* ========================================================================= */}
       <div>
-        <div className="flex items-center justify-between mb-3.5 sm:mb-4">
+        <div className="flex items-center justify-between mb-3">
           <div>
             <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">
               {t.dashboard.todayPrayers}
             </h2>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
               {t.dashboard.completedRatio}: {completedCount} / 5
             </p>
           </div>
         </div>
 
-        <div className="space-y-3.5 sm:space-y-4">
+        <div className="space-y-3">
           {prayers.map((prayer) => {
             const config = STATUS_CONFIG[prayer.status];
             const isMenuOpen = activeMenuPrayerId === prayer.id;
@@ -1626,27 +1798,30 @@ export default function HomeDashboard({
             return (
               <div
                 key={prayer.id}
-                onClick={() => {
-                  handleQuickToggle(prayer.id);
-                }}
-                className={`relative rounded-2xl border p-4.5 sm:p-5 transition-all shadow-xs select-none cursor-pointer hover:border-slate-300 dark:hover:border-slate-700 ${config.bgClass} ${config.borderClass}`}
+                className={`relative rounded-2xl border p-3.5 sm:p-4 transition-all shadow-xs select-none hover:border-slate-300 dark:hover:border-slate-700 ${config.bgClass} ${config.borderClass}`}
               >
                 <div className="flex items-center justify-between">
                   {/* Left: Quick toggle button & prayer name */}
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2 sm:gap-3 flex-1 min-w-0">
                     <button
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
                         handleQuickToggle(prayer.id);
                       }}
-                      className="min-h-[44px] min-w-[44px] flex items-center justify-center -ml-2 cursor-pointer focus:outline-hidden"
+                      className="min-h-[44px] min-w-[44px] flex items-center justify-center -ml-2 shrink-0 cursor-pointer focus:outline-hidden"
                       aria-label={`${t.dashboard.markPrayed}: ${prayerLabel}`}
                     >
                       <CheckCircle2 className={`w-6 h-6 transition-transform active:scale-90 ${config.iconClass}`} />
                     </button>
-                    <div>
-                      <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handleQuickToggle(prayer.id);
+                      }}
+                      className="flex-1 min-w-0 text-left py-1 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40 rounded-lg"
+                    >
+                      <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
                         <span className="font-bold text-sm text-slate-900 dark:text-slate-100">
                           {prayerLabel}
                         </span>
@@ -1669,34 +1844,27 @@ export default function HomeDashboard({
                           </span>
                         )}
                       </div>
-                      <div className="flex items-center gap-1.5 text-xs text-slate-400 mt-1">
-                        <Clock className="w-3 h-3" />
+                      <div className="flex items-center gap-1.5 text-xs text-slate-400 mt-0.5">
+                        <Clock className="w-3 h-3 shrink-0" />
                         <span>{prayer.time} – {prayer.endTime}</span>
                       </div>
-                    </div>
+                    </button>
                   </div>
 
                   {/* Right: Status badge & dropdown trigger */}
-                  <div className="flex items-center gap-1.5 sm:gap-2">
-                    <span
-                      role="button"
-                      tabIndex={0}
+                  <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+                    <button
+                      type="button"
                       style={{ cursor: 'pointer' }}
                       onClick={(e) => {
                         e.stopPropagation();
                         setActiveMenuPrayerId(isMenuOpen ? null : prayer.id);
                       }}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          setActiveMenuPrayerId(isMenuOpen ? null : prayer.id);
-                        }
-                      }}
+                      aria-expanded={isMenuOpen}
                       className={`text-[11px] font-semibold px-2.5 py-1 rounded-full border ${config.badgeClass}`}
                     >
                       {statusLabel}
-                    </span>
+                    </button>
 
                     <button
                       type="button"
@@ -1704,7 +1872,8 @@ export default function HomeDashboard({
                         e.stopPropagation();
                         setActiveMenuPrayerId(isMenuOpen ? null : prayer.id);
                       }}
-                      className="min-h-[44px] min-w-[44px] px-2.5 sm:px-3 flex items-center justify-center gap-1 rounded-xl border border-slate-200/90 dark:border-slate-800 bg-slate-50/80 hover:bg-slate-100 dark:bg-slate-800/60 dark:hover:bg-slate-800 text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 cursor-pointer transition-colors focus-visible:outline-hidden"
+                      aria-expanded={isMenuOpen}
+                      className="min-h-[44px] min-w-[44px] px-2 sm:px-3 flex items-center justify-center gap-1 rounded-xl border border-slate-200/90 dark:border-slate-800 bg-slate-50/80 hover:bg-slate-100 dark:bg-slate-800/60 dark:hover:bg-slate-800 text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 cursor-pointer transition-colors focus-visible:outline-hidden"
                       title={t.dashboard.changeStatus}
                       aria-label={t.dashboard.changeStatus}
                     >
@@ -1797,11 +1966,13 @@ export default function HomeDashboard({
       </div>
 
       {/* Pay Qaza Modal */}
-      <PayQazaModal
-        isOpen={isPayModalOpen}
-        onClose={() => setIsPayModalOpen(false)}
-        onSuccess={handlePaymentSuccess}
-      />
+      {isPayModalOpen && (
+        <PayQazaModal
+          isOpen={isPayModalOpen}
+          onClose={() => setIsPayModalOpen(false)}
+          onSuccess={handlePaymentSuccess}
+        />
+      )}
     </div>
   );
 }

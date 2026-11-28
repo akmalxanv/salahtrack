@@ -1,9 +1,11 @@
+import mongoose from 'mongoose';
 import { cookies } from 'next/headers.js';
 import { NextRequest } from 'next/server.js';
 import { connectDB, execLean } from '../mongodb.ts';
 import { User, type IUser } from '../../models/User.ts';
 import { Session, type ISession } from '../../models/Session.ts';
 import { PRIMARY_SESSION_COOKIE, LEGACY_SESSION_COOKIE } from './session.ts';
+import { resolveUserStartDate } from '../prayer-cycle.ts';
 
 /**
  * Sanitized public profile of an authenticated user.
@@ -15,6 +17,7 @@ export interface SafeUser {
   email: string;
   username: string;
   role: 'user' | 'admin';
+  platformStartDate: string;
   preferences: {
     language: 'uz' | 'ru' | 'en';
     showOnLeaderboard: boolean;
@@ -66,12 +69,18 @@ export function invalidateSessionCache(tokenOrUserId?: string): void {
  * Sanitizes a Mongoose User document or lean user record into a SafeUser object.
  */
 export function sanitizeUser(user: IUser | (Partial<IUser> & { _id: { toString(): string } | string })): SafeUser {
+  const createdAt = user.createdAt ? new Date(user.createdAt) : new Date();
   return {
     id: user._id.toString(),
     name: user.name || '',
     email: user.email || '',
     username: user.username || '',
     role: (user.role as 'user' | 'admin') || 'user',
+    platformStartDate: resolveUserStartDate({
+      platformStartDate: user.platformStartDate,
+      createdAt: user.createdAt,
+      timezone: user.preferences?.timezone,
+    }),
     preferences: {
       language: user.preferences?.language || 'uz',
       showOnLeaderboard: Boolean(user.preferences?.showOnLeaderboard),
@@ -80,7 +89,7 @@ export function sanitizeUser(user: IUser | (Partial<IUser> & { _id: { toString()
       longitude: user.preferences?.longitude,
       timezone: user.preferences?.timezone,
     },
-    createdAt: user.createdAt ? new Date(user.createdAt) : new Date(),
+    createdAt,
     updatedAt: user.updatedAt ? new Date(user.updatedAt) : new Date(),
   };
 }
@@ -117,7 +126,50 @@ export async function validateSessionToken(token: string): Promise<AuthContext |
 
   await connectDB();
 
-  const session = await execLean<ISession | null>(Session.findOne({ sessionToken: token }));
+  type PopulatedSessionDoc = Omit<ISession, 'userId'> & {
+    userId: IUser | mongoose.Types.ObjectId | string | null;
+  };
+
+  let session: ISession | null = null;
+  let populatedUser: IUser | null = null;
+  let populatedViaJoin = false;
+
+  // On real Mongoose queries, populate userId in a single DB round trip on cache miss.
+  // Preserve direct fallback for unit test mocks that return plain objects/Promises from Session.findOne.
+  if (Session.findOne === mongoose.Model.findOne) {
+    const sessionQuery = Session.findOne({ sessionToken: token }) as unknown as {
+      populate?: (path: string) => unknown;
+    };
+    if (sessionQuery && typeof sessionQuery.populate === 'function') {
+      const populatedDoc = await execLean<PopulatedSessionDoc | null>(sessionQuery.populate('userId'));
+      if (populatedDoc) {
+        if (
+          populatedDoc.userId &&
+          typeof populatedDoc.userId === 'object' &&
+          '_id' in populatedDoc.userId &&
+          'username' in populatedDoc.userId
+        ) {
+          populatedUser = populatedDoc.userId as IUser;
+          populatedViaJoin = true;
+          session = {
+            ...populatedDoc,
+            userId: populatedUser._id,
+          } as unknown as ISession;
+        } else if (populatedDoc.userId === null) {
+          // Dangling session whose referenced user was deleted
+          populatedViaJoin = true;
+          session = populatedDoc as unknown as ISession;
+        } else {
+          session = populatedDoc as unknown as ISession;
+        }
+      }
+    } else {
+      session = await execLean<ISession | null>(sessionQuery);
+    }
+  } else {
+    session = await execLean<ISession | null>(Session.findOne({ sessionToken: token }));
+  }
+
   if (!session) {
     return null;
   }
@@ -132,7 +184,9 @@ export async function validateSessionToken(token: string): Promise<AuthContext |
   }
 
   // Find user associated with session (passwordHash excluded by default)
-  const user = await execLean<IUser | null>(User.findById(session.userId));
+  const user = populatedViaJoin
+    ? populatedUser
+    : await execLean<IUser | null>(User.findById(session.userId));
   if (!user) {
     // Dangling session for deleted user; clean up
     await Session.deleteOne({ _id: session._id }).catch(() => {});

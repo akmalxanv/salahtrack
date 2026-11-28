@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server.js';
 import { connectDB } from '../../../../lib/mongodb.ts';
 import { User } from '../../../../models/User.ts';
 import { Session } from '../../../../models/Session.ts';
+import { resolveUserStartDate, sanitizeTimezone } from '../../../../lib/prayer-cycle.ts';
 import {
   validateSignupPayload,
   hashPassword,
@@ -60,6 +61,13 @@ export async function POST(request: NextRequest) {
     }
 
     const { name, email, username, password } = validation.data;
+    const rawTimezone =
+      body && typeof body === 'object' && !Array.isArray(body)
+        ? (body as Record<string, unknown>).timezone
+        : undefined;
+    const timezone = sanitizeTimezone(rawTimezone);
+    const hasExplicitValidTimezone =
+      typeof rawTimezone === 'string' && rawTimezone.trim() === timezone;
 
     // 2. Connect to MongoDB
     await connectDB();
@@ -86,15 +94,19 @@ export async function POST(request: NextRequest) {
     // 4. Hash password with Argon2id
     const passwordHash = await hashPassword(password);
 
-    // 5. Persist User in MongoDB Atlas
+    // 5. Persist User in MongoDB Atlas (privacy-by-default & authoritative platformStartDate)
+    const now = new Date();
     const user = await User.create({
       name,
       email,
       username,
       passwordHash,
       role: 'user',
+      platformStartDate: resolveUserStartDate({ createdAt: now, timezone }),
       preferences: {
         language: 'uz',
+        showOnLeaderboard: false,
+        ...(hasExplicitValidTimezone ? { timezone } : {}),
       },
     });
 

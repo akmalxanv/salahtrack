@@ -1,9 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server.js';
+import mongoose from 'mongoose';
 import { connectDB, execLean } from '../../../lib/mongodb.ts';
 import { PrayerRecord, type IPrayerRecord } from '../../../models/Prayer.ts';
 import { authenticateRequest } from '../../../lib/auth/index.ts';
-import { getLiturgicalDate } from '../../../lib/prayer-cycle.ts';
+import {
+  getLiturgicalDate,
+  isPreStartDate,
+  resolveUserStartDate,
+  sanitizeFajrTime,
+  sanitizeTimezone,
+} from '../../../lib/prayer-cycle.ts';
 import { ensureUserRolledOver } from '../../../lib/prayer-rollover.ts';
+import { clearLeaderboardCache } from '../leaderboard/route.ts';
 import type { PrayerId, PrayerStatus } from '../../../types/prayer.ts';
 
 const VALID_PRAYER_IDS: PrayerId[] = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
@@ -86,16 +94,13 @@ export async function GET(request: NextRequest) {
 
     const { searchParams } = new URL(request.url);
     const dateParam = searchParams.get('date');
-    const timezoneParam = searchParams.get('timezone') || undefined;
-    const currentLiturgicalDate = getLiturgicalDate(new Date(), undefined, timezoneParam);
+    const fajrTime = sanitizeFajrTime(searchParams.get('fajrTime'));
+    const timezoneParam = sanitizeTimezone(searchParams.get('timezone') || auth.user.preferences?.timezone);
     const targetDate = dateParam && isValidCalendarDate(dateParam)
       ? dateParam
-      : currentLiturgicalDate;
+      : getLiturgicalDate(new Date(), fajrTime, timezoneParam);
 
     await connectDB();
-
-    // Auto-rollover uncompleted past prayers before returning
-    await ensureUserRolledOver(auth.user.id, currentLiturgicalDate, { timezone: timezoneParam, fillGapDays: true });
 
     const record = await execLean<IPrayerRecord | null>(
       PrayerRecord.findOne({
@@ -177,12 +182,18 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { date, prayerId, status, prayers: batchPrayers, notes, timezone } = body;
+    const { date, prayerId, status, prayers: batchPrayers, notes, timezone, fajrTime: rawFajrTime } = body;
+    const resolvedTimezone = sanitizeTimezone(
+      typeof timezone === 'string' ? timezone : auth.user.preferences?.timezone
+    );
+    const fajrTime = sanitizeFajrTime(
+      rawFajrTime ?? new URL(request.url).searchParams.get('fajrTime')
+    );
 
     // Resolve date: use client-supplied date if provided, otherwise resolve via liturgical date
     const targetDate = typeof date === 'string' && date.trim().length > 0
       ? date.trim()
-      : getLiturgicalDate(new Date(), undefined, timezone);
+      : getLiturgicalDate(new Date(), fajrTime, resolvedTimezone);
 
     // Strict validation: enforce valid calendar date (YYYY-MM-DD)
     if (!targetDate || typeof targetDate !== 'string' || !isValidCalendarDate(targetDate)) {
@@ -287,6 +298,7 @@ export async function POST(request: NextRequest) {
     };
 
     const setFields: Record<string, unknown> = {};
+    const unsetFields: Record<string, 1> = {};
     const setOnInsert: Record<string, unknown> = {
       userId: auth.user.id,
       date: targetDate,
@@ -295,19 +307,32 @@ export async function POST(request: NextRequest) {
 
     const sanitizedNotes = sanitizeNotes(notes);
 
+    const applyStatusMutation = (pId: PrayerId, norm: PrayerStatus) => {
+      setFields[`prayers.${pId}.status`] = norm;
+      if (norm === 'PRAYED_ON_TIME' || norm === 'PRAYED_LATE') {
+        setFields[`prayers.${pId}.prayedAt`] = now;
+        unsetFields[`prayers.${pId}.missedAt`] = 1;
+        unsetFields[`prayers.${pId}.madeUpAt`] = 1;
+      } else if (norm === 'MISSED') {
+        setFields[`prayers.${pId}.missedAt`] = now;
+        unsetFields[`prayers.${pId}.prayedAt`] = 1;
+        unsetFields[`prayers.${pId}.madeUpAt`] = 1;
+      } else if (norm === 'MADE_UP') {
+        setFields[`prayers.${pId}.madeUpAt`] = now;
+        unsetFields[`prayers.${pId}.prayedAt`] = 1;
+      } else if (norm === 'PENDING') {
+        unsetFields[`prayers.${pId}.prayedAt`] = 1;
+        unsetFields[`prayers.${pId}.missedAt`] = 1;
+        unsetFields[`prayers.${pId}.madeUpAt`] = 1;
+      }
+    };
+
     if (isBatch && typeof batchPrayers === 'object') {
       for (const pId of VALID_PRAYER_IDS) {
         const pStatus = batchPrayers[pId];
         if (pStatus && VALID_STATUSES.includes(pStatus as PrayerStatus)) {
           const norm: PrayerStatus = pStatus === 'PRAYED' ? 'PRAYED_ON_TIME' : pStatus;
-          setFields[`prayers.${pId}.status`] = norm;
-          if (norm === 'PRAYED_ON_TIME' || norm === 'PRAYED_LATE') {
-            setFields[`prayers.${pId}.prayedAt`] = now;
-          } else if (norm === 'MISSED') {
-            setFields[`prayers.${pId}.missedAt`] = now;
-          } else if (norm === 'MADE_UP') {
-            setFields[`prayers.${pId}.madeUpAt`] = now;
-          }
+          applyStatusMutation(pId, norm);
         }
       }
       for (const p of VALID_PRAYER_IDS) {
@@ -320,14 +345,7 @@ export async function POST(request: NextRequest) {
       }
     } else if (prayerId && status) {
       const normalizedStatus: PrayerStatus = status === 'PRAYED' ? 'PRAYED_ON_TIME' : status;
-      setFields[`prayers.${prayerId}.status`] = normalizedStatus;
-      if (normalizedStatus === 'PRAYED_ON_TIME' || normalizedStatus === 'PRAYED_LATE') {
-        setFields[`prayers.${prayerId}.prayedAt`] = now;
-      } else if (normalizedStatus === 'MISSED') {
-        setFields[`prayers.${prayerId}.missedAt`] = now;
-      } else if (normalizedStatus === 'MADE_UP') {
-        setFields[`prayers.${prayerId}.madeUpAt`] = now;
-      }
+      applyStatusMutation(prayerId as PrayerId, normalizedStatus);
 
       if (sanitizedNotes !== undefined) {
         setFields[`prayers.${prayerId}.notes`] = sanitizedNotes;
@@ -340,9 +358,10 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const updateQuery = {
+    const updateQuery: Record<string, unknown> = {
       $set: setFields,
       $setOnInsert: setOnInsert,
+      ...(Object.keys(unsetFields).length > 0 ? { $unset: unsetFields } : {}),
     };
 
     let record: IPrayerRecord | null = null;
@@ -358,9 +377,13 @@ export async function POST(request: NextRequest) {
         const err = upsertError as { code?: number; message?: string };
         if (err?.code === 11000 || (typeof err?.message === 'string' && err.message.includes('11000'))) {
           // Concurrency retry on E11000 duplicate key race: document was just inserted by concurrent request, so update existing
+          const retryUpdate: Record<string, unknown> = {
+            $set: setFields,
+            ...(Object.keys(unsetFields).length > 0 ? { $unset: unsetFields } : {}),
+          };
           record = await PrayerRecord.findOneAndUpdate(
             filter,
-            { $set: setFields },
+            retryUpdate,
             { new: true }
           );
         } else {
@@ -383,23 +406,36 @@ export async function POST(request: NextRequest) {
           },
         });
       }
+      const applyMockStatus = (pId: PrayerId, norm: PrayerStatus) => {
+        rec!.prayers[pId].status = norm;
+        if (norm === 'PRAYED_ON_TIME' || norm === 'PRAYED_LATE') {
+          rec!.prayers[pId].prayedAt = now;
+          rec!.prayers[pId].missedAt = undefined;
+          rec!.prayers[pId].madeUpAt = undefined;
+        } else if (norm === 'MISSED') {
+          rec!.prayers[pId].missedAt = now;
+          rec!.prayers[pId].prayedAt = undefined;
+          rec!.prayers[pId].madeUpAt = undefined;
+        } else if (norm === 'MADE_UP') {
+          rec!.prayers[pId].madeUpAt = now;
+          rec!.prayers[pId].prayedAt = undefined;
+        } else if (norm === 'PENDING') {
+          rec!.prayers[pId].prayedAt = undefined;
+          rec!.prayers[pId].missedAt = undefined;
+          rec!.prayers[pId].madeUpAt = undefined;
+        }
+      };
       if (isBatch && typeof batchPrayers === 'object') {
         for (const pId of VALID_PRAYER_IDS) {
           const pStatus = batchPrayers[pId];
           if (pStatus && VALID_STATUSES.includes(pStatus as PrayerStatus)) {
             const norm: PrayerStatus = pStatus === 'PRAYED' ? 'PRAYED_ON_TIME' : pStatus;
-            rec.prayers[pId].status = norm;
-            if (norm === 'PRAYED_ON_TIME' || norm === 'PRAYED_LATE') rec.prayers[pId].prayedAt = now;
-            else if (norm === 'MISSED') rec.prayers[pId].missedAt = now;
-            else if (norm === 'MADE_UP') rec.prayers[pId].madeUpAt = now;
+            applyMockStatus(pId, norm);
           }
         }
       } else if (prayerId && status) {
         const normalizedStatus: PrayerStatus = status === 'PRAYED' ? 'PRAYED_ON_TIME' : status;
-        rec.prayers[prayerId as PrayerId].status = normalizedStatus;
-        if (normalizedStatus === 'PRAYED_ON_TIME' || normalizedStatus === 'PRAYED_LATE') rec.prayers[prayerId as PrayerId].prayedAt = now;
-        else if (normalizedStatus === 'MISSED') rec.prayers[prayerId as PrayerId].missedAt = now;
-        else if (normalizedStatus === 'MADE_UP') rec.prayers[prayerId as PrayerId].madeUpAt = now;
+        applyMockStatus(prayerId as PrayerId, normalizedStatus);
         if (sanitizedNotes !== undefined) {
           rec.prayers[prayerId as PrayerId].notes = sanitizedNotes;
         }
@@ -409,7 +445,58 @@ export async function POST(request: NextRequest) {
       record = rec;
     }
 
+    clearLeaderboardCache();
+
+    const userStartDate = resolveUserStartDate({
+      platformStartDate: auth.user.platformStartDate,
+      createdAt: auth.user.createdAt,
+      timezone: resolvedTimezone,
+    });
+
     if (record) {
+      // If resetting a pre-start date leaves all 5 prayers PENDING with no notes or payment data,
+      // remove the empty ghost document from MongoDB while returning a sanitized pending response.
+      const isEmptyPreStartRecord =
+        isPreStartDate(targetDate, userStartDate) &&
+        VALID_PRAYER_IDS.every((pId) => {
+          const entry = record!.prayers?.[pId];
+          if (!entry) return true;
+          const hasNotes = typeof entry.notes === 'string' && entry.notes.trim().length > 0;
+          const hasPaidFlag = Boolean(entry.isPaid);
+          const hasPaidAmount = typeof entry.paidAmount === 'number' && entry.paidAmount > 0;
+          return entry.status === 'PENDING' && !hasNotes && !hasPaidFlag && !hasPaidAmount;
+        });
+
+      if (isEmptyPreStartRecord) {
+        const canDelete =
+          typeof PrayerRecord.deleteOne === 'function' &&
+          (PrayerRecord.deleteOne !== mongoose.Model.deleteOne || mongoose.connection?.readyState === 1);
+        if (canDelete) {
+          await PrayerRecord.deleteOne({ userId: auth.user.id, date: targetDate });
+        }
+
+        return NextResponse.json(
+          {
+            success: true,
+            data: {
+              userId: auth.user.id,
+              date: targetDate,
+              prayers: {
+                fajr: { status: 'PENDING', isPaid: false, paidAmount: 0 },
+                dhuhr: { status: 'PENDING', isPaid: false, paidAmount: 0 },
+                asr: { status: 'PENDING', isPaid: false, paidAmount: 0 },
+                maghrib: { status: 'PENDING', isPaid: false, paidAmount: 0 },
+                isha: { status: 'PENDING', isPaid: false, paidAmount: 0 },
+              },
+              finesAccrued: 0,
+              isNewRecord: true,
+            },
+            message: 'Prayer status updated successfully',
+          },
+          { status: 200 }
+        );
+      }
+
       // Deterministically recalculate fines accrued with document-level user scoping
       const calculatedFines = calculateFines(targetDate, record.prayers);
       if (record.finesAccrued !== calculatedFines) {

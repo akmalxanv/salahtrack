@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server.js';
-import { connectDB } from '../../../../lib/mongodb.ts';
+import { connectDB, execLean } from '../../../../lib/mongodb.ts';
 import { authenticateRequest } from '../../../../lib/auth/guard.ts';
-import { Group } from '../../../../models/Group.ts';
+import { Group, type IGroup } from '../../../../models/Group.ts';
 import { User } from '../../../../models/User.ts';
 import { PrayerRecord } from '../../../../models/Prayer.ts';
 import { calculateAuthoritativeDebt, type RawRecordInput } from '../../../../lib/accountability.ts';
+import { getLiturgicalDate, sanitizeTimezone } from '../../../../lib/prayer-cycle.ts';
 import mongoose from 'mongoose';
 
 const PRAYER_KEYS = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'] as const;
@@ -33,8 +34,7 @@ export async function GET(
 
     await connectDB();
 
-    const groupQuery = Group.findById(id);
-    const group = typeof groupQuery?.lean === 'function' ? await groupQuery.lean() : await groupQuery;
+    const group = await execLean<IGroup | null>(Group.findById(id));
     if (!group) {
       return NextResponse.json(
         { success: false, error: 'Circle not found' },
@@ -43,11 +43,11 @@ export async function GET(
     }
 
     // Strict Authorization: Caller MUST be a member of this circle
-    const isMember = group.members.some(
+    const callerMember = group.members.find(
       (m) => m.userId.toString() === auth.user.id
     );
 
-    if (!isMember) {
+    if (!callerMember) {
       return NextResponse.json(
         { success: false, error: 'Forbidden: You are not a member of this circle' },
         { status: 403 }
@@ -56,19 +56,22 @@ export async function GET(
 
     const { searchParams } = new URL(request.url);
     const period = searchParams.get('period') || 'weekly';
+    const timezone = sanitizeTimezone(searchParams.get('timezone') || auth.user.preferences?.timezone);
 
-    // Calculate date boundaries
+    // Calculate date boundaries in the caller's resolved local timezone (DST-safe UTC day arithmetic)
     const now = new Date();
-    const todayStr = now.toISOString().split('T')[0];
+    const todayStr = getLiturgicalDate(now, undefined, timezone);
+    const [ty, tm, td] = todayStr.split('-').map(Number);
+    const todayUtc = Date.UTC(ty, tm - 1, td);
     let startDateStr = todayStr;
     let maxPrayers = 5;
 
     if (period === 'weekly') {
-      const weekAgo = new Date(now.getTime() - 6 * 24 * 60 * 60 * 1000);
+      const weekAgo = new Date(todayUtc - 6 * 24 * 60 * 60 * 1000);
       startDateStr = weekAgo.toISOString().split('T')[0];
       maxPrayers = 35;
     } else if (period === 'monthly') {
-      const monthAgo = new Date(now.getTime() - 29 * 24 * 60 * 60 * 1000);
+      const monthAgo = new Date(todayUtc - 29 * 24 * 60 * 60 * 1000);
       startDateStr = monthAgo.toISOString().split('T')[0];
       maxPrayers = 150;
     }
@@ -89,11 +92,16 @@ export async function GET(
     }
 
     // Query prayer records for all circle members to compute period stats and total outstanding sadaqah owed
-    const records = await PrayerRecord.find({
+    const rawRecordsQuery = PrayerRecord.find({
       userId: { $in: memberUserIds },
-    })
-      .select('userId date prayers')
-      .lean();
+    });
+    const selectedRecordsQuery =
+      typeof (rawRecordsQuery as { select?: (fields: string) => unknown })?.select === 'function'
+        ? (rawRecordsQuery as { select: (fields: string) => unknown }).select('userId date prayers')
+        : rawRecordsQuery;
+    const records = await execLean<
+      Array<{ userId: mongoose.Types.ObjectId | string; date: string; prayers?: unknown }>
+    >(selectedRecordsQuery);
 
     // Map records by userId
     const memberRecordsMap = new Map<
@@ -235,6 +243,8 @@ export async function GET(
           name: group.name,
           description: group.description,
           inviteCode: group.inviteCode,
+          ownerId: group.creatorId?.toString?.() || '',
+          currentUserRole: callerMember.role,
           memberCount: group.members.length,
           period,
           maxPossible: maxPrayers,
@@ -290,32 +300,67 @@ export async function DELETE(
 
     if (memberIndex === -1) {
       return NextResponse.json(
-        { success: false, error: 'You are not a member of this circle' },
+        {
+          success: false,
+          error: 'Forbidden: You are not a member of this circle',
+          code: 'FORBIDDEN_NOT_MEMBER',
+        },
+        { status: 403 }
+      );
+    }
+
+    const isOwner =
+      group.creatorId?.toString?.() === auth.user.id ||
+      group.members[memberIndex].role === 'owner';
+
+    const { searchParams } = new URL(request.url);
+    const intent = searchParams.get('intent');
+
+    if (intent === 'delete' && !isOwner) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Forbidden: Only the circle owner can delete this circle',
+          code: 'FORBIDDEN_OWNER_ONLY',
+        },
+        { status: 403 }
+      );
+    }
+
+    if (intent === 'leave' && isOwner) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Circle owners cannot leave without deleting the circle',
+          code: 'OWNER_MUST_DELETE',
+        },
         { status: 400 }
       );
     }
 
-    const isOwner = group.members[memberIndex].role === 'owner';
-
-    if (group.members.length === 1) {
-      // Sole member leaving deletes circle
+    if (isOwner) {
+      // Group owner deletes the entire circle for all members
       await Group.findByIdAndDelete(id);
       return NextResponse.json(
-        { success: true, message: 'Circle disbanded successfully' },
+        {
+          success: true,
+          action: 'deleted',
+          message: 'Circle deleted successfully',
+        },
         { status: 200 }
       );
     }
 
-    // If owner is leaving, transfer ownership to the next member
+    // Regular member leaves the circle
     group.members.splice(memberIndex, 1);
-    if (isOwner && group.members.length > 0) {
-      group.members[0].role = 'owner';
-    }
-
     await group.save();
 
     return NextResponse.json(
-      { success: true, message: 'Left circle successfully' },
+      {
+        success: true,
+        action: 'left',
+        message: 'Left circle successfully',
+      },
       { status: 200 }
     );
   } catch (error) {

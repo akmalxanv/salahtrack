@@ -1,8 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server.js';
 import { connectDB } from '../../../../lib/mongodb.ts';
 import { authenticateRequest } from '../../../../lib/auth/guard.ts';
+import { consumeRateLimit, createRateLimitKey } from '../../../../lib/auth/rate-limit.ts';
 import { Group } from '../../../../models/Group.ts';
 import mongoose from 'mongoose';
+
+// Sliding-window rate limit: max 10 join attempts per 15 minutes to prevent invite code brute-forcing
+const JOIN_CIRCLE_RATE_LIMIT = {
+  maxAttempts: 10,
+  windowMs: 15 * 60 * 1000,
+};
 
 export async function POST(request: NextRequest) {
   try {
@@ -14,8 +21,35 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const body = await request.json();
-    const { inviteCode } = body;
+    const ipAddress = request.headers.get('x-forwarded-for')?.split(',')[0].trim() || '127.0.0.1';
+    const rateLimitKey = createRateLimitKey(ipAddress, `circle-join:${auth.user.id}`);
+    const rateCheck = consumeRateLimit(rateLimitKey, JOIN_CIRCLE_RATE_LIMIT);
+
+    if (!rateCheck.allowed) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Too many join attempts. Please wait a moment before trying again.',
+          code: 'AUTH_RATE_LIMITED',
+          retryAfterSeconds: rateCheck.retryAfterSeconds,
+        },
+        {
+          status: 429,
+          headers: {
+            'Retry-After': String(rateCheck.retryAfterSeconds),
+          },
+        }
+      );
+    }
+
+    const body = await request.json().catch(() => null);
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return NextResponse.json(
+        { success: false, error: 'Invite code is required', code: 'INVALID_INVITE_CODE' },
+        { status: 400 }
+      );
+    }
+    const { inviteCode } = body as { inviteCode?: unknown };
 
     if (!inviteCode || typeof inviteCode !== 'string' || !inviteCode.trim()) {
       return NextResponse.json(

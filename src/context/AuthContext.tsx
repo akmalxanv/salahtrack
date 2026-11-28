@@ -4,6 +4,10 @@ import React, { createContext, useContext, useEffect, useState, useCallback, use
 import { useRouter } from 'next/navigation';
 import type { SafeUser } from '@/lib/auth/guard';
 import SessionExpiredModal from '@/components/auth/SessionExpiredModal';
+import { syncActiveUserContext } from '@/lib/storage-sync';
+import { invalidateAllPrayerCaches } from '@/lib/prayer-sync-bus';
+import { useLanguage } from '@/context/LanguageContext';
+import { getLocalizedApiError } from '@/locales/types';
 
 const STORAGE_KEY_MODE = 'salahtrack_mode';
 const STORAGE_KEY_HAD_SESSION = 'salahtrack_had_session';
@@ -59,6 +63,11 @@ export function AuthProvider({
   const router = useRouter();
   const lastMeCheckRef = useRef<number>(0);
   const [prevInitialUser, setPrevInitialUser] = useState<SafeUser | null | undefined>(initialUser);
+  const { t } = useLanguage();
+
+  useEffect(() => {
+    syncActiveUserContext(user?.id ?? null);
+  }, [user?.id]);
 
   useEffect(() => {
     try {
@@ -111,6 +120,7 @@ export function AuthProvider({
       const res = await fetch('/api/auth/me', {
         method: 'GET',
         credentials: 'same-origin',
+        cache: 'no-store',
       });
 
       if (res.ok) {
@@ -241,11 +251,16 @@ export function AuthProvider({
         if (!res.ok || !json.success) {
           return {
             success: false,
-            error: json.error || 'Authentication failed. Please check your credentials.',
+            error:
+              (json.code && getLocalizedApiError(json.code, t)) ||
+              json.error ||
+              t.auth.login.invalidCredentials,
           };
         }
 
         setUser(json.data.user);
+        syncActiveUserContext(json.data.user.id);
+        invalidateAllPrayerCaches();
         if (typeof window !== 'undefined') {
           window.localStorage.setItem(STORAGE_KEY_HAD_SESSION, 'true');
           window.localStorage.removeItem(STORAGE_KEY_MODE);
@@ -257,11 +272,11 @@ export function AuthProvider({
       } catch {
         return {
           success: false,
-          error: 'Network error occurred. Please check your connection.',
+          error: t.auth.networkError,
         };
       }
     },
-    []
+    [t]
   );
 
   const signup = useCallback(
@@ -284,12 +299,17 @@ export function AuthProvider({
         if (!res.ok || !json.success) {
           return {
             success: false,
-            error: json.error || 'Registration failed.',
+            error:
+              (json.code && getLocalizedApiError(json.code, t)) ||
+              json.error ||
+              t.auth.signup.failed,
             errors: json.errors,
           };
         }
 
         setUser(json.data.user);
+        syncActiveUserContext(json.data.user.id);
+        invalidateAllPrayerCaches();
         if (typeof window !== 'undefined') {
           window.localStorage.setItem(STORAGE_KEY_HAD_SESSION, 'true');
           window.localStorage.removeItem(STORAGE_KEY_MODE);
@@ -301,11 +321,11 @@ export function AuthProvider({
       } catch {
         return {
           success: false,
-          error: 'Network error occurred. Please check your connection.',
+          error: t.auth.networkError,
         };
       }
     },
-    []
+    [t]
   );
 
   const logout = useCallback(async () => {
@@ -317,6 +337,8 @@ export function AuthProvider({
     } catch (err) {
       console.error('Logout error:', err);
     } finally {
+      syncActiveUserContext(null);
+      invalidateAllPrayerCaches();
       if (typeof window !== 'undefined') {
         window.localStorage.removeItem(STORAGE_KEY_HAD_SESSION);
         window.localStorage.removeItem(STORAGE_KEY_MODE);

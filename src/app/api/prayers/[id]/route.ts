@@ -5,6 +5,7 @@ import { PrayerRecord } from '../../../../models/Prayer.ts';
 import { authenticateRequest } from '../../../../lib/auth/guard.ts';
 import { getMaxAllowedDate, sanitizeNotes } from '../route.ts';
 import { calculateAccountabilityFines } from '../../../../lib/accountability.ts';
+import { clearLeaderboardCache } from '../../leaderboard/route.ts';
 import type { PrayerId, PrayerStatus } from '../../../../types/prayer.ts';
 
 const VALID_PRAYER_IDS: PrayerId[] = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
@@ -185,10 +186,19 @@ export async function PUT(request: NextRequest, props: RouteContext) {
 
           if (norm === 'PRAYED_ON_TIME' || norm === 'PRAYED_LATE') {
             if (!prayedAt || existing.status !== norm) prayedAt = now;
+            missedAt = undefined;
+            madeUpAt = undefined;
           } else if (norm === 'MISSED') {
             if (!missedAt) missedAt = now;
+            prayedAt = undefined;
+            madeUpAt = undefined;
           } else if (norm === 'MADE_UP') {
             if (!madeUpAt) madeUpAt = now;
+            prayedAt = undefined;
+          } else if (norm === 'PENDING') {
+            prayedAt = undefined;
+            missedAt = undefined;
+            madeUpAt = undefined;
           }
 
           record.prayers[pId] = {
@@ -242,10 +252,19 @@ export async function PUT(request: NextRequest, props: RouteContext) {
 
       if (normalizedStatus === 'PRAYED_ON_TIME' || normalizedStatus === 'PRAYED_LATE') {
         if (!prayedAt || existing.status !== normalizedStatus) prayedAt = now;
+        missedAt = undefined;
+        madeUpAt = undefined;
       } else if (normalizedStatus === 'MISSED') {
         if (!missedAt) missedAt = now;
+        prayedAt = undefined;
+        madeUpAt = undefined;
       } else if (normalizedStatus === 'MADE_UP') {
         if (!madeUpAt) madeUpAt = now;
+        prayedAt = undefined;
+      } else if (normalizedStatus === 'PENDING') {
+        prayedAt = undefined;
+        missedAt = undefined;
+        madeUpAt = undefined;
       }
 
       record.prayers[prayerId as PrayerId] = {
@@ -268,6 +287,7 @@ export async function PUT(request: NextRequest, props: RouteContext) {
     // Recalculate fines accrued
     record.finesAccrued = calculateAccountabilityFines(record.date, record.prayers);
     await record.save();
+    clearLeaderboardCache();
 
     return NextResponse.json(
       {
@@ -328,6 +348,7 @@ export async function DELETE(request: NextRequest, props: RouteContext) {
     }
 
     await PrayerRecord.findByIdAndDelete(id);
+    clearLeaderboardCache();
 
     return NextResponse.json(
       {

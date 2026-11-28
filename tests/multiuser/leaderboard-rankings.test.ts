@@ -432,7 +432,7 @@ describe('Accurate Rankings & Privacy Rules (Global Leaderboard & Private Circle
         const req1 = new NextRequest(`http://localhost:3000/api/leaderboard?period=daily&date=${todayStr}`);
         const res1 = await getLeaderboardHandler(req1);
         assert.equal(res1.status, 200);
-        assert.equal(res1.headers.get('Cache-Control'), 'private, max-age=15, stale-while-revalidate=30');
+        assert.equal(res1.headers.get('Cache-Control'), 'private, no-store, max-age=0');
         const countAfterFirst = prayerFindCount;
         assert.ok(countAfterFirst > 0, 'First request must query database');
 

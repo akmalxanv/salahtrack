@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server.js';
-import { authenticateRequest } from '../../../lib/auth/index.ts';
+import {
+  authenticateRequest,
+  PRIMARY_SESSION_COOKIE,
+  LEGACY_SESSION_COOKIE,
+} from '../../../lib/auth/index.ts';
 import { findCityByNameOrId, findCityByCoordinates } from '../../../lib/cities.ts';
 
 export const dynamic = 'force-dynamic';
@@ -348,14 +352,29 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
 
-    // 0. Authenticate optionally to read saved location / language preferences
-    const auth = await authenticateRequest(request).catch(() => null);
-    const prefs = auth?.user?.preferences;
-
     const cityQuery = searchParams.get('city');
     const latQuery = searchParams.get('latitude') || searchParams.get('lat');
     const lngQuery = searchParams.get('longitude') || searchParams.get('lng');
     const tzQuery = searchParams.get('timezone') || searchParams.get('tz');
+    const langQuery = searchParams.get('lang') as PrayerTimesLang | null;
+
+    // 0. Authenticate optionally to read saved location / language preferences.
+    // Skip session validation entirely when no session cookie is present OR when
+    // explicit location (city or lat/lng) and language are already supplied in query params.
+    const hasSessionCookie = Boolean(
+      request.cookies.get(PRIMARY_SESSION_COOKIE)?.value ||
+      request.cookies.get(LEGACY_SESSION_COOKIE)?.value
+    );
+    const hasExplicitLocation =
+      Boolean(cityQuery?.trim()) ||
+      Boolean(latQuery && lngQuery && isValidLatLng(Number(latQuery), Number(lngQuery)));
+    const hasExplicitLang = Boolean(langQuery && SUPPORTED_LANGS.includes(langQuery));
+
+    const auth =
+      hasSessionCookie && !(hasExplicitLocation && hasExplicitLang)
+        ? await authenticateRequest(request).catch(() => null)
+        : null;
+    const prefs = auth?.user?.preferences;
 
     // Only accept real IANA zones (Intl validates them) — never echo arbitrary strings back
     const validTzQuery =
@@ -449,7 +468,6 @@ export async function GET(request: NextRequest) {
       Math.round(lng / 15);
 
     // 6. Address language (uz default, matches the app default locale)
-    const langQuery = searchParams.get('lang') as PrayerTimesLang | null;
     const lang: PrayerTimesLang =
       langQuery && SUPPORTED_LANGS.includes(langQuery)
         ? langQuery

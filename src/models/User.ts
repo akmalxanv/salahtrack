@@ -26,6 +26,7 @@ export interface IUser extends Document {
   };
   telegramLinkCodeHash?: string;
   telegramLinkExpires?: Date;
+  platformStartDate?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -115,6 +116,10 @@ const UserSchema = new Schema<IUser>(
       type: Date,
       select: false,
     },
+    platformStartDate: {
+      type: String,
+      match: /^\d{4}-\d{2}-\d{2}$/,
+    },
   },
   {
     timestamps: true,
@@ -138,6 +143,12 @@ UserSchema.index(
   { unique: true, partialFilterExpression: { 'telegram.userId': { $type: 'number' } } }
 );
 UserSchema.index({ telegramLinkCodeHash: 1 }, { sparse: true });
+
+// Index for public leaderboard opt-in queries (avoids collection scans)
+UserSchema.index({ 'preferences.showOnLeaderboard': 1 });
+
+// Sparse index for password reset token lookups
+UserSchema.index({ passwordResetTokenHash: 1 }, { sparse: true });
 
 export const User: Model<IUser> =
   (mongoose.models && mongoose.models.User) || mongoose.model<IUser>('User', UserSchema);

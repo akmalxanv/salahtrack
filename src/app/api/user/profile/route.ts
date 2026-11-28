@@ -103,6 +103,8 @@ export async function PUT(request: NextRequest) {
       );
     }
 
+    const previousName = user.name;
+
     // 2. Update Full Name if provided
     if (body.name !== undefined) {
       if (typeof body.name !== 'string') {
@@ -236,8 +238,11 @@ export async function PUT(request: NextRequest) {
     }
     invalidateSessionCache(auth.user.id);
 
-    // Invalidate leaderboard cache if showOnLeaderboard preference changed
-    if (body.preferences && 'showOnLeaderboard' in body.preferences) {
+    // Invalidate leaderboard cache if name or showOnLeaderboard preference changed
+    if (
+      (body.name !== undefined && user.name !== previousName) ||
+      (body.preferences && 'showOnLeaderboard' in body.preferences)
+    ) {
       clearLeaderboardCache();
     }
 

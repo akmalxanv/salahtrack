@@ -28,7 +28,56 @@ export const DEFAULT_MAGHRIB_TIME = '18:05';
 export const DEFAULT_ISHA_TIME = '19:32';
 export const DEFAULT_TIMEZONE = 'Asia/Tashkent';
 
+/**
+ * Global launch date of Namozlarim.uz (YYYY-MM-DD).
+ * Automatic missed-prayer / Qaza generation must NEVER predate this date
+ * or the individual user's activation date.
+ */
+export const PLATFORM_LAUNCH_DATE = '2026-10-11';
+
 export const ORDERED_PRAYER_IDS: PrayerId[] = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
+
+/**
+ * Resolves the authoritative platform start / activation date (YYYY-MM-DD) for a user.
+ * Enforces the later of PLATFORM_LAUNCH_DATE and the user's activation/creation date
+ * in their resolved timezone. Falls back safely to PLATFORM_LAUNCH_DATE when
+ * creation metadata is absent.
+ */
+export function resolveUserStartDate(params?: {
+  platformStartDate?: string | null;
+  createdAt?: Date | string | null;
+  timezone?: string | null;
+}): string {
+  const tz = sanitizeTimezone(params?.timezone);
+  let candidate = PLATFORM_LAUNCH_DATE;
+
+  if (
+    typeof params?.platformStartDate === 'string' &&
+    /^\d{4}-\d{2}-\d{2}$/.test(params.platformStartDate)
+  ) {
+    candidate = params.platformStartDate;
+  } else if (params?.createdAt) {
+    const d = params.createdAt instanceof Date ? params.createdAt : new Date(params.createdAt);
+    if (!isNaN(d.getTime())) {
+      candidate = getLiturgicalDate(d, DEFAULT_FAJR_TIME, tz);
+    }
+  }
+
+  return candidate > PLATFORM_LAUNCH_DATE ? candidate : PLATFORM_LAUNCH_DATE;
+}
+
+/**
+ * Returns true if the given calendar date (YYYY-MM-DD) predates the user's
+ * platform start / activation date.
+ */
+export function isPreStartDate(dateStr: string, userStartDate: string = PLATFORM_LAUNCH_DATE): boolean {
+  if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return false;
+  const effectiveStart =
+    userStartDate && /^\d{4}-\d{2}-\d{2}$/.test(userStartDate) && userStartDate > PLATFORM_LAUNCH_DATE
+      ? userStartDate
+      : PLATFORM_LAUNCH_DATE;
+  return dateStr < effectiveStart;
+}
 
 export interface ZonedDateParts {
   year: number;
@@ -150,6 +199,19 @@ export function sanitizeTimezone(tz?: unknown): string {
   ) {
     return DEFAULT_TIMEZONE;
   }
+  return trimmed;
+}
+
+/**
+ * Validates an optional HH:mm Fajr time string (00:00..23:59).
+ * Returns the trimmed HH:mm string if valid, or undefined otherwise.
+ */
+export function sanitizeFajrTime(raw?: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const trimmed = raw.trim();
+  if (!/^\d{2}:\d{2}$/.test(trimmed)) return undefined;
+  const [hours, minutes] = trimmed.split(':').map(Number);
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return undefined;
   return trimmed;
 }
 

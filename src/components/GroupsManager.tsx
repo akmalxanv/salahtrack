@@ -1,13 +1,15 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import Link from 'next/link';
+import dynamic from 'next/dynamic';
 import {
   Users,
   Plus,
   Copy,
   Check,
   LogOut,
+  Trash2,
   Clock,
   KeyRound,
   Shield,
@@ -18,12 +20,28 @@ import {
   HeartHandshake,
   X,
   ArrowLeft,
+  AlertTriangle,
+  RefreshCw,
 } from 'lucide-react';
 import { useLanguage } from '@/context/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
 import { formatCurrency } from '@/lib/formatters';
+import { getCalendarDate } from '@/lib/prayer-cycle';
+import { getBrowserTimezone } from '@/lib/location';
+import { subscribePrayerCacheInvalidation } from '@/lib/prayer-sync-bus';
 import type { PrayerHistoryRecord } from '@/types/prayer';
-import MonthlyHistoryCalendar from '@/components/calendar/MonthlyHistoryCalendar';
+
+const MonthlyHistoryCalendar = dynamic(
+  () => import('@/components/calendar/MonthlyHistoryCalendar'),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="py-10 flex justify-center">
+        <Loader2 className="w-6 h-6 animate-spin text-emerald-600" />
+      </div>
+    ),
+  }
+);
 
 interface GroupSummary {
   id: string;
@@ -57,22 +75,72 @@ interface GroupDetails {
   name: string;
   description: string;
   inviteCode: string;
+  ownerId?: string;
+  currentUserRole?: 'owner' | 'admin' | 'member';
   memberCount: number;
   period: 'daily' | 'weekly' | 'monthly';
   maxPossible: number;
   members: GroupMemberRanking[];
 }
 
+const CACHE_TTL_MS = 45 * 1000;
+
+interface GroupListCache {
+  userId: string | null;
+  groups: GroupSummary[];
+  timestamp: number;
+}
+
+const groupListCache: GroupListCache = {
+  userId: null,
+  groups: [],
+  timestamp: 0,
+};
+
+const groupDetailsCache = new Map<string, { data: GroupDetails; timestamp: number }>();
+
+function clearCirclesCaches(): void {
+  groupListCache.timestamp = 0;
+  groupDetailsCache.clear();
+}
+
 export default function GroupsManager() {
   const { t, lang } = useLanguage();
   const { user } = useAuth();
+  const userId = user?.id ?? null;
+  const userTimezone = useMemo(
+    () => user?.preferences?.timezone || getBrowserTimezone(),
+    [user?.preferences?.timezone]
+  );
 
-  const [groups, setGroups] = useState<GroupSummary[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
-  const [selectedGroupDetails, setSelectedGroupDetails] = useState<GroupDetails | null>(null);
-  const [detailsLoading, setDetailsLoading] = useState(false);
+  const [groups, setGroups] = useState<GroupSummary[]>(() => {
+    if (userId && groupListCache.userId === userId) {
+      return groupListCache.groups;
+    }
+    return [];
+  });
+  const [loading, setLoading] = useState<boolean>(() => {
+    if (!userId) return false;
+    return !(groupListCache.userId === userId && groupListCache.groups.length > 0);
+  });
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(() => {
+    if (userId && groupListCache.userId === userId && groupListCache.groups.length > 0) {
+      return groupListCache.groups[0].id;
+    }
+    return null;
+  });
   const [period, setPeriod] = useState<'daily' | 'weekly' | 'monthly'>('weekly');
+  const [selectedGroupDetails, setSelectedGroupDetails] = useState<GroupDetails | null>(() => {
+    if (userId && groupListCache.userId === userId && groupListCache.groups.length > 0) {
+      const cached = groupDetailsCache.get(`${userId}:${groupListCache.groups[0].id}:weekly`);
+      return cached ? cached.data : null;
+    }
+    return null;
+  });
+  const [detailsRefreshing, setDetailsRefreshing] = useState(false);
+  const [groupsError, setGroupsError] = useState<string | null>(null);
+  const [detailsError, setDetailsError] = useState<string | null>(null);
+  const [memberHistoryError, setMemberHistoryError] = useState<string | null>(null);
 
   // Modals & Action states
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -84,100 +152,267 @@ export default function GroupsManager() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [copiedCode, setCopiedCode] = useState(false);
 
-  // Member Prayer History Modal State (Read-only)
+  // Delete / Leave Confirmation Modal
+  const [confirmDialog, setConfirmDialog] = useState<{
+    mode: 'delete' | 'leave';
+    groupId: string;
+    groupName: string;
+    memberCount: number;
+  } | null>(null);
+  const [confirmBusy, setConfirmBusy] = useState(false);
+  const [confirmError, setConfirmError] = useState<string | null>(null);
+
+  // Member Prayer History View State (Read-only)
   const [historyMember, setHistoryMember] = useState<GroupMemberRanking | null>(null);
   const [memberRecords, setMemberRecords] = useState<Record<string, PrayerHistoryRecord>>({});
   const [historyLoading, setHistoryLoading] = useState(false);
-  const [historyDate, setHistoryDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
+  const [historyDate, setHistoryDate] = useState<string>(() => getCalendarDate(new Date(), userTimezone));
   const [historyYear, setHistoryYear] = useState<number>(() => new Date().getFullYear());
   const [historyMonth, setHistoryMonth] = useState<number>(() => new Date().getMonth());
 
-  // Fetch joined groups
-  const fetchGroups = useCallback(async () => {
-    if (!user) {
-      setLoading(false);
-      return;
-    }
-    try {
-      const res = await fetch('/api/groups');
-      const json = await res.json();
-      if (res.ok && json.success) {
-        const list: GroupSummary[] = json.data || [];
-        setGroups(list);
-        if (list.length > 0) {
-          setSelectedGroupId((prev) => {
-            if (prev && list.some((g) => g.id === prev)) return prev;
-            return list[0].id;
-          });
-        }
-      }
-    } catch (err) {
-      console.error('Failed to fetch groups:', err);
-    } finally {
-      setLoading(false);
-    }
-  }, [user]);
+  const detailsAbortRef = useRef<AbortController | null>(null);
+  const activeRequestKeyRef = useRef<string>('');
 
+  // Invalidate cached circle standings whenever prayers/payments change
+  useEffect(() => {
+    return subscribePrayerCacheInvalidation(() => {
+      groupDetailsCache.clear();
+    });
+  }, []);
+
+  // Reset state if user changes
   useEffect(() => {
     let ignore = false;
-    async function load() {
-      if (!ignore) {
-        await fetchGroups();
+    queueMicrotask(() => {
+      if (ignore) return;
+      if (!userId) {
+        setGroups([]);
+        setSelectedGroupId(null);
+        setSelectedGroupDetails(null);
+        setLoading(false);
+      } else if (groupListCache.userId !== userId) {
+        clearCirclesCaches();
+        groupListCache.userId = userId;
+        groupListCache.groups = [];
       }
-    }
-    load();
+    });
     return () => {
       ignore = true;
     };
-  }, [fetchGroups]);
+  }, [userId]);
 
-  // Fetch selected group details
-  const fetchGroupDetails = useCallback(async (groupId: string, activePeriod: string) => {
-    setDetailsLoading(true);
-    try {
-      const res = await fetch(`/api/groups/${groupId}?period=${activePeriod}`);
-      const json = await res.json();
-      if (res.ok && json.success) {
-        setSelectedGroupDetails(json.data);
+  // Fetch joined groups
+  const fetchGroups = useCallback(
+    async (isBackground = false) => {
+      if (!userId) {
+        setLoading(false);
+        return;
       }
-    } catch (err) {
-      console.error('Failed to fetch group details:', err);
-    } finally {
-      setDetailsLoading(false);
-    }
-  }, []);
+      if (!isBackground) {
+        setLoading(true);
+      }
+      setGroupsError(null);
+      try {
+        const res = await fetch('/api/groups');
+        const json = await res.json().catch(() => null);
+        if (res.ok && json?.success) {
+          const list: GroupSummary[] = json.data || [];
+          groupListCache.userId = userId;
+          groupListCache.groups = list;
+          groupListCache.timestamp = Date.now();
+          setGroups(list);
+          if (list.length > 0) {
+            setSelectedGroupId((prev) => {
+              if (prev && list.some((g) => g.id === prev)) return prev;
+              return list[0].id;
+            });
+          } else {
+            setSelectedGroupId(null);
+            setSelectedGroupDetails(null);
+          }
+        } else if (!isBackground) {
+          setGroupsError(t.groups.loadError);
+        }
+      } catch (err) {
+        console.error('Failed to fetch groups:', err);
+        if (!isBackground) {
+          setGroupsError(t.groups.loadError);
+        }
+      } finally {
+        setLoading(false);
+      }
+    },
+    [userId, t.groups.loadError]
+  );
+
+  useEffect(() => {
+    if (!userId) return;
+    let ignore = false;
+    queueMicrotask(() => {
+      if (ignore) return;
+      const hasFreshList =
+        groupListCache.userId === userId &&
+        Date.now() - groupListCache.timestamp < CACHE_TTL_MS &&
+        groupListCache.groups.length > 0;
+      void fetchGroups(hasFreshList);
+    });
+    return () => {
+      ignore = true;
+    };
+  }, [userId, fetchGroups]);
+
+  // Fetch selected group details with instant cache hit & non-flickering background refresh
+  const fetchGroupDetails = useCallback(
+    async (groupId: string, activePeriod: 'daily' | 'weekly' | 'monthly') => {
+      if (!userId || !groupId) return;
+
+      const cacheKey = `${userId}:${groupId}:${activePeriod}`;
+      activeRequestKeyRef.current = cacheKey;
+      setDetailsError(null);
+
+      const cached = groupDetailsCache.get(cacheKey);
+      const isFresh = Boolean(cached && Date.now() - cached.timestamp < CACHE_TTL_MS);
+
+      if (cached) {
+        setSelectedGroupDetails(cached.data);
+        setDetailsRefreshing(false);
+        if (isFresh) {
+          if (detailsAbortRef.current) {
+            detailsAbortRef.current.abort();
+            detailsAbortRef.current = null;
+          }
+          return;
+        }
+      } else {
+        setSelectedGroupDetails(null);
+        setDetailsRefreshing(true);
+      }
+
+      if (detailsAbortRef.current) {
+        detailsAbortRef.current.abort();
+      }
+      const controller = new AbortController();
+      detailsAbortRef.current = controller;
+
+      try {
+        const tzParam = userTimezone ? `&timezone=${encodeURIComponent(userTimezone)}` : '';
+        const res = await fetch(`/api/groups/${groupId}?period=${activePeriod}${tzParam}`, {
+          signal: controller.signal,
+        });
+
+        if (res.status === 403 || res.status === 404) {
+          for (const p of ['daily', 'weekly', 'monthly'] as const) {
+            groupDetailsCache.delete(`${userId}:${groupId}:${p}`);
+          }
+          groupListCache.groups = groupListCache.groups.filter((g) => g.id !== groupId);
+          groupListCache.timestamp = 0;
+
+          if (activeRequestKeyRef.current === cacheKey) {
+            setSelectedGroupDetails(null);
+            setHistoryMember(null);
+            setGroups((prev) => {
+              const remaining = prev.filter((g) => g.id !== groupId);
+              if (remaining.length > 0) {
+                setSelectedGroupId(remaining[0].id);
+              } else {
+                setSelectedGroupId(null);
+              }
+              return remaining;
+            });
+            setDetailsError(t.groups.circleUnavailable);
+          }
+          void fetchGroups(true);
+          return;
+        }
+
+        if (!res.ok) {
+          if (activeRequestKeyRef.current === cacheKey) {
+            setDetailsError(t.groups.loadDetailsError);
+          }
+          return;
+        }
+
+        const json = await res.json();
+        if (json?.success && json.data) {
+          groupDetailsCache.set(cacheKey, {
+            data: json.data,
+            timestamp: Date.now(),
+          });
+          if (activeRequestKeyRef.current === cacheKey) {
+            setSelectedGroupDetails(json.data);
+            setDetailsError(null);
+          }
+        }
+      } catch (err: unknown) {
+        if (err instanceof Error && err.name === 'AbortError') return;
+        console.error('Failed to fetch group details:', err);
+        if (activeRequestKeyRef.current === cacheKey) {
+          setDetailsError(t.groups.loadDetailsError);
+        }
+      } finally {
+        if (activeRequestKeyRef.current === cacheKey) {
+          setDetailsRefreshing(false);
+        }
+      }
+    },
+    [userId, userTimezone, fetchGroups, t.groups.circleUnavailable, t.groups.loadDetailsError]
+  );
 
   useEffect(() => {
     let ignore = false;
-    async function load() {
-      if (selectedGroupId && !ignore) {
-        await fetchGroupDetails(selectedGroupId, period);
-      }
+    if (selectedGroupId) {
+      queueMicrotask(() => {
+        if (!ignore) {
+          void fetchGroupDetails(selectedGroupId, period);
+        }
+      });
     }
-    load();
     return () => {
       ignore = true;
+      if (detailsAbortRef.current) {
+        detailsAbortRef.current.abort();
+      }
     };
   }, [selectedGroupId, period, fetchGroupDetails]);
 
-  // Fetch member prayer history for read-only modal
+  const handleSelectGroup = useCallback(
+    (groupId: string) => {
+      if (groupId === selectedGroupId) return;
+      setHistoryMember(null);
+      setMemberRecords({});
+      setDetailsError(null);
+      setMemberHistoryError(null);
+      setSelectedGroupId(groupId);
+      if (userId) {
+        const cached = groupDetailsCache.get(`${userId}:${groupId}:${period}`);
+        if (cached) {
+          setSelectedGroupDetails(cached.data);
+          setDetailsRefreshing(false);
+        } else {
+          setSelectedGroupDetails(null);
+          setDetailsRefreshing(true);
+        }
+      } else {
+        setSelectedGroupDetails(null);
+      }
+    },
+    [selectedGroupId, userId, period]
+  );
+
+  // Fetch member prayer history for read-only view
   const fetchMemberHistory = useCallback(
     async (groupId: string, memberId: string, year: number, month: number) => {
       setHistoryLoading(true);
+      setMemberHistoryError(null);
       try {
         const mStr = String(month + 1).padStart(2, '0');
         const start = `${year}-${mStr}-01`;
         const lastDay = new Date(year, month + 1, 0).getDate();
         const end = `${year}-${mStr}-${String(lastDay).padStart(2, '0')}`;
 
-        let res = await fetch(
-          `/api/groups/${groupId}/members/${memberId}/prayers?startDate=${start}&endDate=${end}`
+        const res = await fetch(
+          `/api/groups/${groupId}/member-history?memberId=${encodeURIComponent(memberId)}&startDate=${start}&endDate=${end}`
         );
-        if (!res.ok) {
-          res = await fetch(
-            `/api/groups/${groupId}/member-history?memberId=${memberId}&startDate=${start}&endDate=${end}`
-          );
-        }
 
         if (res.ok) {
           const json = await res.json();
@@ -190,26 +425,31 @@ export default function GroupsManager() {
               }
             }
             setMemberRecords(map);
+          } else {
+            setMemberHistoryError(t.groups.memberHistoryLoadError);
           }
+        } else {
+          setMemberHistoryError(t.groups.memberHistoryLoadError);
         }
       } catch (err) {
         console.error('Failed to fetch member prayer history:', err);
+        setMemberHistoryError(t.groups.memberHistoryLoadError);
       } finally {
         setHistoryLoading(false);
       }
     },
-    []
+    [t.groups.memberHistoryLoadError]
   );
 
   const handleOpenMemberHistory = (member: GroupMemberRanking) => {
     if (member.isCurrentUser) return;
     const today = new Date();
     setHistoryMember(member);
-    setHistoryDate(today.toISOString().split('T')[0]);
+    setHistoryDate(getCalendarDate(today, userTimezone));
     setHistoryYear(today.getFullYear());
     setHistoryMonth(today.getMonth());
     if (selectedGroupId) {
-      fetchMemberHistory(selectedGroupId, member.userId, today.getFullYear(), today.getMonth());
+      void fetchMemberHistory(selectedGroupId, member.userId, today.getFullYear(), today.getMonth());
     }
   };
 
@@ -242,10 +482,11 @@ export default function GroupsManager() {
         return;
       }
 
+      clearCirclesCaches();
       setNewGroupName('');
       setNewGroupDescription('');
       setShowCreateModal(false);
-      await fetchGroups();
+      await fetchGroups(true);
       setSelectedGroupId(json.data.id);
     } catch {
       setActionError(t.groups.networkError);
@@ -277,9 +518,10 @@ export default function GroupsManager() {
         return;
       }
 
+      clearCirclesCaches();
       setJoinInviteCode('');
       setShowJoinModal(false);
-      await fetchGroups();
+      await fetchGroups(true);
       setSelectedGroupId(json.data.id);
     } catch {
       setActionError(t.groups.networkError);
@@ -288,21 +530,47 @@ export default function GroupsManager() {
     }
   };
 
-  // Handle Leave Circle
-  const handleLeaveGroup = async (groupId: string) => {
-    if (!window.confirm(t.groups.confirmLeave)) return;
+  // Handle Confirmed Delete (Owner) or Leave (Member)
+  const handleConfirmGroupExit = async () => {
+    if (!confirmDialog || confirmBusy) return;
+    setConfirmBusy(true);
+    setConfirmError(null);
 
     try {
-      const res = await fetch(`/api/groups/${groupId}`, {
-        method: 'DELETE',
-      });
-      if (res.ok) {
-        setSelectedGroupId(null);
-        setSelectedGroupDetails(null);
-        await fetchGroups();
+      const res = await fetch(
+        `/api/groups/${confirmDialog.groupId}?intent=${confirmDialog.mode}`,
+        { method: 'DELETE' }
+      );
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.success) {
+        setConfirmError(
+          json?.error ||
+            (confirmDialog.mode === 'delete' ? t.groups.failedDelete : t.groups.networkError)
+        );
+        setConfirmBusy(false);
+        return;
       }
-    } catch (err) {
-      console.error('Failed to leave group:', err);
+
+      const removedId = confirmDialog.groupId;
+      clearCirclesCaches();
+      setConfirmDialog(null);
+      setConfirmBusy(false);
+      setHistoryMember(null);
+
+      setGroups((prev) => {
+        const remaining = prev.filter((g) => g.id !== removedId);
+        if (remaining.length > 0) {
+          setSelectedGroupId(remaining[0].id);
+        } else {
+          setSelectedGroupId(null);
+          setSelectedGroupDetails(null);
+        }
+        return remaining;
+      });
+      await fetchGroups(true);
+    } catch {
+      setConfirmError(t.groups.networkError);
+      setConfirmBusy(false);
     }
   };
 
@@ -314,26 +582,43 @@ export default function GroupsManager() {
     });
   };
 
-  // Modern, vibrant numerical ranking badge helper
+  const selectedGroupSummary = useMemo(
+    () => groups.find((g) => g.id === selectedGroupId) || null,
+    [groups, selectedGroupId]
+  );
+
+  const isCurrentUserOwner = useMemo(() => {
+    if (selectedGroupSummary?.role === 'owner') return true;
+    if (selectedGroupDetails?.currentUserRole === 'owner') return true;
+    if (userId && selectedGroupDetails?.ownerId && selectedGroupDetails.ownerId === userId) {
+      return true;
+    }
+    return Boolean(selectedGroupDetails?.members?.some((m) => m.isCurrentUser && m.role === 'owner'));
+  }, [selectedGroupSummary, selectedGroupDetails, userId]);
+
+  const activeDetailsMatchSelection = Boolean(
+    selectedGroupDetails && selectedGroupId && selectedGroupDetails.id === selectedGroupId
+  );
+
   const getRankBadge = (rank: number) => {
     if (rank === 1) {
       return (
         <span className="inline-flex items-center justify-center w-8 h-8 rounded-xl bg-gradient-to-tr from-amber-500 via-amber-400 to-yellow-300 text-slate-950 font-black text-xs shadow-sm shadow-amber-500/20 border border-amber-300 shrink-0">
-          1st
+          #1
         </span>
       );
     }
     if (rank === 2) {
       return (
         <span className="inline-flex items-center justify-center w-8 h-8 rounded-xl bg-gradient-to-tr from-slate-400 via-slate-300 to-slate-200 text-slate-900 font-black text-xs shadow-sm shadow-slate-400/20 border border-slate-300 shrink-0">
-          2nd
+          #2
         </span>
       );
     }
     if (rank === 3) {
       return (
         <span className="inline-flex items-center justify-center w-8 h-8 rounded-xl bg-gradient-to-tr from-amber-700 via-amber-600 to-amber-500 text-white font-black text-xs shadow-sm shadow-amber-700/20 border border-amber-600 shrink-0">
-          3rd
+          #3
         </span>
       );
     }
@@ -346,7 +631,7 @@ export default function GroupsManager() {
 
   if (!user) {
     return (
-      <div className="flex flex-col items-center justify-center p-12 text-center rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs">
+      <div className="flex flex-col items-center justify-center p-10 text-center rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs">
         <div className="w-14 h-14 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mb-4">
           <Users className="w-7 h-7" />
         </div>
@@ -367,8 +652,16 @@ export default function GroupsManager() {
     );
   }
 
+  const headerName = selectedGroupSummary?.name || selectedGroupDetails?.name || '';
+  const headerDescription =
+    selectedGroupSummary?.description ?? selectedGroupDetails?.description ?? '';
+  const headerInviteCode =
+    selectedGroupSummary?.inviteCode || selectedGroupDetails?.inviteCode || '';
+  const headerMemberCount =
+    selectedGroupSummary?.memberCount ?? selectedGroupDetails?.memberCount ?? 0;
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       {/* Circle Switcher Tabs & Actions */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         {groups.length > 0 ? (
@@ -379,8 +672,8 @@ export default function GroupsManager() {
                 <button
                   key={group.id}
                   type="button"
-                  onClick={() => setSelectedGroupId(group.id)}
-                  className={`min-h-[44px] px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer flex items-center gap-2 ${
+                  onClick={() => handleSelectGroup(group.id)}
+                  className={`min-h-[40px] px-3.5 py-2 rounded-xl text-xs font-bold transition-colors whitespace-nowrap cursor-pointer flex items-center gap-2 ${
                     isSelected
                       ? 'bg-emerald-600 text-white shadow-xs'
                       : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
@@ -414,7 +707,7 @@ export default function GroupsManager() {
               setActionError(null);
               setShowJoinModal(true);
             }}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+            className="min-h-[40px] inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer"
           >
             <KeyRound className="w-3.5 h-3.5 text-emerald-600" />
             <span>{t.groups.joinGroup}</span>
@@ -426,7 +719,7 @@ export default function GroupsManager() {
               setActionError(null);
               setShowCreateModal(true);
             }}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white transition-transform active:scale-95 shadow-sm cursor-pointer"
+            className="min-h-[40px] inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white transition-transform active:scale-95 shadow-sm cursor-pointer"
           >
             <Plus className="w-3.5 h-3.5" />
             <span>{t.groups.createGroup}</span>
@@ -434,13 +727,42 @@ export default function GroupsManager() {
         </div>
       </div>
 
+      {/* Inline Error Banner with Retry */}
+      {(groupsError || detailsError) && (
+        <div
+          role="alert"
+          className="p-3.5 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs flex flex-wrap items-center justify-between gap-2.5"
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <AlertTriangle className="w-4 h-4 shrink-0" />
+            <span className="font-medium">{groupsError || detailsError}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              if (groupsError) {
+                void fetchGroups(false);
+              } else if (selectedGroupId) {
+                void fetchGroupDetails(selectedGroupId, period);
+              } else {
+                void fetchGroups(false);
+              }
+            }}
+            className="min-h-[36px] px-3 py-1.5 rounded-xl bg-white dark:bg-slate-900 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 font-semibold inline-flex items-center gap-1.5 hover:bg-rose-100/60 dark:hover:bg-rose-900/40 cursor-pointer shrink-0"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>{t.common.retry}</span>
+          </button>
+        </div>
+      )}
+
       {/* Main Content Area */}
-      {loading ? (
+      {loading && groups.length === 0 ? (
         <div className="flex items-center justify-center p-12">
           <Loader2 className="w-6 h-6 animate-spin text-emerald-600" />
         </div>
-      ) : groups.length === 0 ? (
-        <div className="flex flex-col items-center justify-center p-12 text-center rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xs">
+      ) : groups.length === 0 && !groupsError ? (
+        <div className="flex flex-col items-center justify-center p-10 text-center rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xs">
           <div className="w-12 h-12 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mb-3">
             <Shield className="w-6 h-6" />
           </div>
@@ -454,7 +776,7 @@ export default function GroupsManager() {
                 setActionError(null);
                 setShowJoinModal(true);
               }}
-              className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-xs font-semibold bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors shadow-2xs"
+              className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-xs font-semibold bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors shadow-2xs cursor-pointer"
             >
               <KeyRound className="w-3.5 h-3.5 text-emerald-600" />
               <span>{t.groups.joinGroup}</span>
@@ -465,97 +787,126 @@ export default function GroupsManager() {
                 setActionError(null);
                 setShowCreateModal(true);
               }}
-              className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white transition-transform active:scale-95 shadow-sm"
+              className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white transition-transform active:scale-95 shadow-sm cursor-pointer"
             >
               <Plus className="w-3.5 h-3.5" />
               <span>{t.groups.createGroup}</span>
             </button>
           </div>
         </div>
-      ) : selectedGroupDetails ? (
-        <div className="space-y-6">
-          {/* Group Header Banner */}
-          <div className="p-5 sm:p-6 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xs flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-            <div>
-              <div className="flex items-center gap-2.5 flex-wrap">
-                <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100">
-                  {selectedGroupDetails.name}
+      ) : selectedGroupId ? (
+        <div className="space-y-4">
+          {/* Group Header Banner — immediately reflects selectedGroupSummary for 0ms flicker-free switching */}
+          <div className="p-4 sm:p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xs flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3.5">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-slate-100 truncate">
+                  {headerName}
                 </h2>
-                <span className="text-xs px-2.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 font-semibold">
-                  {selectedGroupDetails.memberCount} {t.groups.membersCount}
+                <span className="text-xs px-2.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 font-semibold shrink-0">
+                  {headerMemberCount} {t.groups.membersCount}
                 </span>
+                {detailsRefreshing && (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-600 shrink-0" />
+                )}
               </div>
-              {selectedGroupDetails.description && (
+              {headerDescription && (
                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-xl">
-                  {selectedGroupDetails.description}
+                  {headerDescription}
                 </p>
               )}
             </div>
 
-            {/* Actions: Copy Invite Code & Leave */}
-            <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
-              <button
-                type="button"
-                onClick={() => handleCopyInviteCode(selectedGroupDetails.inviteCode)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 hover:bg-emerald-100 transition-colors cursor-pointer"
-                title={t.groups.copyCode}
-              >
-                {copiedCode ? (
-                  <>
-                    <Check className="w-3.5 h-3.5 text-emerald-600" />
-                    <span>{t.groups.codeCopied}</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-3.5 h-3.5" />
-                    <span>{selectedGroupDetails.inviteCode}</span>
-                  </>
-                )}
-              </button>
+            {/* Actions: Copy Invite Code & Owner Delete / Member Leave */}
+            <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap shrink-0">
+              {headerInviteCode && (
+                <button
+                  type="button"
+                  onClick={() => handleCopyInviteCode(headerInviteCode)}
+                  className="min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 hover:bg-emerald-100 transition-colors cursor-pointer"
+                  title={t.groups.copyCode}
+                >
+                  {copiedCode ? (
+                    <>
+                      <Check className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>{t.groups.codeCopied}</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-3.5 h-3.5" />
+                      <span>{headerInviteCode}</span>
+                    </>
+                  )}
+                </button>
+              )}
 
-              <button
-                type="button"
-                onClick={() => handleLeaveGroup(selectedGroupDetails.id)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 border border-rose-200/60 dark:border-rose-900/60 transition-colors cursor-pointer"
-                title={t.groups.leaveGroup}
-              >
-                <LogOut className="w-3.5 h-3.5" />
-                <span>{t.groups.leaveGroup}</span>
-              </button>
+              {isCurrentUserOwner ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setConfirmError(null);
+                    setConfirmDialog({
+                      mode: 'delete',
+                      groupId: selectedGroupId,
+                      groupName: headerName,
+                      memberCount: headerMemberCount,
+                    });
+                  }}
+                  className="min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 border border-rose-200/80 dark:border-rose-900/60 transition-colors cursor-pointer"
+                  title={t.groups.deleteGroup}
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>{t.groups.deleteGroup}</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setConfirmError(null);
+                    setConfirmDialog({
+                      mode: 'leave',
+                      groupId: selectedGroupId,
+                      groupName: headerName,
+                      memberCount: headerMemberCount,
+                    });
+                  }}
+                  className="min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 border border-rose-200/80 dark:border-rose-900/60 transition-colors cursor-pointer"
+                  title={t.groups.leaveGroup}
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span>{t.groups.leaveGroup}</span>
+                </button>
+              )}
             </div>
           </div>
 
           {/* Time Period Filter Tabs */}
-          <div className="flex items-center gap-1.5 p-1 rounded-xl bg-slate-100 dark:bg-slate-800/80 w-fit">
+          <div className="grid grid-cols-3 sm:flex items-center gap-1 p-1 rounded-xl bg-slate-100 dark:bg-slate-800/80 w-full sm:w-fit">
             {(['daily', 'weekly', 'monthly'] as const).map((p) => (
               <button
                 key={p}
                 type="button"
                 onClick={() => setPeriod(p)}
-                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                className={`min-h-[38px] flex items-center justify-center gap-1.5 px-2 sm:px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
                   period === p
                     ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-2xs'
                     : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
                 }`}
               >
-                <Calendar className="w-3.5 h-3.5" />
-                <span>{t.leaderboard[p]}</span>
+                <Calendar className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">{t.leaderboard[p]}</span>
               </button>
             ))}
           </div>
 
           {/* In-View: Either Selected Member History or Member Rankings Table */}
-          {historyMember ? (
-            /* ========================================================================= */
-            /* In-View Member Prayer History & Profile View (Not a detached modal)      */
-            /* ========================================================================= */
-            <div className="space-y-4 animate-in fade-in duration-150">
-              {/* Back to Member List Navigation */}
+          {historyMember && selectedGroupDetails ? (
+            <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <button
                   type="button"
                   onClick={handleCloseMemberHistory}
-                  className="min-h-[44px] inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 transition-colors cursor-pointer"
+                  className="min-h-[40px] inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 transition-colors cursor-pointer"
                 >
                   <ArrowLeft className="w-4 h-4" />
                   <span>{t.groups.backToMemberList}</span>
@@ -564,19 +915,17 @@ export default function GroupsManager() {
                 <button
                   type="button"
                   onClick={handleCloseMemberHistory}
-                  className="min-h-[44px] min-w-[44px] flex items-center justify-center p-2 rounded-xl text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                  className="min-h-[40px] min-w-[40px] flex items-center justify-center p-2 rounded-xl text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
                   title={t.common.cancel}
                 >
                   <X className="w-5 h-5" />
                 </button>
               </div>
 
-              {/* In-View Member Profile Card */}
               <div className="p-4 sm:p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xs space-y-4">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  {/* Avatar & Identifiers */}
                   <div className="flex items-center gap-3.5 min-w-0">
-                    <div className="w-13 h-13 rounded-2xl bg-gradient-to-tr from-emerald-600 to-teal-500 text-white font-bold text-lg flex items-center justify-center shadow-md shadow-emerald-600/20 shrink-0 select-none">
+                    <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-emerald-600 to-teal-500 text-white font-bold text-lg flex items-center justify-center shadow-md shadow-emerald-600/20 shrink-0 select-none">
                       {historyMember.name.charAt(0).toUpperCase()}
                     </div>
                     <div className="min-w-0">
@@ -598,7 +947,6 @@ export default function GroupsManager() {
                     </div>
                   </div>
 
-                  {/* Rank Badge & Sadaqah */}
                   <div className="flex items-center gap-2.5 flex-wrap self-start sm:self-auto">
                     {getRankBadge(historyMember.rank)}
                     {typeof historyMember.sadaqahOwed === 'number' && historyMember.sadaqahOwed > 0 && (
@@ -613,10 +961,9 @@ export default function GroupsManager() {
                   </div>
                 </div>
 
-                {/* Performance Metrics Row */}
-                <div className="grid grid-cols-3 gap-2.5 pt-3 border-t border-slate-100 dark:border-slate-800 text-center">
-                  <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/50">
-                    <span className="text-[10px] sm:text-[11px] text-slate-400 block font-medium">
+                <div className="grid grid-cols-3 gap-1.5 sm:gap-2.5 pt-3 border-t border-slate-100 dark:border-slate-800 text-center">
+                  <div className="p-2 sm:p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 min-w-0">
+                    <span className="text-[10px] sm:text-[11px] text-slate-400 block font-medium truncate">
                       {t.progress.summary.completionRate}
                     </span>
                     <span className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-slate-100">
@@ -624,16 +971,16 @@ export default function GroupsManager() {
                       <span className="text-xs font-normal text-slate-400">/ {selectedGroupDetails.maxPossible}</span>
                     </span>
                   </div>
-                  <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/50">
-                    <span className="text-[10px] sm:text-[11px] text-slate-400 block font-medium">
+                  <div className="p-2 sm:p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 min-w-0">
+                    <span className="text-[10px] sm:text-[11px] text-slate-400 block font-medium truncate">
                       {t.leaderboard.onTimeCount}
                     </span>
                     <span className="text-sm sm:text-base font-extrabold text-emerald-600 dark:text-emerald-400">
                       {historyMember.onTimeCount}
                     </span>
                   </div>
-                  <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/50">
-                    <span className="text-[10px] sm:text-[11px] text-slate-400 block font-medium">
+                  <div className="p-2 sm:p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 min-w-0">
+                    <span className="text-[10px] sm:text-[11px] text-slate-400 block font-medium truncate">
                       {t.progress.consistencyTitle}
                     </span>
                     <span className="text-sm sm:text-base font-extrabold text-emerald-600 dark:text-emerald-400">
@@ -643,7 +990,35 @@ export default function GroupsManager() {
                 </div>
               </div>
 
-              {/* In-View Calendar Container */}
+              {memberHistoryError && (
+                <div
+                  role="alert"
+                  className="p-3.5 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs flex flex-wrap items-center justify-between gap-2.5"
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <AlertTriangle className="w-4 h-4 shrink-0" />
+                    <span className="font-medium">{memberHistoryError}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (selectedGroupId && historyMember) {
+                        void fetchMemberHistory(
+                          selectedGroupId,
+                          historyMember.userId,
+                          historyYear,
+                          historyMonth
+                        );
+                      }
+                    }}
+                    className="min-h-[36px] px-3 py-1.5 rounded-xl bg-white dark:bg-slate-900 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 font-semibold inline-flex items-center gap-1.5 hover:bg-rose-100/60 dark:hover:bg-rose-900/40 cursor-pointer shrink-0"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>{t.common.retry}</span>
+                  </button>
+                </div>
+              )}
+
               <div className="p-4 sm:p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xs">
                 <MonthlyHistoryCalendar
                   selectedDate={historyDate}
@@ -655,7 +1030,7 @@ export default function GroupsManager() {
                     setHistoryYear(y);
                     setHistoryMonth(m);
                     if (selectedGroupId && historyMember) {
-                      fetchMemberHistory(selectedGroupId, historyMember.userId, y, m);
+                      void fetchMemberHistory(selectedGroupId, historyMember.userId, y, m);
                     }
                   }}
                   isLoading={historyLoading}
@@ -663,12 +1038,12 @@ export default function GroupsManager() {
                 />
               </div>
             </div>
-          ) : detailsLoading ? (
-            <div className="flex items-center justify-center p-12">
-              <Loader2 className="w-6 h-6 animate-spin text-emerald-600" />
-            </div>
-          ) : (
-            <div className="space-y-2.5">
+          ) : selectedGroupDetails ? (
+            <div
+              className={`space-y-2.5 transition-opacity duration-150 ${
+                detailsRefreshing && !activeDetailsMatchSelection ? 'opacity-60' : 'opacity-100'
+              }`}
+            >
               {selectedGroupDetails.members.map((member) => (
                 <div
                   key={member.userId}
@@ -678,23 +1053,24 @@ export default function GroupsManager() {
                     }
                   }}
                   title={member.isCurrentUser ? t.groups.yourHistoryInProgress : t.groups.viewMemberHistory}
-                  className={`flex items-center justify-between p-4 rounded-2xl border transition-all ${
+                  className={`flex flex-wrap xs:flex-nowrap items-center justify-between gap-2.5 p-3 sm:p-4 rounded-2xl border transition-colors ${
                     member.isCurrentUser
                       ? 'border-emerald-500/50 bg-emerald-50/40 dark:bg-emerald-950/20 dark:border-emerald-700/50 cursor-default select-none'
                       : 'border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-emerald-500/60 dark:hover:border-emerald-600/60 shadow-2xs cursor-pointer group'
                   }`}
                 >
-                  {/* Left: Rank & User Info */}
-                  <div className="flex items-center gap-3.5 min-w-0">
+                  <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1">
                     {getRankBadge(member.rank)}
 
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className={`font-bold text-sm truncate ${
-                          member.isCurrentUser
-                            ? 'text-emerald-900 dark:text-emerald-100'
-                            : 'text-slate-900 dark:text-slate-100 group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors'
-                        }`}>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span
+                          className={`font-bold text-sm truncate ${
+                            member.isCurrentUser
+                              ? 'text-emerald-900 dark:text-emerald-100'
+                              : 'text-slate-900 dark:text-slate-100 group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors'
+                          }`}
+                        >
                           {member.name}
                         </span>
                         {member.isCurrentUser && (
@@ -718,11 +1094,9 @@ export default function GroupsManager() {
                         )}
                       </div>
                       <div className="flex items-center gap-2 mt-0.5">
-                        <span className="text-xs text-slate-400 truncate">
-                          @{member.username}
-                        </span>
+                        <span className="text-xs text-slate-400 truncate">@{member.username}</span>
                         {member.isCurrentUser && (
-                          <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium">
+                          <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium hidden sm:inline">
                             • {t.groups.yourHistoryInProgress}
                           </span>
                         )}
@@ -730,19 +1104,18 @@ export default function GroupsManager() {
                     </div>
                   </div>
 
-                  {/* Right: Score, Metrics & View History indicator */}
-                  <div className="flex items-center gap-3 sm:gap-4 shrink-0 text-right">
+                  <div className="flex items-center gap-2 sm:gap-4 shrink-0 text-right ml-auto">
                     <div className="text-right">
-                      <div className="text-base font-extrabold text-slate-900 dark:text-slate-100">
+                      <div className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-slate-100">
                         {member.completedCount}{' '}
                         <span className="text-xs font-semibold text-slate-400">
                           / {selectedGroupDetails.maxPossible}
                         </span>
                       </div>
-                      <div className="flex items-center justify-end gap-2 text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                      <div className="flex items-center justify-end gap-1.5 text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 mt-0.5">
                         <span className="inline-flex items-center gap-1">
                           <Clock className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
-                          <span>{member.onTimeCount} {t.leaderboard.onTimeCount}</span>
+                          <span>{member.onTimeCount}</span>
                         </span>
                         <span>•</span>
                         <span className="font-semibold text-emerald-600 dark:text-emerald-400">
@@ -758,14 +1131,102 @@ export default function GroupsManager() {
                 </div>
               ))}
             </div>
+          ) : (
+            <div className="space-y-2.5">
+              {Array.from({ length: Math.min(headerMemberCount || 3, 5) }).map((_, i) => (
+                <div
+                  key={i}
+                  className="h-[72px] rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 animate-pulse"
+                />
+              ))}
+            </div>
           )}
         </div>
       ) : null}
 
+      {/* Modal: Confirm Delete (Owner) / Leave (Member) */}
+      {confirmDialog && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs"
+          onClick={() => !confirmBusy && setConfirmDialog(null)}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="circle-exit-dialog-title"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-5 sm:p-6 shadow-xl space-y-4"
+          >
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-50 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div className="min-w-0">
+                <h3
+                  id="circle-exit-dialog-title"
+                  className="text-base font-bold text-slate-900 dark:text-slate-100"
+                >
+                  {confirmDialog.mode === 'delete'
+                    ? t.groups.confirmDeleteTitle
+                    : t.groups.confirmLeaveTitle}
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 leading-relaxed">
+                  {confirmDialog.mode === 'delete'
+                    ? t.groups.confirmDeleteDesc
+                        .replace('{name}', confirmDialog.groupName)
+                        .replace('{count}', String(confirmDialog.memberCount))
+                    : t.groups.confirmLeave}
+                </p>
+              </div>
+            </div>
+
+            {confirmError && (
+              <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-400 text-xs">
+                {confirmError}
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-2.5 pt-1">
+              <button
+                type="button"
+                disabled={confirmBusy}
+                onClick={() => setConfirmDialog(null)}
+                className="min-h-[40px] px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer disabled:opacity-50"
+              >
+                {t.common.cancel}
+              </button>
+              <button
+                type="button"
+                disabled={confirmBusy}
+                onClick={handleConfirmGroupExit}
+                className="min-h-[40px] inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white transition-colors disabled:opacity-60 cursor-pointer"
+              >
+                {confirmBusy && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                <span>
+                  {confirmBusy
+                    ? confirmDialog.mode === 'delete'
+                      ? t.groups.deleting
+                      : t.groups.leaving
+                    : confirmDialog.mode === 'delete'
+                    ? t.groups.confirmDeleteButton
+                    : t.groups.confirmLeaveButton}
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Modal: Create Circle */}
       {showCreateModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs">
-          <div className="w-full max-w-md rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-6 shadow-xl space-y-4">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs"
+          onClick={() => setShowCreateModal(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-6 shadow-xl space-y-4"
+          >
             <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100">
               {t.groups.createGroup}
             </h3>
@@ -828,8 +1289,14 @@ export default function GroupsManager() {
 
       {/* Modal: Join Circle */}
       {showJoinModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs">
-          <div className="w-full max-w-md rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-6 shadow-xl space-y-4">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs"
+          onClick={() => setShowJoinModal(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-6 shadow-xl space-y-4"
+          >
             <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100">
               {t.groups.joinGroup}
             </h3>

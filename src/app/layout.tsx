@@ -4,7 +4,7 @@ import { Inter } from 'next/font/google';
 import './globals.css';
 import { LanguageProvider } from '@/context/LanguageContext';
 import { AuthProvider } from '@/context/AuthContext';
-import { Language, isValidLanguage, STORAGE_KEY, FALLBACK_STORAGE_KEY } from '@/locales/translations';
+import { Language, isValidLanguage, STORAGE_KEY, FALLBACK_STORAGE_KEY } from '@/locales/types';
 import AppShell from '@/components/AppShell';
 import { getCurrentSession } from '@/lib/auth/guard';
 
@@ -47,6 +47,12 @@ export default async function RootLayout({
   const cookieStore = await cookies();
   const rawLang = cookieStore.get(STORAGE_KEY)?.value || cookieStore.get(FALLBACK_STORAGE_KEY)?.value;
   const initialLang: Language = isValidLanguage(rawLang) ? rawLang : 'uz';
+  const initialDict =
+    initialLang === 'ru'
+      ? (await import('@/locales/ru')).ru
+      : initialLang === 'en'
+        ? (await import('@/locales/en')).en
+        : (await import('@/locales/uz')).uz;
 
   const session = await getCurrentSession();
   const initialUser = session?.user || null;
@@ -60,7 +66,7 @@ export default async function RootLayout({
         suppressHydrationWarning 
         className={`${inter.className} bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 antialiased min-h-screen`}
       >
-        <LanguageProvider initialLang={initialLang}>
+        <LanguageProvider initialLang={initialLang} initialDict={initialDict}>
           <AuthProvider initialUser={initialUser} initialIsGuest={initialIsGuest}>
             <AppShell>
               {children}

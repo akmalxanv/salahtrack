@@ -1,37 +1,46 @@
 import { NextRequest, NextResponse } from 'next/server.js';
-import { connectDB } from '../../../../lib/mongodb.ts';
+import { connectDB, execLean } from '../../../../lib/mongodb.ts';
 import { PrayerRecord } from '../../../../models/Prayer.ts';
 import { authenticateRequest } from '../../../../lib/auth/index.ts';
 import { calculateStreakFromHistory, getDaysDifference } from '../../../../lib/streak.ts';
-import { getLiturgicalDate } from '../../../../lib/prayer-cycle.ts';
-import {
-  isValidCalendarDate,
-  getDateWithDayOffset,
-  ensureUserRolledOver,
-  VALID_PRAYER_IDS,
-} from '../../../../lib/prayer-rollover.ts';
+import { isValidCalendarDate } from '../route.ts';
 import { calculateAccountabilityFines } from '../../../../lib/accountability.ts';
-import type { PrayerStatus } from '../../../../types/prayer.ts';
+import { getLiturgicalDate, resolveUserStartDate, sanitizeTimezone } from '../../../../lib/prayer-cycle.ts';
+import { clearLeaderboardCache } from '../../leaderboard/route.ts';
+import type { PrayerId, PrayerStatus } from '../../../../types/prayer.ts';
+
+const VALID_PRAYER_IDS: PrayerId[] = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
+
+/**
+ * Calculates a calendar date string (YYYY-MM-DD) shifted by an exact number of days.
+ * Uses UTC arithmetic to avoid Daylight Saving Time (DST) or timezone-dependent drift.
+ */
+function getDateWithDayOffset(baseDateStr: string, offsetDays: number): string {
+  const [y, m, d] = baseDateStr.split('-').map(Number);
+  const targetUtc = Date.UTC(y, m - 1, d) + offsetDays * 24 * 60 * 60 * 1000;
+  const dObj = new Date(targetUtc);
+  const year = dObj.getUTCFullYear();
+  const month = String(dObj.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(dObj.getUTCDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
 
 /**
  * POST /api/prayers/rollover
  *
  * Performs deterministic calendar day rollover for the authenticated user:
  * 1. Authenticates request and guards ownership.
- * 2. Accepts optional fromDate and toDate. If fromDate is not provided in body,
- *    automatically determines user's last recorded date (or yesterday) and toDate (or today).
- * 3. Enforces calendar validation when fromDate / toDate are supplied.
- * 4. On fromDate: converts any lingering PENDING prayers to MISSED, calculates fines, and persists.
- * 5. For intermediate days (if user was away for > 1 day): creates records with all 5 MISSED prayers
- *    and calculated accountability fines accrued for any missing days.
- * 6. Ensures overall user history since tracking commencement is rolled over via ensureUserRolledOver.
- * 7. On toDate: ensures document exists with default PENDING prayers.
- * 8. Recalculates user's streak deterministically across all records relative to toDate.
- * 9. Returns { success: true, fromDate, toDate, streak }.
+ * 2. Validates fromDate and toDate formats (YYYY-MM-DD), ensures fromDate < toDate,
+ *    and bounds the gap to at most 365 days (DoS defense).
+ * 3. On fromDate: converts any lingering PENDING prayers to MISSED, calculates fines, and persists.
+ * 4. For intermediate days (if user was away for > 1 day): creates records with all 5 MISSED prayers
+ *    and 75,000 UZS fines accrued for any missing days.
+ * 5. On toDate: ensures document exists with default PENDING prayers.
+ * 6. Recalculates user's streak deterministically across all records relative to toDate.
+ * 7. Returns { success: true, fromDate, toDate, streak }.
  */
 export async function POST(request: NextRequest) {
   try {
-    await connectDB();
     const auth = await authenticateRequest(request);
     if (!auth) {
       return NextResponse.json(
@@ -48,13 +57,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { fromDate, toDate, timezone } = body as {
-      fromDate?: unknown;
-      toDate?: unknown;
-      timezone?: unknown;
-    };
+    const { fromDate, toDate, timezone } = body as { fromDate?: unknown; toDate?: unknown; timezone?: unknown };
 
-    // Strict validation when fromDate is provided
     if (fromDate !== undefined && (typeof fromDate !== 'string' || !isValidCalendarDate(fromDate))) {
       return NextResponse.json(
         { success: false, error: 'Valid fromDate in YYYY-MM-DD format is required', code: 'INVALID_FROM_DATE' },
@@ -62,7 +66,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Strict validation when toDate is provided
     if (toDate !== undefined && (typeof toDate !== 'string' || !isValidCalendarDate(toDate))) {
       return NextResponse.json(
         { success: false, error: 'Valid toDate in YYYY-MM-DD format is required', code: 'INVALID_TO_DATE' },
@@ -70,15 +73,18 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const safeTimezone = typeof timezone === 'string' ? timezone : undefined;
-    const resolvedToDate: string = typeof toDate === 'string'
-      ? toDate
-      : getLiturgicalDate(new Date(), undefined, safeTimezone);
+    const resolvedTz = sanitizeTimezone(
+      typeof timezone === 'string' ? timezone : auth.user.preferences?.timezone
+    );
+    const resolvedToDate: string =
+      typeof toDate === 'string' ? toDate : getLiturgicalDate(new Date(), undefined, resolvedTz);
 
     let resolvedFromDate: string | null = null;
+
+    await connectDB();
+
     if (typeof fromDate === 'string') {
       resolvedFromDate = fromDate;
-
       if (!(resolvedFromDate < resolvedToDate)) {
         return NextResponse.json(
           { success: false, error: 'fromDate must be strictly earlier than toDate', code: 'INVALID_DATE_RANGE' },
@@ -94,8 +100,7 @@ export async function POST(request: NextRequest) {
         );
       }
     } else {
-      // Automatically determine fromDate: user's last recorded date before resolvedToDate, or yesterday
-      await connectDB();
+      // Automatically determine fromDate: user's last recorded date before resolvedToDate
       let lastRecordedDate: string | null = null;
       try {
         if (typeof PrayerRecord?.find === 'function') {
@@ -128,12 +133,18 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    await connectDB();
     const now = new Date();
+    const userStartDate = resolveUserStartDate({
+      platformStartDate: auth.user.platformStartDate,
+      createdAt: auth.user.createdAt,
+      timezone: resolvedTz,
+    });
+
     const gapDays = resolvedFromDate ? getDaysDifference(resolvedFromDate, resolvedToDate) : 0;
 
-    // 1. For resolvedFromDate: Convert lingering PENDING prayers to MISSED and recalculate fines
-    if (resolvedFromDate) {
+    // 1. For resolvedFromDate: Convert lingering PENDING prayers to MISSED ONLY if resolvedFromDate >= userStartDate.
+    // Historical dates before the user's activation/launch date are strictly excluded from automatic Qaza generation.
+    if (resolvedFromDate && resolvedFromDate >= userStartDate) {
       const fromRecord = await PrayerRecord.findOne({
         userId: auth.user.id,
         date: resolvedFromDate,
@@ -159,106 +170,134 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // 2. For intermediate days between resolvedFromDate and resolvedToDate
+    // 2. For intermediate days between resolvedFromDate and resolvedToDate:
+    // Strictly skip any date before userStartDate so automatic Qaza never generates pre-launch records.
+    const eligibleInterDates: string[] = [];
     if (resolvedFromDate && gapDays > 1) {
       for (let i = 1; i < gapDays; i++) {
         const interDate = getDateWithDayOffset(resolvedFromDate, i);
-        let interRecord = await PrayerRecord.findOne({
-          userId: auth.user.id,
-          date: interDate,
-        });
+        if (interDate >= userStartDate) {
+          eligibleInterDates.push(interDate);
+        }
+      }
+    }
 
-        if (!interRecord) {
-          const missedPrayers = {
-            fajr: { status: 'MISSED' as PrayerStatus, missedAt: now, isPaid: false, paidAmount: 0 },
-            dhuhr: { status: 'MISSED' as PrayerStatus, missedAt: now, isPaid: false, paidAmount: 0 },
-            asr: { status: 'MISSED' as PrayerStatus, missedAt: now, isPaid: false, paidAmount: 0 },
-            maghrib: { status: 'MISSED' as PrayerStatus, missedAt: now, isPaid: false, paidAmount: 0 },
-            isha: { status: 'MISSED' as PrayerStatus, missedAt: now, isPaid: false, paidAmount: 0 },
-          };
+    // Batch-fetch all existing intermediate records in a single indexed query (eliminates N+1 findOne loop)
+    const interRecordMap = new Map<string, Awaited<ReturnType<typeof PrayerRecord.findOne>>>();
+    if (eligibleInterDates.length > 0) {
+      const existingInterRecords = (await PrayerRecord.find({
+        userId: auth.user.id,
+        date: { $in: eligibleInterDates },
+      })) as Array<NonNullable<Awaited<ReturnType<typeof PrayerRecord.findOne>>>>;
+      for (const rec of existingInterRecords) {
+        if (rec?.date) {
+          interRecordMap.set(rec.date, rec);
+        }
+      }
+    }
 
-          try {
-            interRecord = new PrayerRecord({
+    for (const interDate of eligibleInterDates) {
+      let interRecord = interRecordMap.get(interDate) ?? null;
+
+      if (!interRecord) {
+        const missedPrayers = {
+          fajr: { status: 'MISSED' as PrayerStatus, missedAt: now, isPaid: false, paidAmount: 0 },
+          dhuhr: { status: 'MISSED' as PrayerStatus, missedAt: now, isPaid: false, paidAmount: 0 },
+          asr: { status: 'MISSED' as PrayerStatus, missedAt: now, isPaid: false, paidAmount: 0 },
+          maghrib: { status: 'MISSED' as PrayerStatus, missedAt: now, isPaid: false, paidAmount: 0 },
+          isha: { status: 'MISSED' as PrayerStatus, missedAt: now, isPaid: false, paidAmount: 0 },
+        };
+
+        try {
+          interRecord = new PrayerRecord({
+            userId: auth.user.id,
+            date: interDate,
+            prayers: missedPrayers,
+            finesAccrued: 75000,
+          });
+          await interRecord.save();
+        } catch (err: unknown) {
+          const errorWithCode = err as { code?: number };
+          if (errorWithCode?.code === 11000) {
+            interRecord = await PrayerRecord.findOne({
               userId: auth.user.id,
               date: interDate,
-              prayers: missedPrayers,
-              finesAccrued: calculateAccountabilityFines(interDate, missedPrayers, resolvedToDate),
             });
-            await interRecord.save();
-          } catch (err: unknown) {
-            const errorWithCode = err as { code?: number };
-            if (errorWithCode?.code === 11000) {
-              interRecord = await PrayerRecord.findOne({
-                userId: auth.user.id,
-                date: interDate,
-              });
-            } else {
-              throw err;
-            }
+          } else {
+            throw err;
           }
-        } else {
-          let hasPending = false;
-          for (const prayerId of VALID_PRAYER_IDS) {
-            if (interRecord.prayers?.[prayerId]?.status === 'PENDING') {
-              interRecord.prayers[prayerId].status = 'MISSED';
-              interRecord.prayers[prayerId].missedAt = now;
-              hasPending = true;
-            }
+        }
+      } else {
+        let hasPending = false;
+        for (const prayerId of VALID_PRAYER_IDS) {
+          if (interRecord.prayers?.[prayerId]?.status === 'PENDING') {
+            interRecord.prayers[prayerId].status = 'MISSED';
+            interRecord.prayers[prayerId].missedAt = now;
+            hasPending = true;
           }
-          if (hasPending) {
-            interRecord.finesAccrued = calculateAccountabilityFines(interDate, interRecord.prayers, resolvedToDate);
-            if (typeof interRecord.markModified === 'function') {
-              interRecord.markModified('prayers');
-              interRecord.markModified('finesAccrued');
-            }
-            await interRecord.save();
+        }
+        if (hasPending) {
+          interRecord.finesAccrued = calculateAccountabilityFines(interDate, interRecord.prayers, resolvedToDate);
+          if (typeof interRecord.markModified === 'function') {
+            interRecord.markModified('prayers');
+            interRecord.markModified('finesAccrued');
           }
+          await interRecord.save();
         }
       }
     }
 
-    // 3. Ensure overall user history since tracking commencement is reconciled
-    await ensureUserRolledOver(auth.user.id, resolvedToDate, safeTimezone);
+    // 3. For toDate: Find or initialize PrayerRecord with default pending prayers (if on/after userStartDate)
+    if (resolvedToDate >= userStartDate) {
+      let toRecord = await PrayerRecord.findOne({
+        userId: auth.user.id,
+        date: resolvedToDate,
+      });
 
-    // 4. For resolvedToDate: Find or initialize PrayerRecord with default pending prayers
-    let toRecord = await PrayerRecord.findOne({
-      userId: auth.user.id,
-      date: resolvedToDate,
-    });
+      if (!toRecord) {
+        const defaultPendingPrayers = {
+          fajr: { status: 'PENDING' as PrayerStatus, isPaid: false, paidAmount: 0 },
+          dhuhr: { status: 'PENDING' as PrayerStatus, isPaid: false, paidAmount: 0 },
+          asr: { status: 'PENDING' as PrayerStatus, isPaid: false, paidAmount: 0 },
+          maghrib: { status: 'PENDING' as PrayerStatus, isPaid: false, paidAmount: 0 },
+          isha: { status: 'PENDING' as PrayerStatus, isPaid: false, paidAmount: 0 },
+        };
 
-    if (!toRecord) {
-      const defaultPendingPrayers = {
-        fajr: { status: 'PENDING' as PrayerStatus, isPaid: false, paidAmount: 0 },
-        dhuhr: { status: 'PENDING' as PrayerStatus, isPaid: false, paidAmount: 0 },
-        asr: { status: 'PENDING' as PrayerStatus, isPaid: false, paidAmount: 0 },
-        maghrib: { status: 'PENDING' as PrayerStatus, isPaid: false, paidAmount: 0 },
-        isha: { status: 'PENDING' as PrayerStatus, isPaid: false, paidAmount: 0 },
-      };
-
-      try {
-        toRecord = new PrayerRecord({
-          userId: auth.user.id,
-          date: resolvedToDate,
-          prayers: defaultPendingPrayers,
-          finesAccrued: 0,
-        });
-        await toRecord.save();
-      } catch (err: unknown) {
-        const errorWithCode = err as { code?: number };
-        if (errorWithCode?.code === 11000) {
-          toRecord = await PrayerRecord.findOne({
+        try {
+          toRecord = new PrayerRecord({
             userId: auth.user.id,
             date: resolvedToDate,
+            prayers: defaultPendingPrayers,
+            finesAccrued: 0,
           });
-        } else {
-          throw err;
+          await toRecord.save();
+        } catch (err: unknown) {
+          const errorWithCode = err as { code?: number };
+          if (errorWithCode?.code === 11000) {
+            toRecord = await PrayerRecord.findOne({
+              userId: auth.user.id,
+              date: resolvedToDate,
+            });
+          } else {
+            throw err;
+          }
         }
       }
     }
 
-    // 5. Recalculate streak for user across updated records
-    const query = PrayerRecord.find({ userId: auth.user.id });
-    const allUserRecords = typeof query.sort === 'function' ? await query.sort({ date: -1 }) : await query;
+    // 4. Recalculate streak for user across updated records using lean projection
+    const streakBaseQuery = PrayerRecord.find({ userId: auth.user.id });
+    const streakSelectedQuery =
+      typeof (streakBaseQuery as { select?: (fields: string) => unknown })?.select === 'function'
+        ? (streakBaseQuery as { select: (fields: string) => unknown }).select('date prayers')
+        : streakBaseQuery;
+    const streakSortedQuery =
+      typeof (streakSelectedQuery as { sort?: (order: unknown) => unknown })?.sort === 'function'
+        ? (streakSelectedQuery as { sort: (order: unknown) => unknown }).sort({ date: -1 })
+        : streakSelectedQuery;
+    const allUserRecords = await execLean<
+      Array<{ date?: string; prayers?: Record<PrayerId, { status?: PrayerStatus }> }>
+    >(streakSortedQuery);
 
     const recordMap = new Map<string, number>();
     for (const rec of allUserRecords) {
@@ -275,13 +314,15 @@ export async function POST(request: NextRequest) {
     }
 
     const streak = calculateStreakFromHistory(recordMap, resolvedToDate);
+    clearLeaderboardCache();
 
-    // 6. Return 200 with fromDate, toDate, streak
+    // 5. Return 200 with fromDate, toDate, userStartDate, streak
     return NextResponse.json(
       {
         success: true,
         fromDate: resolvedFromDate,
         toDate: resolvedToDate,
+        userStartDate,
         streak,
       },
       { status: 200 }

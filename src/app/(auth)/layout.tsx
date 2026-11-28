@@ -16,19 +16,19 @@ export default function AuthLayout({
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col justify-between selection:bg-emerald-500 selection:text-white">
       {/* Auth Navigation Header */}
-      <header className="w-full max-w-5xl mx-auto px-5 py-6 flex items-center justify-between">
+      <header className="w-full max-w-5xl mx-auto px-3 sm:px-4 py-4 sm:py-6 flex flex-wrap items-center justify-between gap-2.5">
         <Link
           href="/"
-          className="flex items-center gap-2.5 group transition-transform active:scale-95"
+          className="flex items-center gap-2 sm:gap-2.5 min-w-0 group transition-transform active:scale-95"
           aria-label={t.appTitle}
         >
-          <BrandLogo size={40} priority />
-          <span className="font-bold text-lg leading-tight tracking-tight text-slate-900 dark:text-slate-100">
+          <BrandLogo size={36} priority />
+          <span className="font-bold text-base sm:text-lg leading-tight tracking-tight text-slate-900 dark:text-slate-100 truncate">
             {t.appTitle}
           </span>
         </Link>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0 max-w-full">
           <LanguageSelector />
         </div>
       </header>

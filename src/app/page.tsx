@@ -3,6 +3,7 @@ import HomeDashboard from '@/components/HomeDashboard';
 import { PrayerItem, StreakData } from '@/types/prayer';
 import { validateStreakData } from '@/lib/streak';
 import { getLiturgicalDate } from '@/lib/prayer-cycle';
+import { getCurrentSession } from '@/lib/auth/guard';
 
 function validatePrayersData(data: unknown): PrayerItem[] | null {
   if (!Array.isArray(data) || data.length === 0) return null;
@@ -24,7 +25,8 @@ function validateQazaCount(parsed: number): number | null {
 }
 
 export default async function HomePage() {
-  const cookieStore = await cookies();
+  const [cookieStore, session] = await Promise.all([cookies(), getCurrentSession()]);
+  const userTimezone = session?.user?.preferences?.timezone;
 
   // Read saved qaza count from cookies for immediate SSR rendering
   const qazaCookie =
@@ -40,8 +42,8 @@ export default async function HomePage() {
     }
   }
 
-  // Active liturgical date on the server at this moment
-  const currentLiturgicalDate = getLiturgicalDate(new Date());
+  // Active liturgical date on the server in the user's resolved timezone
+  const currentLiturgicalDate = getLiturgicalDate(new Date(), undefined, userTimezone);
 
   // Read saved prayers from cookies for immediate SSR rendering
   const prayersCookie =

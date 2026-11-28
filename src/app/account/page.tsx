@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useMemo, useEffect, Suspense } from 'react';
+import dynamic from 'next/dynamic';
 import { saveLocation } from '@/lib/location';
 import Link from 'next/link';
 import {
@@ -20,12 +21,17 @@ import {
 } from 'lucide-react';
 import { useLanguage } from '@/context/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
+import PageHeader from '@/components/PageHeader';
 import ContactCreator from '@/components/ContactCreator';
 import TelegramLinkCard from '@/components/TelegramLinkCard';
 import { findCityByCoordinates, findCityByNameOrId } from '@/lib/cities';
-import { CityPickerModal } from '@/components/qibla/CityPickerModal';
 import type { CityPreset } from '@/types/qibla';
 import type { SafeUser } from '@/lib/auth/guard';
+
+const CityPickerModal = dynamic(
+  () => import('@/components/qibla/CityPickerModal').then((m) => m.CityPickerModal),
+  { ssr: false }
+);
 
 function AuthenticatedAccountView({
   user,
@@ -79,8 +85,8 @@ function AuthenticatedAccountView({
     const finalLng = typeof initialLng === 'number' && Number.isFinite(initialLng) ? initialLng : 69.2401;
 
     const preset = findCityByCoordinates(finalLat, finalLng, 25) || (initialName ? findCityByNameOrId(initialName) : undefined);
-    const finalName = initialName || (preset ? (preset.nativeNames[lang] || preset.name) : 'Tashkent');
-    const finalCountry = preset?.country || (Math.abs(finalLat - 41.2995) < 0.05 ? 'Uzbekistan' : '');
+    const finalName = initialName || (preset ? (preset.nativeNames[lang] || preset.name) : t.dashboard.location);
+    const finalCountry = preset?.country || (Math.abs(finalLat - 41.2995) < 0.05 ? t.account.defaultCountry : '');
     const finalTimezone = initialTz || preset?.timezone || 'Asia/Tashkent';
 
     return {
@@ -106,8 +112,8 @@ function AuthenticatedAccountView({
             const initialTz = parsed.timezone || '';
 
             const preset = findCityByCoordinates(initialLat, initialLng, 25) || (initialName ? findCityByNameOrId(initialName) : undefined);
-            const finalName = initialName || (preset ? (preset.nativeNames[lang] || preset.name) : 'Tashkent');
-            const finalCountry = preset?.country || (Math.abs(initialLat - 41.2995) < 0.05 ? 'Uzbekistan' : '');
+            const finalName = initialName || (preset ? (preset.nativeNames[lang] || preset.name) : t.dashboard.location);
+            const finalCountry = preset?.country || (Math.abs(initialLat - 41.2995) < 0.05 ? t.account.defaultCountry : '');
             const finalTimezone = initialTz || preset?.timezone || 'Asia/Tashkent';
 
             setLocationData({
@@ -123,7 +129,7 @@ function AuthenticatedAccountView({
         }
       });
     }
-  }, [user.preferences?.city, user.preferences?.latitude, lang]);
+  }, [user.preferences?.city, user.preferences?.latitude, lang, t.account.defaultCountry, t.dashboard.location]);
 
   const [isCityModalOpen, setIsCityModalOpen] = useState(false);
   const [locationSaving, setLocationSaving] = useState(false);
@@ -174,7 +180,7 @@ function AuthenticatedAccountView({
       window.dispatchEvent(new Event('local-storage-update'));
       window.dispatchEvent(new Event('storage'));
 
-      setLocationSuccess(t.profile.locationSaved || 'Location saved');
+      setLocationSuccess(t.profile.locationSaved || t.common.saved);
       await refreshUser();
       setTimeout(() => setLocationSuccess(null), 3000);
     } catch {
@@ -214,7 +220,7 @@ function AuthenticatedAccountView({
 
   const handleDetectGps = () => {
     if (typeof window === 'undefined' || !navigator.geolocation) {
-      setLocationError(t.dashboard.locationUnavailable || 'Geolocation is not supported by your browser');
+      setLocationError(t.dashboard.locationUnavailable);
       return;
     }
 
@@ -237,13 +243,13 @@ function AuthenticatedAccountView({
         persistLocation(nextLoc, 'gps');
       },
       (err) => {
-        let errorMsg = t.profile.gpsGenericError || 'Could not determine GPS coordinates';
+        let errorMsg = t.profile.gpsGenericError || t.common.error;
         if (err.code === 1) {
-          errorMsg = t.profile.gpsDenied || 'GPS permission denied. Please allow location access in your browser settings.';
+          errorMsg = t.profile.gpsDenied || t.common.error;
         } else if (err.code === 2) {
-          errorMsg = t.profile.gpsUnavailable || 'GPS position unavailable.';
+          errorMsg = t.profile.gpsUnavailable || t.common.error;
         } else if (err.code === 3) {
-          errorMsg = t.profile.gpsTimeout || 'GPS detection timed out.';
+          errorMsg = t.profile.gpsTimeout || t.common.error;
         }
         setLocationError(errorMsg);
         setGpsDetecting(false);
@@ -335,30 +341,22 @@ function AuthenticatedAccountView({
   };
 
   return (
-    <div className="space-y-6 max-w-4xl mx-auto pb-12">
-      {/* Header with Title and Logout Action */}
-      <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-2 border-b border-slate-200/80 dark:border-slate-800/80">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2.5">
-            <span className="p-2 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400">
-              <UserIcon className="w-5 h-5" />
-            </span>
-            <span>{t.account.title}</span>
-          </h1>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-            {t.account.subtitle}
-          </p>
-        </div>
-
-        <button
-          type="button"
-          onClick={() => logout()}
-          className="self-start sm:self-auto min-h-[44px] py-2 px-3.5 rounded-xl border border-red-200 dark:border-red-900/60 bg-red-50/50 dark:bg-red-950/30 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-950/60 text-xs font-semibold flex items-center gap-2 transition-colors cursor-pointer"
-        >
-          <LogOut className="w-4 h-4" />
-          <span>{t.profile.logoutButton}</span>
-        </button>
-      </header>
+    <div className="space-y-5 sm:space-y-6 pb-8">
+      <PageHeader
+        icon={UserIcon}
+        title={t.account.title}
+        subtitle={t.account.subtitle}
+        actions={
+          <button
+            type="button"
+            onClick={() => logout()}
+            className="min-h-[40px] py-2 px-3.5 rounded-xl border border-red-200 dark:border-red-900/60 bg-red-50/50 dark:bg-red-950/30 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-950/60 text-xs font-semibold flex items-center gap-2 transition-colors cursor-pointer"
+          >
+            <LogOut className="w-4 h-4" />
+            <span>{t.profile.logoutButton}</span>
+          </button>
+        }
+      />
 
       {/* ========================================================================= */}
       {/* CARD 1: Profile & Identity                                                */}
@@ -514,10 +512,10 @@ function AuthenticatedAccountView({
             <div className="space-y-1">
               <div className="flex items-center gap-2">
                 <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                  {t.profile.currentLocation || 'Current Location'}
+                  {t.profile.currentLocation || t.qibla.currentLocation}
                 </span>
                 <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-600 text-white">
-                  {t.profile.activeBadge || 'Active'}
+                  {t.profile.activeBadge || t.dashboard.statusLive}
                 </span>
               </div>
               <div className="flex items-center gap-2 flex-wrap">
@@ -550,7 +548,7 @@ function AuthenticatedAccountView({
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-200/60 dark:border-slate-700/60 text-xs text-slate-600 dark:text-slate-400">
             <div className="flex items-center gap-1.5">
               <span className="font-semibold text-slate-700 dark:text-slate-300">
-                {t.profile.coordinates || 'Coordinates'}:
+                {t.profile.coordinates || t.qibla.customCoords}:
               </span>
               <span className="font-mono">
                 {locationData.latitude.toFixed(4)}°N, {locationData.longitude.toFixed(4)}°E
@@ -558,7 +556,7 @@ function AuthenticatedAccountView({
             </div>
             <div className="flex items-center gap-1.5">
               <span className="font-semibold text-slate-700 dark:text-slate-300">
-                {t.profile.timezone || 'Timezone'}:
+                {t.profile.timezone || t.account.tabs.preferences}:
               </span>
               <span>{locationData.timezone}</span>
             </div>
@@ -757,7 +755,7 @@ function AuthenticatedAccountView({
 function GuestSettingsView() {
   const { t, lang } = useLanguage();
   const [locationData, setLocationData] = useState({
-    city: 'Tashkent',
+    city: t.dashboard.location,
     lat: 41.2995,
     lng: 69.2401,
     timezone: 'Asia/Tashkent',
@@ -770,7 +768,7 @@ function GuestSettingsView() {
         if (stored) {
           const parsed = JSON.parse(stored);
           setLocationData({
-            city: parsed.city || 'Tashkent',
+            city: parsed.city || t.dashboard.location,
             lat: typeof parsed.lat === 'number' ? parsed.lat : 41.2995,
             lng: typeof parsed.lng === 'number' ? parsed.lng : 69.2401,
             timezone: parsed.timezone || 'Asia/Tashkent',
@@ -780,7 +778,7 @@ function GuestSettingsView() {
         // ignore
       }
     });
-  }, []);
+  }, [t.dashboard.location]);
 
   const [isCityModalOpen, setIsCityModalOpen] = useState(false);
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
@@ -798,7 +796,7 @@ function GuestSettingsView() {
     window.dispatchEvent(new Event('local-storage-update'));
     window.dispatchEvent(new Event('storage'));
     setIsCityModalOpen(false);
-    setSavedNotice(t.profile.locationSaved || 'Location saved');
+    setSavedNotice(t.profile.locationSaved || t.common.saved);
     setTimeout(() => setSavedNotice(null), 3000);
   };
 
@@ -816,7 +814,7 @@ function GuestSettingsView() {
     window.dispatchEvent(new Event('local-storage-update'));
     window.dispatchEvent(new Event('storage'));
     setIsCityModalOpen(false);
-    setSavedNotice(t.profile.locationSaved || 'Location saved');
+    setSavedNotice(t.profile.locationSaved || t.common.saved);
     setTimeout(() => setSavedNotice(null), 3000);
   };
 
@@ -837,10 +835,10 @@ function GuestSettingsView() {
         <div>
           <h2 className="text-base font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
             <MapPin className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-            <span>{t.profile.cityLocation || 'City & Location'}</span>
+            <span>{t.profile.cityLocation || t.qibla.selectCity}</span>
           </h2>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-            {t.profile.cityLocationDesc || 'Select your city to get authentic prayer times.'}
+            {t.profile.cityLocationDesc || t.qibla.subtitle}
           </p>
         </div>
 
@@ -848,10 +846,10 @@ function GuestSettingsView() {
           <div className="space-y-1">
             <div className="flex items-center gap-2">
               <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                {t.profile.currentLocation || 'Current Location'}
+                {t.profile.currentLocation || t.qibla.currentLocation}
               </span>
               <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-600 text-white">
-                {t.profile.activeBadge || 'Active'}
+                {t.profile.activeBadge || t.dashboard.statusLive}
               </span>
             </div>
             <p className="text-lg font-bold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
@@ -895,18 +893,12 @@ function AccountContent() {
 
   if (!user) {
     return (
-      <div className="space-y-4 sm:space-y-6">
-        <header>
-          <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2.5">
-            <span className="p-2 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400">
-              <UserIcon className="w-5 h-5" />
-            </span>
-            <span>{t.account.title}</span>
-          </h1>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-            {t.account.subtitle}
-          </p>
-        </header>
+      <div className="space-y-5 sm:space-y-6 pb-8">
+        <PageHeader
+          icon={UserIcon}
+          title={t.account.title}
+          subtitle={t.account.subtitle}
+        />
 
         <div className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-6 md:p-8 dark:border-slate-800 dark:bg-slate-900 shadow-sm text-center space-y-4">
           <div className="w-16 h-16 rounded-2xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 mx-auto flex items-center justify-center">

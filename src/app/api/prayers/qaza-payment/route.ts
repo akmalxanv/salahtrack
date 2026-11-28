@@ -5,6 +5,8 @@ import { PrayerRecord, type IPrayerRecord } from '../../../../models/Prayer.ts';
 import { QazaPayment, type IQazaPayment, type IQazaPaymentItem } from '../../../../models/QazaPayment.ts';
 import { authenticateRequest } from '../../../../lib/auth/index.ts';
 import { isValidCalendarDate, sanitizeNotes } from '../route.ts';
+import { getLiturgicalDate, sanitizeTimezone } from '../../../../lib/prayer-cycle.ts';
+import { clearLeaderboardCache } from '../../leaderboard/route.ts';
 import {
   calculateAccountabilityFines,
   calculateAuthoritativeDebt,
@@ -270,7 +272,8 @@ export async function POST(request: NextRequest) {
       // Server-side calculated legitimate amount using authoritative logic:
       // - MISSED: base 15,000 UZS. If > 7 days (daysPassed > 7), +15,000 UZS overdue fine (total 30,000 UZS).
       // - MADE_UP: base 15,000 UZS (capped, no overdue penalty).
-      const todayStr = now.toISOString().split('T')[0];
+      const resolvedTz = sanitizeTimezone(auth.user.preferences?.timezone);
+      const todayStr = getLiturgicalDate(now, undefined, resolvedTz);
       const daysPassed = calculateDaysPassed(item.date, todayStr);
       const isOverdue = prayer.status === 'MISSED' && isOverduePrayer(daysPassed);
 
@@ -383,6 +386,7 @@ export async function POST(request: NextRequest) {
       PrayerRecord.find({ userId: auth.user.id })
     );
     const remainingDebt = calculateAuthoritativeDebt(allUserRecords);
+    clearLeaderboardCache();
 
     return NextResponse.json(
       {
