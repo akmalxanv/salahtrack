@@ -300,7 +300,7 @@ export default function PayQazaModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/70 backdrop-blur-xs transition-opacity duration-200"
+      className="fixed inset-0 z-[100] flex items-center justify-center p-2.5 xs:p-4 bg-slate-950/70 backdrop-blur-xs overflow-y-auto"
       onClick={onClose}
       role="dialog"
       aria-modal="true"
@@ -310,10 +310,10 @@ export default function PayQazaModal({
       <div
         ref={modalRef}
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-lg rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl flex flex-col max-h-[90vh] overflow-hidden animate-in fade-in zoom-in-95 duration-150"
+        className="w-full max-w-lg rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl flex flex-col max-h-[calc(100dvh-1.5rem)] sm:max-h-[90vh] my-auto overflow-hidden animate-in fade-in zoom-in-95 duration-150"
       >
         {/* Header */}
-        <div className="flex items-center justify-between p-5 border-b border-slate-100 dark:border-slate-800 shrink-0">
+        <div className="flex items-center justify-between p-4 sm:p-5 border-b border-slate-100 dark:border-slate-800 shrink-0">
           <div>
             <h2
               id="pay-qaza-modal-title"
@@ -340,7 +340,7 @@ export default function PayQazaModal({
         </div>
 
         {/* Content Body */}
-        <div className="flex-1 overflow-y-auto p-5 space-y-4">
+        <div className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-5 space-y-4">
           {/* Prominent Educational Notice */}
           <div className="p-3.5 rounded-xl bg-amber-50/90 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/60 text-xs text-amber-900 dark:text-amber-200 flex items-start gap-2.5">
             <AlertCircle className="w-4 h-4 shrink-0 text-amber-600 dark:text-amber-400 mt-0.5" />
@@ -473,7 +473,7 @@ export default function PayQazaModal({
 
         {/* Footer with Summary, Running Total, Remaining Balance, and Action Buttons */}
         {items.length > 0 && (
-          <div className="p-4 sm:p-5 border-t border-slate-100 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-900/80 shrink-0 space-y-3">
+          <div className="p-3.5 sm:p-5 border-t border-slate-100 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-900/80 shrink-0 space-y-3 pb-[calc(0.875rem+env(safe-area-inset-bottom))]">
             <div className="space-y-1.5 py-1">
               <div className="flex items-center justify-between text-xs">
                 <span className="text-slate-600 dark:text-slate-400 font-medium">

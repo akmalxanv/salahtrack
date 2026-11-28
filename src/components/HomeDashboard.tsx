@@ -1897,7 +1897,7 @@ export default function HomeDashboard({
                           handleSetStatus(prayer.id, 'PRAYED_ON_TIME');
                           setActiveMenuPrayerId(null);
                         }}
-                        className={`min-h-[44px] px-1.5 sm:px-2 py-2 sm:py-2.5 rounded-xl text-[11px] sm:text-xs md:text-sm font-semibold leading-tight text-center transition-colors duration-150 flex items-center justify-center cursor-pointer focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 focus-visible:outline-none ${
+                        className={`min-h-[44px] px-1 sm:px-2 py-2 sm:py-2.5 rounded-xl text-[10px] xs:text-[11px] sm:text-xs font-semibold leading-tight text-center transition-colors duration-150 flex items-center justify-center cursor-pointer focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 focus-visible:outline-none ${
                           prayer.status === 'PRAYED_ON_TIME' || prayer.status === 'PRAYED' || prayer.status === 'PRAYED_LATE'
                             ? 'bg-emerald-600 text-white font-bold shadow-xs border border-emerald-600 dark:bg-emerald-500 dark:border-emerald-500'
                             : 'bg-emerald-50 hover:bg-emerald-100/90 text-emerald-800 border border-emerald-200/80 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/60 dark:text-emerald-300 dark:border-emerald-800/60'
@@ -1914,7 +1914,7 @@ export default function HomeDashboard({
                           handleSetStatus(prayer.id, 'MADE_UP');
                           setActiveMenuPrayerId(null);
                         }}
-                        className={`min-h-[44px] px-1.5 sm:px-2 py-2 sm:py-2.5 rounded-xl text-[11px] sm:text-xs md:text-sm font-semibold leading-tight text-center transition-colors duration-150 flex items-center justify-center cursor-pointer focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 focus-visible:outline-none ${
+                        className={`min-h-[44px] px-1 sm:px-2 py-2 sm:py-2.5 rounded-xl text-[10px] xs:text-[11px] sm:text-xs font-semibold leading-tight text-center transition-colors duration-150 flex items-center justify-center cursor-pointer focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 focus-visible:outline-none ${
                           prayer.status === 'MADE_UP'
                             ? 'bg-sky-600 text-white font-bold shadow-xs border border-sky-600 dark:bg-sky-500 dark:border-sky-500'
                             : 'bg-sky-50 hover:bg-sky-100/90 text-sky-800 border border-sky-200/80 dark:bg-sky-950/40 dark:hover:bg-sky-900/60 dark:text-sky-300 dark:border-sky-800/60'
@@ -1931,7 +1931,7 @@ export default function HomeDashboard({
                           handleSetStatus(prayer.id, 'MISSED');
                           setActiveMenuPrayerId(null);
                         }}
-                        className={`min-h-[44px] px-1.5 sm:px-2 py-2 sm:py-2.5 rounded-xl text-[11px] sm:text-xs md:text-sm font-semibold leading-tight text-center transition-colors duration-150 flex items-center justify-center cursor-pointer focus-visible:ring-2 focus-visible:ring-rose-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 focus-visible:outline-none ${
+                        className={`min-h-[44px] px-1 sm:px-2 py-2 sm:py-2.5 rounded-xl text-[10px] xs:text-[11px] sm:text-xs font-semibold leading-tight text-center transition-colors duration-150 flex items-center justify-center cursor-pointer focus-visible:ring-2 focus-visible:ring-rose-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 focus-visible:outline-none ${
                           prayer.status === 'MISSED'
                             ? 'bg-rose-600 text-white font-bold shadow-xs border border-rose-600 dark:bg-rose-500 dark:border-rose-500'
                             : 'bg-rose-50 hover:bg-rose-100/90 text-rose-800 border border-rose-200/80 dark:bg-rose-950/40 dark:hover:bg-rose-900/60 dark:text-rose-300 dark:border-rose-800/60'

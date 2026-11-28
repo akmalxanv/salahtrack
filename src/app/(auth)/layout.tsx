@@ -34,8 +34,8 @@ export default function AuthLayout({
       </header>
 
       {/* Main Centered Form Container */}
-      <main className="flex-1 flex items-center justify-center p-5 sm:p-6 md:p-8">
-        <div className="w-full max-w-md">
+      <main className="flex-1 flex items-center justify-center px-3 sm:px-6 py-5 sm:py-8">
+        <div className="w-full max-w-md min-w-0">
           {children}
         </div>
       </main>

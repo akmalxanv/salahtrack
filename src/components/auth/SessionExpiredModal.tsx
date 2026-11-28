@@ -23,13 +23,13 @@ export default function SessionExpiredModal() {
       role="dialog"
       aria-modal="true"
       aria-labelledby="session-expired-title"
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs animate-in fade-in duration-200"
+      className="fixed inset-0 z-[100] flex items-center justify-center p-2.5 xs:p-4 bg-slate-950/70 backdrop-blur-xs overflow-y-auto animate-in fade-in duration-200"
     >
-      <div className="relative w-full max-w-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl p-6 sm:p-7 space-y-5">
+      <div className="relative w-full max-w-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl p-5 sm:p-7 space-y-5 my-auto max-h-[calc(100dvh-1.5rem)] overflow-y-auto">
         <button
           type="button"
           onClick={dismissSessionExpired}
-          className="absolute top-4 right-4 p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+          className="absolute top-4 right-4 min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
           aria-label={t.sessionExpired.dismiss}
         >
           <X className="w-5 h-5" />
@@ -56,7 +56,7 @@ export default function SessionExpiredModal() {
           <button
             type="button"
             onClick={handleSignInAgain}
-            className="w-full sm:flex-1 py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white text-xs sm:text-sm font-semibold rounded-xl shadow-xs transition-colors flex items-center justify-center gap-2 cursor-pointer"
+            className="w-full sm:flex-1 min-h-[44px] py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white text-xs sm:text-sm font-semibold rounded-xl shadow-xs transition-colors flex items-center justify-center gap-2 cursor-pointer"
           >
             <LogIn className="w-4 h-4" />
             <span>{t.sessionExpired.signInAgain}</span>
@@ -64,7 +64,7 @@ export default function SessionExpiredModal() {
           <button
             type="button"
             onClick={dismissSessionExpired}
-            className="w-full sm:w-auto py-2.5 px-4 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs sm:text-sm font-semibold rounded-xl transition-colors cursor-pointer"
+            className="w-full sm:w-auto min-h-[44px] py-2.5 px-4 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs sm:text-sm font-semibold rounded-xl transition-colors cursor-pointer"
           >
             <span>{t.sessionExpired.dismiss}</span>
           </button>

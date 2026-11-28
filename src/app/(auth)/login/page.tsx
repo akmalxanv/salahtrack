@@ -72,7 +72,7 @@ function LoginContent() {
 
   return (
     <div className="space-y-6">
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-xl p-6 sm:p-8 space-y-6">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-xl p-4.5 xs:p-6 sm:p-8 space-y-6">
         {/* Title & Subtitle */}
       <div className="space-y-1 text-center">
         <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">

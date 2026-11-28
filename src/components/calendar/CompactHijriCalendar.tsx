@@ -242,11 +242,11 @@ export default function CompactHijriCalendar({
       </div>
 
       {/* ==================== WEEKDAYS HEADER (Monday - Sunday) ==================== */}
-      <div className="grid grid-cols-7 gap-1 sm:gap-2 text-center" role="row">
+      <div className="grid grid-cols-7 gap-0.5 xs:gap-1 sm:gap-2 text-center" role="row">
         {t.calendar.weekdaysShort.map((dayLabel, idx) => (
           <div
             key={idx}
-            className={`text-[11px] sm:text-xs font-semibold py-1.5 ${
+            className={`text-[10px] xs:text-[11px] sm:text-xs font-semibold py-1 sm:py-1.5 ${
               idx === 4
                 ? 'text-emerald-700 dark:text-emerald-400 font-bold' // Blessed Jumu'ah (Friday)
                 : idx >= 5
@@ -262,7 +262,7 @@ export default function CompactHijriCalendar({
 
       {/* ==================== HIJRI DAYS MATRIX (Days 1 to 29/30) ==================== */}
       <div
-        className="grid grid-cols-7 gap-1 sm:gap-2"
+        className="grid grid-cols-7 gap-0.5 xs:gap-1 sm:gap-2"
         role="grid"
         aria-label={`${arabicMonthName} ${viewYear}`}
       >
@@ -270,7 +270,7 @@ export default function CompactHijriCalendar({
         {Array.from({ length: startDayOfWeek }).map((_, padIdx) => (
           <div
             key={`hpad-${padIdx}`}
-            className="aspect-square min-h-[48px] rounded-xl bg-transparent"
+            className="aspect-square min-h-[38px] xs:min-h-[44px] sm:min-h-[48px] rounded-xl bg-transparent"
             aria-hidden="true"
           />
         ))}
@@ -295,7 +295,7 @@ export default function CompactHijriCalendar({
               aria-disabled={isFuture}
               aria-selected={isSelected}
               onClick={() => onSelectDate(cell.gregorianDateStr)}
-              className={`relative aspect-square min-h-[48px] sm:min-h-[52px] rounded-xl p-1 sm:p-1.5 flex flex-col items-center justify-between transition-all select-none ${
+              className={`relative aspect-square min-h-[38px] xs:min-h-[44px] sm:min-h-[52px] rounded-xl p-0.5 xs:p-1 sm:p-1.5 flex flex-col items-center justify-between transition-all select-none ${
                 isFuture
                   ? 'opacity-30 bg-slate-50/50 dark:bg-slate-900/30 text-slate-400 cursor-not-allowed pointer-events-none'
                   : isSelected

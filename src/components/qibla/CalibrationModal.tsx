@@ -30,9 +30,9 @@ export function CalibrationModal({ isOpen, onClose }: CalibrationModalProps) {
       role="dialog"
       aria-modal="true"
       aria-labelledby="calibration-modal-title"
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs animate-in fade-in duration-200"
+      className="fixed inset-0 z-[100] flex items-center justify-center p-2.5 xs:p-4 bg-slate-950/70 backdrop-blur-xs overflow-y-auto animate-in fade-in duration-200"
     >
-      <div className="relative w-full max-w-md rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl p-6 sm:p-7 flex flex-col items-center text-center">
+      <div className="relative w-full max-w-md rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl p-5 sm:p-7 flex flex-col items-center text-center my-auto max-h-[calc(100dvh-1.5rem)] overflow-y-auto">
         {/* Close Button */}
         <button
           type="button"
@@ -111,7 +111,7 @@ export function CalibrationModal({ isOpen, onClose }: CalibrationModalProps) {
         <button
           type="button"
           onClick={onClose}
-          className="w-full py-2.5 px-4 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-transform active:scale-98 cursor-pointer"
+          className="w-full min-h-[44px] py-2.5 px-4 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-transform active:scale-98 cursor-pointer flex items-center justify-center"
         >
           {t.qibla.calibrateClose}
         </button>

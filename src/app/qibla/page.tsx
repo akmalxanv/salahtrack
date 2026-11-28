@@ -347,7 +347,7 @@ export default function QiblaPage() {
       )}
 
       {/* Main Astrolabe Instrument Stage */}
-      <div className="flex flex-col items-center justify-center p-6 sm:p-10 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 shadow-sm relative overflow-hidden">
+      <div className="flex flex-col items-center justify-center p-3.5 xs:p-6 sm:p-10 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 shadow-sm relative overflow-hidden">
         {/* Subtle decorative background gradient */}
         <div className="absolute inset-0 bg-gradient-to-b from-amber-500/5 via-transparent to-transparent pointer-events-none" />
 
@@ -385,7 +385,7 @@ export default function QiblaPage() {
         </div>
 
         {/* 60fps Astrolabe Compass Dial Component */}
-        <div className="my-2">
+        <div className="my-2 overflow-hidden flex justify-center">
           <AstrolabeDial
             qiblaBearing={qiblaBearing}
             dialRef={dialRef}

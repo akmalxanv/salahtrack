@@ -10,7 +10,7 @@ export default function BottomNav() {
   const { t } = useLanguage();
 
   return (
-    <div className="md:hidden fixed bottom-0 left-0 right-0 border-t border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md px-1 sm:px-2 pt-1.5 pb-[calc(0.375rem+env(safe-area-inset-bottom))] z-50">
+    <div className="md:hidden fixed bottom-0 left-0 right-0 border-t border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md px-1 sm:px-2 pt-1.5 pb-[calc(0.375rem+env(safe-area-inset-bottom))] z-40">
       <nav className="grid grid-cols-5 items-center gap-0.5" aria-label={t.appTitle}>
         {NAV_ITEMS.map((item) => {
           const Icon = item.icon;
@@ -30,7 +30,7 @@ export default function BottomNav() {
               }`}
             >
               <Icon className="h-5 w-5 shrink-0" />
-              <span className="text-[9px] xs:text-[10px] leading-[1.15] mt-0.5 tracking-tighter xs:tracking-tight text-center whitespace-nowrap">
+              <span className="text-[9px] xs:text-[10px] leading-[1.15] mt-0.5 tracking-tighter xs:tracking-tight text-center truncate max-w-full">
                 {label}
               </span>
             </Link>

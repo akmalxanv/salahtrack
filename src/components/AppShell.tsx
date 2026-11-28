@@ -43,7 +43,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       <div className="flex min-h-screen">
         <Sidebar />
         <div className="flex-1 flex justify-center w-full min-w-0">
-          <main className="w-full max-w-4xl p-3 sm:p-6 md:p-8 pb-[calc(5.5rem+env(safe-area-inset-bottom))] md:pb-8">
+          <main className="w-full max-w-4xl min-w-0 overflow-x-hidden p-3 sm:p-6 md:p-8 pb-[calc(5.5rem+env(safe-area-inset-bottom))] md:pb-8">
             {children}
           </main>
         </div>

@@ -89,7 +89,7 @@ function ResetPasswordContent() {
 
   if (!token) {
     return (
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-xl p-6 sm:p-8 space-y-6 text-center">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-xl p-4.5 xs:p-6 sm:p-8 space-y-6 text-center">
         <div className="w-12 h-12 rounded-full bg-red-50 dark:bg-red-950/60 text-red-600 dark:text-red-400 mx-auto flex items-center justify-center">
           <AlertCircle className="w-6 h-6" />
         </div>
@@ -112,7 +112,7 @@ function ResetPasswordContent() {
   }
 
   return (
-    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-xl p-6 sm:p-8 space-y-6">
+    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-xl p-4.5 xs:p-6 sm:p-8 space-y-6">
       {/* Title & Subtitle */}
       <div className="space-y-1 text-center">
         <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">

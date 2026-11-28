@@ -120,10 +120,10 @@ export function CityPickerModal({
       role="dialog"
       aria-modal="true"
       aria-labelledby="city-picker-title"
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs animate-in fade-in duration-200"
+      className="fixed inset-0 z-[100] flex items-center justify-center p-2.5 xs:p-4 bg-slate-950/70 backdrop-blur-xs overflow-y-auto animate-in fade-in duration-200"
     >
       {/* Modal Container */}
-      <div className="relative w-full max-w-lg max-h-[90vh] flex flex-col rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden">
+      <div className="relative w-full max-w-lg max-h-[calc(100dvh-1.5rem)] sm:max-h-[90vh] my-auto flex flex-col rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden">
         {/* Header */}
         <div className="p-5 pb-3 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
@@ -235,7 +235,7 @@ export function CityPickerModal({
         )}
 
         {/* Modal Scrollable Body */}
-        <div className="flex-1 overflow-y-auto p-5 pt-3 space-y-2">
+        <div className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-5 pt-3 space-y-2">
           {/* Active Search Results */}
           {searchResults !== null ? (
             searchResults.length > 0 ? (

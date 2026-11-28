@@ -51,7 +51,7 @@ export function AstrolabeDial({
 
       {/* Main Astrolabe Housing & Outer Limbus */}
       <div
-        className={`relative w-72 h-72 sm:w-84 sm:h-84 md:w-96 md:h-96 rounded-full p-2.5 sm:p-3 transition-shadow duration-500 flex items-center justify-center ${
+        className={`relative w-[min(260px,78vw)] h-[min(260px,78vw)] xs:w-72 xs:h-72 sm:w-84 sm:h-84 md:w-96 md:h-96 rounded-full p-2.5 sm:p-3 transition-shadow duration-500 flex items-center justify-center shrink-0 overflow-hidden ${
           isAligned
             ? 'shadow-[0_0_45px_rgba(16,185,129,0.35)] ring-4 ring-emerald-500/50'
             : 'shadow-2xl shadow-amber-950/20 dark:shadow-black/60'
@@ -87,7 +87,7 @@ export function AstrolabeDial({
 
           {/* Khatam-e-Sulayman (Eight-Pointed Islamic Geometric Star Rosette) */}
           <svg
-            className="absolute inset-0 w-full h-full p-16 sm:p-20 text-amber-500/20 dark:text-amber-400/20 pointer-events-none"
+            className="absolute inset-0 w-full h-full p-12 xs:p-16 sm:p-20 text-amber-500/20 dark:text-amber-400/20 pointer-events-none"
             viewBox="0 0 100 100"
             fill="none"
             stroke="currentColor"
